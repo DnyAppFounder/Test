@@ -25,6 +25,7 @@ import { TokenDiscussionComponent } from '@/components/TokenDiscussion';
 import { watchlistService } from '@/services/watchlistService';
 import { useWallet } from '@/contexts/WalletContext';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
@@ -254,20 +255,24 @@ export default function TokenDetailScreen() {
           </View>
 
           {/* Real Dexscreener Chart */}
-          <TradingViewChart
-            symbol={token.symbol}
-            currentPrice={livePrice || token.price}
-            pairAddress={token.pairAddress}
-            tokenMint={token.address}
-          />
+          <ErrorBoundary fallbackLabel="Chart unavailable">
+            <TradingViewChart
+              symbol={token?.symbol ?? ''}
+              currentPrice={livePrice || token.price}
+              pairAddress={token.pairAddress}
+              tokenMint={token.address}
+            />
+          </ErrorBoundary>
 
-          <TradingInterface
-            tokenMint={token.address}
-            tokenSymbol={token.symbol}
-            tokenDecimals={9}
-            currentPrice={token.price}
-            onTradeComplete={onRefresh}
-          />
+          <ErrorBoundary fallbackLabel="Trading unavailable">
+            <TradingInterface
+              tokenMint={token.address}
+              tokenSymbol={token?.symbol ?? ''}
+              tokenDecimals={9}
+              currentPrice={token.price}
+              onTradeComplete={onRefresh}
+            />
+          </ErrorBoundary>
 
           <View style={styles.activitySection}>
             <TokenActivityFeed tokenAddress={token.address} />
