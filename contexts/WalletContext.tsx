@@ -181,6 +181,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [connectedWallet]);
 
+  const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number }) => {
+    const tokensFromChain: Token[] = result.assets.map((asset) => ({
+      id: asset.id,
+      blockchain_id: 'solana',
+      contract_address: asset.address,
+      symbol: asset.symbol,
+      name: asset.name,
+      decimals: asset.decimals,
+      logo_url: asset.logoUrl ?? null,
+      is_verified: asset.verified,
+      coingecko_id: null,
+      balance: asset.balance,
+      balanceUSD: asset.value,
+    }));
+    setTokens(tokensFromChain);
+    setTotalBalance(result.totalValue);
+  }, []);
+
   const refreshPortfolio = useCallback(async () => {
     const address = connectedWallet?.address ?? selectedAccount?.address;
     if (!address) {
@@ -245,24 +263,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     initialize();
     return () => { mounted = false; };
   }, [loadAccounts, restoreExternalWallet]);
-
-  const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number }) => {
-    const tokensFromChain: Token[] = result.assets.map((asset) => ({
-      id: asset.id,
-      blockchain_id: 'solana',
-      contract_address: asset.address,
-      symbol: asset.symbol,
-      name: asset.name,
-      decimals: asset.decimals,
-      logo_url: asset.logoUrl ?? null,
-      is_verified: asset.verified,
-      coingecko_id: null,
-      balance: asset.balance,
-      balanceUSD: asset.value,
-    }));
-    setTokens(tokensFromChain);
-    setTotalBalance(result.totalValue);
-  }, []);
 
   // Load portfolio whenever the active address changes
   useEffect(() => {
