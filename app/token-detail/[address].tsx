@@ -8,18 +8,16 @@ import {
   ActivityIndicator,
   Image,
   RefreshControl,
-  Linking,
   Animated,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, TrendingUp, TrendingDown, Copy, ExternalLink, Star, Zap, Droplet, ChartBar as BarChart3, DollarSign, RefreshCw } from 'lucide-react-native';
+import { ArrowLeft, TrendingUp, TrendingDown, Copy, Star, Zap, Droplet, ChartBar as BarChart3, DollarSign, RefreshCw, CircleCheck as CheckCircle2 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { TradingViewChart } from '@/components/TradingViewChart';
 import { TradingInterface } from '@/components/TradingInterface';
-import { TransactionFeed } from '@/components/TransactionFeed';
 import { TokenActivityFeed } from '@/components/TokenActivityFeed';
 import { TokenDiscussionComponent } from '@/components/TokenDiscussion';
 import { watchlistService } from '@/services/watchlistService';
@@ -30,19 +28,20 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress } = useWallet();
+  const { activeAddress, tokens } = useWallet();
 
   const [token, setToken] = useState<LiveToken | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedAddr, setCopiedAddr] = useState(false);
+  const [copiedPair, setCopiedPair] = useState(false);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [checkingWatchlist, setCheckingWatchlist] = useState(true);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  const { price: livePrice, priceChange, isUpdating } = usePriceUpdates(
+  const { price: livePrice, isUpdating } = usePriceUpdates(
     async () => {
       if (!address) return null;
       try {
@@ -51,9 +50,7 @@ export default function TokenDetailScreen() {
           setToken(data);
           return data.price;
         }
-      } catch (error) {
-        console.error('Error fetching live price:', error);
-      }
+      } catch {}
       return null;
     },
     { interval: 15000, enabled: autoRefreshEnabled && !!address }
@@ -62,16 +59,8 @@ export default function TokenDetailScreen() {
   useEffect(() => {
     if (isUpdating) {
       Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.2,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
+        Animated.timing(pulseAnim, { toValue: 1.2, duration: 200, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
       ]).start();
     }
   }, [isUpdating]);
@@ -88,62 +77,52 @@ export default function TokenDetailScreen() {
     try {
       const data = await liveMarketService.getTokenDetail(addr);
       setToken(data);
-    } catch (error) {
-      console.error('Error loading token detail:', error);
-    } finally {
-      setLoading(false);
-    }
+    } catch {}
+    finally { setLoading(false); }
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    if (address) {
-      await loadTokenDetail(address);
-    }
+    if (address) await loadTokenDetail(address);
     setRefreshing(false);
   };
 
   const copyAddress = async () => {
     if (token) {
       await Clipboard.setStringAsync(token.address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedAddr(true);
+      setTimeout(() => setCopiedAddr(false), 2000);
+    }
+  };
+
+  const copyPair = async () => {
+    if (token?.pairAddress) {
+      await Clipboard.setStringAsync(token.pairAddress);
+      setCopiedPair(true);
+      setTimeout(() => setCopiedPair(false), 2000);
     }
   };
 
   const checkWatchlistStatus = async () => {
-    if (!address) {
-      setCheckingWatchlist(false);
-      return;
-    }
-
+    if (!address) { setCheckingWatchlist(false); return; }
     try {
-      const isInList = await watchlistService.isInWatchlist(address);
-      setIsWatchlisted(isInList);
-    } catch (error) {
-      console.error('Error checking watchlist:', error);
-    } finally {
-      setCheckingWatchlist(false);
-    }
+      setIsWatchlisted(await watchlistService.isInWatchlist(address));
+    } catch {}
+    finally { setCheckingWatchlist(false); }
   };
 
   const toggleWatchlist = async () => {
     if (!token) return;
-
-    try {
-      const success = await watchlistService.toggleWatchlist(
-        token.address,
-        token.symbol,
-        token.name
-      );
-
-      if (success) {
-        setIsWatchlisted(!isWatchlisted);
-      }
-    } catch (error) {
-      console.error('Error toggling watchlist:', error);
-    }
+    const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name).catch(() => false);
+    if (success) setIsWatchlisted(w => !w);
   };
+
+  // Balances from wallet context
+  const SOL_MINT = 'So11111111111111111111111111111111111111112';
+  const solToken = tokens.find(t => t.contract_address === SOL_MINT);
+  const thisToken = tokens.find(t => t.contract_address === address);
+  const solBalance = solToken ? parseFloat(solToken.balance || '0') : 0;
+  const tokenBalance = thisToken ? parseFloat(thisToken.balance || '0') : 0;
 
   if (loading) {
     return (
@@ -159,9 +138,9 @@ export default function TokenDetailScreen() {
   if (!token) {
     return (
       <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <ArrowLeft size={24} color={colors.textPrimary} strokeWidth={2} />
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+            <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
           </TouchableOpacity>
         </View>
         <View style={styles.errorContainer}>
@@ -171,37 +150,33 @@ export default function TokenDetailScreen() {
     );
   }
 
+  const displayPrice = livePrice || token.price;
   const changePositive = token.priceChange24h >= 0;
+  const shortAddr = token.address
+    ? `${token.address.slice(0, 4)}...${token.address.slice(-4)}`
+    : '';
 
   return (
     <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ArrowLeft size={24} color={colors.textPrimary} strokeWidth={2} />
+      {/* Top bar: back + refresh + watchlist */}
+      <View style={styles.topBar}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Token Details</Text>
-        <View style={styles.headerRight}>
+        <View style={styles.topBarRight}>
           <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+            style={styles.iconBtn}
+            onPress={() => setAutoRefreshEnabled(e => !e)}
             activeOpacity={0.7}
           >
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <RefreshCw
-                size={20}
-                color={autoRefreshEnabled ? colors.success : colors.textMuted}
-                strokeWidth={2.5}
-              />
+              <RefreshCw size={18} color={autoRefreshEnabled ? colors.success : colors.textMuted} strokeWidth={2.5} />
             </Animated.View>
           </TouchableOpacity>
           {!checkingWatchlist && (
-            <TouchableOpacity
-              style={styles.watchlistButton}
-              onPress={toggleWatchlist}
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
               <Star
-                size={24}
+                size={20}
                 color={isWatchlisted ? colors.warning : colors.textMuted}
                 fill={isWatchlisted ? colors.warning : 'transparent'}
                 strokeWidth={2}
@@ -215,137 +190,157 @@ export default function TokenDetailScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        <View style={styles.content}>
-          <View style={styles.tokenHeader}>
+        {/* Token header card: logo + name/symbol | price + change */}
+        <View style={styles.tokenHeaderCard}>
+          <View style={styles.tokenHeaderLeft}>
             {token.image ? (
               <Image source={{ uri: token.image }} style={styles.tokenLogo} />
             ) : (
-              <View style={styles.tokenLogoPlaceholder}>
-                <Text style={styles.tokenLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+              <View style={styles.tokenLogoFallback}>
+                <Text style={styles.tokenLogoFallbackText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
               </View>
             )}
-            <View style={styles.tokenTitleSection}>
+            <View style={styles.tokenTitleCol}>
               <View style={styles.tokenNameRow}>
-                <Text style={styles.tokenName}>{token.name}</Text>
-                {token.boostCount && token.boostCount > 0 && (
+                <Text style={styles.tokenName} numberOfLines={1}>{token.name}</Text>
+                {token.boostCount != null && token.boostCount > 0 && (
                   <View style={styles.boostBadge}>
-                    <Zap size={14} color={colors.warning} fill={colors.warning} />
+                    <Zap size={11} color={colors.warning} fill={colors.warning} />
                     <Text style={styles.boostText}>x{token.boostCount}</Text>
                   </View>
                 )}
               </View>
               <Text style={styles.tokenSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
+              <TouchableOpacity style={styles.addrRow} onPress={copyAddress} activeOpacity={0.7}>
+                <Text style={styles.addrText}>{shortAddr}</Text>
+                {copiedAddr
+                  ? <CheckCircle2 size={12} color={colors.success} strokeWidth={2} />
+                  : <Copy size={12} color={colors.textMuted} strokeWidth={2} />
+                }
+              </TouchableOpacity>
             </View>
           </View>
 
-          {/* Live Price */}
-          <View style={styles.priceSection}>
-            <Text style={styles.currentPrice}>
-              {liveMarketService.formatPrice(livePrice || token.price)}
-            </Text>
-            <View style={[styles.priceChangeBadge, changePositive ? styles.changeBadgeUp : styles.changeBadgeDown]}>
+          <View style={styles.tokenHeaderRight}>
+            <Text style={styles.priceText}>{liveMarketService.formatPrice(displayPrice)}</Text>
+            <View style={[styles.changePill, changePositive ? styles.changePillUp : styles.changePillDown]}>
               {changePositive
-                ? <TrendingUp size={16} color={colors.success} strokeWidth={2.5} />
-                : <TrendingDown size={16} color={colors.error} strokeWidth={2.5} />
+                ? <TrendingUp size={12} color={colors.success} strokeWidth={2.5} />
+                : <TrendingDown size={12} color={colors.error} strokeWidth={2.5} />
               }
-              <Text style={[styles.priceChangeText, changePositive ? styles.changeTextUp : styles.changeTextDown]}>
+              <Text style={[styles.changeText, changePositive ? styles.changeUp : styles.changeDown]}>
                 {liveMarketService.formatChange(token.priceChange24h)}
               </Text>
             </View>
           </View>
+        </View>
 
-          {/* Real Dexscreener Chart */}
+        {/* Chart */}
+        <View style={styles.chartSection}>
           <ErrorBoundary fallbackLabel="Chart unavailable">
             <TradingViewChart
-              symbol={token?.symbol ?? ''}
-              currentPrice={livePrice || token.price}
+              symbol={token.symbol ?? ''}
+              currentPrice={displayPrice}
               pairAddress={token.pairAddress}
               tokenMint={token.address}
             />
           </ErrorBoundary>
+        </View>
 
+        {/* Trading panel */}
+        <View style={styles.tradingSection}>
           <ErrorBoundary fallbackLabel="Trading unavailable">
             <TradingInterface
               tokenMint={token.address}
-              tokenSymbol={token?.symbol ?? ''}
+              tokenSymbol={token.symbol ?? ''}
               tokenDecimals={9}
               currentPrice={token.price}
+              tokenLogoUrl={token.image}
+              solBalance={solBalance}
+              tokenBalance={tokenBalance}
               onTradeComplete={onRefresh}
             />
           </ErrorBoundary>
+        </View>
 
-          <View style={styles.activitySection}>
-            <TokenActivityFeed tokenAddress={token.address} />
-          </View>
-
-          <View style={styles.discussionSection}>
-            <TokenDiscussionComponent
-              tokenAddress={token.address}
-              userWallet={activeAddress || undefined}
-            />
-          </View>
-
-          <TransactionFeed tokenMint={token.address} />
-
-          <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <View style={styles.statIcon}>
-                <BarChart3 size={18} color={colors.primary} strokeWidth={2} />
-              </View>
-              <Text style={styles.statLabel}>24h Volume</Text>
-              <Text style={styles.statValue}>{liveMarketService.formatVolume(token.volume24h)}</Text>
+        {/* Stats row */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <View style={styles.statIconWrap}>
+              <BarChart3 size={14} color={colors.primary} strokeWidth={2} />
             </View>
-
-            <View style={styles.statCard}>
-              <View style={styles.statIcon}>
-                <Droplet size={18} color={colors.primary} strokeWidth={2} />
-              </View>
-              <Text style={styles.statLabel}>Liquidity</Text>
-              <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.liquidity)}</Text>
-            </View>
-
-            {token.marketCap && token.marketCap > 0 && (
-              <View style={styles.statCard}>
-                <View style={styles.statIcon}>
-                  <DollarSign size={18} color={colors.primary} strokeWidth={2} />
-                </View>
-                <Text style={styles.statLabel}>Market Cap</Text>
-                <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.marketCap)}</Text>
-              </View>
-            )}
+            <Text style={styles.statLabel}>24H VOLUME</Text>
+            <Text style={styles.statValue}>{liveMarketService.formatVolume(token.volume24h)}</Text>
           </View>
+          <View style={styles.statCard}>
+            <View style={styles.statIconWrap}>
+              <Droplet size={14} color={colors.primary} strokeWidth={2} />
+            </View>
+            <Text style={styles.statLabel}>LIQUIDITY</Text>
+            <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.liquidity)}</Text>
+          </View>
+          {token.marketCap != null && token.marketCap > 0 && (
+            <View style={styles.statCard}>
+              <View style={styles.statIconWrap}>
+                <DollarSign size={14} color={colors.primary} strokeWidth={2} />
+              </View>
+              <Text style={styles.statLabel}>MARKET CAP</Text>
+              <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.marketCap)}</Text>
+            </View>
+          )}
+        </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contract Address</Text>
-            <TouchableOpacity style={styles.addressCard} onPress={copyAddress} activeOpacity={0.7}>
-              <Text style={styles.addressText} numberOfLines={1} ellipsizeMode="middle">
+        {/* Contract / DEX info */}
+        <View style={styles.infoSection}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Contract Address</Text>
+            <TouchableOpacity style={styles.infoValueRow} onPress={copyAddress} activeOpacity={0.7}>
+              <Text style={styles.infoValueMono} numberOfLines={1} ellipsizeMode="middle">
                 {token.address}
               </Text>
-              <View style={styles.addressActions}>
-                <Copy size={18} color={copied ? colors.success : colors.textMuted} strokeWidth={2} />
-              </View>
+              {copiedAddr
+                ? <CheckCircle2 size={14} color={colors.success} strokeWidth={2} />
+                : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+              }
             </TouchableOpacity>
           </View>
 
-          {token.pairAddress && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>DEX Information</Text>
-              <View style={styles.infoCard}>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>DEX</Text>
-                  <Text style={styles.infoValue}>{token.dexId || 'Unknown'}</Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Pair Address</Text>
-                  <Text style={styles.infoValue} numberOfLines={1}>
-                    {token.pairAddress.slice(0, 8)}...{token.pairAddress.slice(-6)}
-                  </Text>
-                </View>
-              </View>
+          {token.dexId && (
+            <View style={[styles.infoRow, styles.infoRowBorder]}>
+              <Text style={styles.infoLabel}>DEX</Text>
+              <Text style={styles.infoValue}>{token.dexId}</Text>
             </View>
           )}
 
+          {token.pairAddress && (
+            <View style={[styles.infoRow, styles.infoRowBorder]}>
+              <Text style={styles.infoLabel}>Pair Address</Text>
+              <TouchableOpacity style={styles.infoValueRow} onPress={copyPair} activeOpacity={0.7}>
+                <Text style={styles.infoValueMono} numberOfLines={1} ellipsizeMode="middle">
+                  {token.pairAddress}
+                </Text>
+                {copiedPair
+                  ? <CheckCircle2 size={14} color={colors.success} strokeWidth={2} />
+                  : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+                }
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
+
+        {/* Activity & Discussion */}
+        <View style={styles.feedSection}>
+          <TokenActivityFeed tokenAddress={token.address} />
+        </View>
+
+        <View style={styles.feedSection}>
+          <TokenDiscussionComponent
+            tokenAddress={token.address}
+            userWallet={activeAddress || undefined}
+          />
+        </View>
+
+        <View style={styles.bottomPad} />
       </ScrollView>
     </LinearGradient>
   );
@@ -355,47 +350,38 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.xxl,
-    paddingTop: 60,
-    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 56,
+    paddingBottom: spacing.md,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
-  headerTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  headerRight: {
+  topBarRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
   },
-  refreshButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  watchlistButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   loadingContainer: {
     flex: 1,
@@ -418,234 +404,231 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '700',
   },
-  content: {
-    paddingHorizontal: spacing.xxl,
-    paddingBottom: spacing.xxxl,
-  },
-  tokenHeader: {
+  // Token header card
+  tokenHeaderCard: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
-    marginBottom: spacing.xxl,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    gap: spacing.md,
+  },
+  tokenHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flex: 1,
   },
   tokenLogo: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.surface,
   },
-  tokenLogoPlaceholder: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+  tokenLogoFallback: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: colors.surfaceBorder,
   },
-  tokenLogoText: {
-    fontSize: fontSize.xl,
+  tokenLogoFallbackText: {
+    fontSize: fontSize.md,
     fontWeight: '800',
     color: colors.primary,
   },
-  tokenTitleSection: {
+  tokenTitleCol: {
     flex: 1,
+    gap: 3,
   },
   tokenNameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: 4,
+    gap: spacing.xs,
+    flexWrap: 'wrap',
   },
   tokenName: {
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.lg,
     fontWeight: '800',
     color: colors.textPrimary,
+    flexShrink: 1,
   },
   tokenSymbol: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textMuted,
+  },
+  addrRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  addrText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
+    fontWeight: '600',
   },
   boostBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     backgroundColor: colors.warningMuted,
-    borderRadius: borderRadius.sm,
+    borderRadius: 4,
   },
   boostText: {
     fontSize: fontSize.xs,
     fontWeight: '800',
     color: colors.warning,
   },
-  priceSection: {
-    alignItems: 'center',
-    marginBottom: spacing.xxxl,
+  tokenHeaderRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+    paddingTop: 4,
   },
-  currentPrice: {
-    fontSize: 42,
+  priceText: {
+    fontSize: fontSize.xl,
     fontWeight: '900',
     color: colors.textPrimary,
-    marginBottom: spacing.md,
-    letterSpacing: -1,
+    letterSpacing: -0.5,
   },
-  priceChangeBadge: {
+  changePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: borderRadius.full,
   },
-  changeBadgeUp: {
+  changePillUp: {
     backgroundColor: colors.successMuted,
   },
-  changeBadgeDown: {
+  changePillDown: {
     backgroundColor: colors.errorMuted,
   },
-  priceChangeText: {
-    fontSize: fontSize.lg,
-    fontWeight: '800',
+  changeText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
   },
-  changeTextUp: {
+  changeUp: {
     color: colors.success,
   },
-  changeTextDown: {
+  changeDown: {
     color: colors.error,
   },
-  statsGrid: {
+  // Chart
+  chartSection: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  // Trading
+  tradingSection: {
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  // Stats row
+  statsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-    marginBottom: spacing.xxxl,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
   },
   statCard: {
     flex: 1,
-    minWidth: '47%',
     backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
+    gap: 4,
   },
-  statIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  statIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: colors.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: 2,
   },
   statLabel: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
+    fontSize: 9,
+    fontWeight: '700',
     color: colors.textMuted,
-    marginBottom: 4,
-    textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   statValue: {
-    fontSize: fontSize.lg,
+    fontSize: fontSize.sm,
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  section: {
-    marginBottom: spacing.xxl,
-  },
-  activitySection: {
-    minHeight: 300,
-    maxHeight: 400,
+  // Contract info
+  infoSection: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
     backgroundColor: colors.surface,
     borderRadius: borderRadius.lg,
-    marginBottom: spacing.xl,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     overflow: 'hidden',
-  },
-  discussionSection: {
-    minHeight: 400,
-    maxHeight: 500,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    marginBottom: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    overflow: 'hidden',
-  },
-  sectionTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: colors.textMuted,
-    marginBottom: spacing.md,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  addressCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  addressText: {
-    flex: 1,
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    fontFamily: 'SpaceMono-Regular',
-    marginRight: spacing.md,
-  },
-  addressActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  infoCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    gap: spacing.md,
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  infoRowBorder: {
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceBorder,
   },
   infoLabel: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontWeight: '600',
     color: colors.textMuted,
+    flexShrink: 0,
+    minWidth: 80,
+  },
+  infoValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  infoValueMono: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    fontFamily: 'SpaceMono-Regular',
+    flex: 1,
+    textAlign: 'right',
   },
   infoValue: {
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  actionSection: {
-    marginTop: spacing.xl,
-  },
-  actionButtonPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.lg,
+  // Feeds
+  feedSection: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    backgroundColor: colors.surface,
     borderRadius: borderRadius.lg,
-    ...elevation.md,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    overflow: 'hidden',
+    minHeight: 200,
+    maxHeight: 400,
   },
-  actionButtonTextPrimary: {
-    fontSize: fontSize.lg,
-    fontWeight: '800',
-    color: colors.white,
+  bottomPad: {
+    height: spacing.xxxl,
   },
 });

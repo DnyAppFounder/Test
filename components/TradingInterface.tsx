@@ -6,9 +6,11 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { CircleAlert as AlertCircle, CircleCheck as CheckCircle } from 'lucide-react-native';
-import { colors, spacing, fontSize, borderRadius, elevation } from '@/constants/theme';
+import { ArrowUpDown, ChevronDown, CircleAlert as AlertCircle, CircleCheck as CheckCircle } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService';
 import { useWallet } from '@/contexts/WalletContext';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
@@ -16,37 +18,33 @@ import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const SOL_LOGO = 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png';
 
 interface TradingInterfaceProps {
   tokenMint: string;
   tokenSymbol: string;
   tokenDecimals: number;
   currentPrice: number;
+  tokenLogoUrl?: string;
+  solBalance?: number;
+  tokenBalance?: number;
   onTradeComplete?: () => void;
 }
 
 type TradeMode = 'buy' | 'sell';
 type TradeStatus = 'idle' | 'fetching_quote' | 'quote_ready' | 'signing' | 'sending' | 'confirming' | 'success' | 'error';
 
-const STATUS_LABELS: Record<TradeStatus, string> = {
-  idle: '',
-  fetching_quote: 'Preparing quote...',
-  quote_ready: '',
-  signing: 'Confirm in wallet...',
-  sending: 'Transaction pending...',
-  confirming: 'Transaction pending...',
-  success: 'Transaction confirmed',
-  error: 'Transaction failed',
-};
-
 export function TradingInterface({
   tokenMint,
   tokenSymbol,
   tokenDecimals,
   currentPrice,
+  tokenLogoUrl,
+  solBalance = 0,
+  tokenBalance = 0,
   onTradeComplete,
 }: TradingInterfaceProps) {
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet, tokens, refreshWallet } = useWallet();
   const [mode, setMode] = useState<TradeMode>('buy');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState<JupiterQuote | null>(null);
@@ -55,59 +53,48 @@ export function TradingInterface({
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [slippage] = useState(0.5);
 
+  // Get real balances from context tokens
+  const solToken = tokens.find(t => t.contract_address === SOL_MINT);
+  const thisToken = tokens.find(t => t.contract_address === tokenMint);
+  const realSolBalance = solToken ? parseFloat(solToken.balance || '0') : solBalance;
+  const realTokenBalance = thisToken ? parseFloat(thisToken.balance || '0') : tokenBalance;
+
+  const fromBalance = mode === 'buy' ? realSolBalance : realTokenBalance;
+  const fromSymbol = mode === 'buy' ? 'SOL' : tokenSymbol;
+  const toSymbol = mode === 'buy' ? tokenSymbol : 'SOL';
+  const fromLogoUrl = mode === 'buy' ? SOL_LOGO : tokenLogoUrl;
+  const toLogoUrl = mode === 'buy' ? tokenLogoUrl : SOL_LOGO;
+
   // Debounce quote fetching
   useEffect(() => {
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
       setQuote(null);
-      if (status === 'quote_ready' || status === 'fetching_quote') {
-        setStatus('idle');
-      }
+      if (status === 'quote_ready' || status === 'fetching_quote') setStatus('idle');
       return;
     }
-
-    const timer = setTimeout(() => {
-      fetchQuote(parsed);
-    }, 500);
-
+    const timer = setTimeout(() => fetchQuote(parsed), 600);
     return () => clearTimeout(timer);
   }, [amount, mode, tokenMint]);
 
   const fetchQuote = async (inputAmount: number) => {
     setStatus('fetching_quote');
     setError(null);
-
     try {
-      let inputMint: string;
-      let outputMint: string;
-      let amountInSmallestUnit: number;
+      const inputMint = mode === 'buy' ? SOL_MINT : tokenMint;
+      const outputMint = mode === 'buy' ? tokenMint : SOL_MINT;
+      const decimals = mode === 'buy' ? 9 : tokenDecimals;
+      const amountIn = Math.floor(inputAmount * Math.pow(10, decimals));
 
-      if (mode === 'buy') {
-        inputMint = SOL_MINT;
-        outputMint = tokenMint;
-        amountInSmallestUnit = Math.floor(inputAmount * 1e9);
-      } else {
-        inputMint = tokenMint;
-        outputMint = SOL_MINT;
-        amountInSmallestUnit = Math.floor(inputAmount * Math.pow(10, tokenDecimals));
-      }
-
-      const quoteResponse = await jupiterSwapService.getQuote(
-        inputMint,
-        outputMint,
-        amountInSmallestUnit,
-        Math.round(slippage * 100)
-      );
-
-      if (quoteResponse) {
-        setQuote(quoteResponse);
+      const q = await jupiterSwapService.getQuote(inputMint, outputMint, amountIn, Math.round(slippage * 100));
+      if (q) {
+        setQuote(q);
         setStatus('quote_ready');
       } else {
-        setError('No route found. Token may have low liquidity.');
+        setError('No route found. This token may have low liquidity.');
         setStatus('error');
       }
     } catch (err: any) {
-      console.error('[Trade] Quote error:', err);
       setError(err.message || 'Failed to fetch quote');
       setStatus('error');
     }
@@ -115,46 +102,30 @@ export function TradingInterface({
 
   const executeSwap = async () => {
     if (!quote || !activeAddress) return;
-
+    setError(null);
+    setStatus('signing');
     try {
-      setError(null);
-      setStatus('signing');
-
-      // Build transaction via Jupiter API (no external redirect)
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
-      if (!swapResult?.swapTransaction) {
-        throw new Error('Failed to build swap transaction');
-      }
+      if (!swapResult?.swapTransaction) throw new Error('Failed to build swap transaction');
 
-      // Sign inside the app with the connected wallet provider
       let signedTx: VersionedTransaction;
 
       if (connectedWallet) {
-        // External wallet — triggers wallet popup inside the app, NOT a redirect
         const txBuf = Buffer.from(swapResult.swapTransaction, 'base64');
         const transaction = VersionedTransaction.deserialize(txBuf);
         signedTx = await ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, transaction);
       } else if (selectedAccount) {
-        // Internal (imported/created) wallet — sign with keypair
-        signedTx = await signWithInternalWallet(swapResult.swapTransaction);
+        signedTx = await signWithKeypair(swapResult.swapTransaction);
       } else {
-        throw new Error('No wallet available');
+        throw new Error('No wallet available to sign');
       }
 
       setStatus('sending');
-
-      const signature = await jupiterSwapService.executeSwap(
-        swapResult.swapTransaction,
-        async () => signedTx
-      );
-
-      if (!signature) {
-        throw new Error('Transaction was rejected by the network');
-      }
+      const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
+      if (!signature) throw new Error('Transaction rejected by network');
 
       setTxSignature(signature);
       setStatus('success');
-
       if (refreshWallet) await refreshWallet();
       if (onTradeComplete) onTradeComplete();
 
@@ -165,159 +136,178 @@ export function TradingInterface({
         setTxSignature(null);
       }, 4000);
     } catch (err: any) {
-      console.error('[Trade] Swap error:', err);
       let msg = err?.message || 'Transaction failed';
-      if (msg.includes('User rejected') || msg.includes('rejected')) {
-        msg = 'Transaction rejected in wallet';
-      } else if (msg.includes('insufficient') || msg.includes('balance')) {
-        msg = 'Insufficient balance';
-      }
+      if (msg.includes('User rejected') || msg.includes('rejected')) msg = 'Transaction rejected in wallet';
+      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance';
       setError(msg);
       setStatus('error');
     }
   };
 
-  const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
+  const signWithKeypair = async (serializedTx: string): Promise<VersionedTransaction> => {
     const walletManager = SecureWalletManager.getInstance();
-    if (!walletManager.isUnlocked()) {
-      await walletManager.unlockWallet();
-    }
+    if (!walletManager.isUnlocked()) await walletManager.unlockWallet();
     const mnemonic = walletManager.getMnemonic();
-    if (!mnemonic || !selectedAccount) throw new Error('Wallet locked');
+    if (!mnemonic || !selectedAccount) throw new Error('Wallet locked or unavailable');
 
     const { KeyDerivationManager } = await import('@/lib/crypto/keyDerivation');
     const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
 
     const txBuf = Buffer.from(serializedTx, 'base64');
     const transaction = VersionedTransaction.deserialize(txBuf);
-
-    transaction.sign([{
-      publicKey: new PublicKey(selectedAccount.address),
-      secretKey: keypair.secretKey,
-    }]);
-
+    transaction.sign([{ publicKey: new PublicKey(selectedAccount.address), secretKey: keypair.secretKey }]);
     return transaction;
   };
 
   const getEstimatedOutput = (): string => {
-    if (!quote) return '0';
+    if (!quote) return '0.00';
     const decimals = mode === 'buy' ? tokenDecimals : 9;
-    const output = parseInt(quote.outAmount) / Math.pow(10, decimals);
-    return output.toFixed(Math.min(decimals, 6));
+    const out = parseInt(quote.outAmount) / Math.pow(10, decimals);
+    return out < 0.001 ? out.toExponential(3) : out.toFixed(Math.min(decimals, 6));
   };
 
-  const getMinimumReceived = (): string => {
-    if (!quote) return '0';
-    const decimals = mode === 'buy' ? tokenDecimals : 9;
-    const minimum = parseInt(quote.otherAmountThreshold) / Math.pow(10, decimals);
-    return minimum.toFixed(Math.min(decimals, 6));
+  const handleMax = () => {
+    const bal = mode === 'buy' ? realSolBalance : realTokenBalance;
+    if (bal > 0) {
+      const max = mode === 'buy' ? Math.max(0, bal - 0.005) : bal;
+      setAmount(max.toString());
+    }
   };
 
-  const getPriceImpact = (): number => {
-    if (!quote) return 0;
-    return (quote.priceImpactPct || 0) * 100;
+  const switchMode = () => {
+    setMode(m => m === 'buy' ? 'sell' : 'buy');
+    setAmount('');
+    setQuote(null);
+    setStatus('idle');
+    setError(null);
+  };
+
+  const isProcessing = status === 'signing' || status === 'sending' || status === 'confirming';
+  const canExecute = status === 'quote_ready' && !!quote && !isProcessing;
+
+  const getButtonLabel = () => {
+    if (!activeAddress) return 'Connect Wallet';
+    if (!amount || parseFloat(amount) <= 0) return 'Enter Amount';
+    if (status === 'fetching_quote') return 'Getting Quote...';
+    if (status === 'quote_ready') return mode === 'buy' ? `Buy ${tokenSymbol}` : `Sell ${tokenSymbol}`;
+    if (status === 'signing') return 'Confirm in Wallet...';
+    if (status === 'sending' || status === 'confirming') return 'Pending...';
+    if (status === 'success') return 'Success!';
+    if (status === 'error') return 'Try Again';
+    return 'Enter Amount';
+  };
+
+  const getButtonStyle = () => {
+    if (status === 'success') return styles.btnSuccess;
+    if (status === 'error') return styles.btnError;
+    if (canExecute) return mode === 'buy' ? styles.btnBuy : styles.btnSell;
+    return styles.btnDisabled;
   };
 
   if (!activeAddress) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.connectWalletText}>Connect or import a wallet to trade</Text>
+      <View style={styles.noWallet}>
+        <Text style={styles.noWalletText}>Connect or import a wallet to trade</Text>
       </View>
     );
   }
 
-  const isProcessing = status === 'signing' || status === 'sending' || status === 'confirming';
-  const canExecute = status === 'quote_ready' && quote && !isProcessing;
-
   return (
     <View style={styles.container}>
-      {/* Mode Selector */}
-      <View style={styles.modeSelector}>
-        {(['buy', 'sell'] as TradeMode[]).map((m) => (
-          <TouchableOpacity
-            key={m}
-            style={[styles.modeButton, mode === m && (m === 'buy' ? styles.buyActive : styles.sellActive)]}
-            onPress={() => { setMode(m); setQuote(null); setStatus('idle'); setError(null); }}
-            disabled={isProcessing}
-          >
-            <Text style={[styles.modeText, mode === m && styles.modeTextActive]}>
-              {m === 'buy' ? 'Buy' : 'Sell'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      {/* Buy / Sell tabs */}
+      <View style={styles.tabs}>
+        <TouchableOpacity
+          style={[styles.tab, mode === 'buy' && styles.tabBuyActive]}
+          onPress={() => { setMode('buy'); setAmount(''); setQuote(null); setStatus('idle'); setError(null); }}
+          disabled={isProcessing}
+        >
+          <Text style={[styles.tabText, mode === 'buy' && styles.tabTextBuyActive]}>Buy</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, mode === 'sell' && styles.tabSellActive]}
+          onPress={() => { setMode('sell'); setAmount(''); setQuote(null); setStatus('idle'); setError(null); }}
+          disabled={isProcessing}
+        >
+          <Text style={[styles.tabText, mode === 'sell' && styles.tabTextSellActive]}>Sell</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Input */}
-      <View style={styles.inputSection}>
-        <Text style={styles.inputLabel}>
-          {mode === 'buy' ? 'Amount (SOL)' : `Amount (${tokenSymbol})`}
-        </Text>
-        <TextInput
-          style={styles.amountInput}
-          value={amount}
-          onChangeText={setAmount}
-          placeholder="0.00"
-          placeholderTextColor={colors.textMuted}
-          keyboardType="decimal-pad"
-          editable={!isProcessing}
-        />
-      </View>
-
-      {/* Quote Details */}
-      {quote && (status === 'quote_ready' || isProcessing) && (
-        <View style={styles.quoteDetails}>
-          <View style={styles.quoteRow}>
-            <Text style={styles.quoteLabel}>You will receive</Text>
-            <Text style={styles.quoteValue}>
-              ~{getEstimatedOutput()} {mode === 'buy' ? tokenSymbol : 'SOL'}
-            </Text>
-          </View>
-          <View style={styles.quoteRow}>
-            <Text style={styles.quoteLabel}>Minimum received</Text>
-            <Text style={styles.quoteValue}>{getMinimumReceived()}</Text>
-          </View>
-          {getPriceImpact() > 0.01 && (
-            <View style={styles.quoteRow}>
-              <Text style={styles.quoteLabel}>Price impact</Text>
-              <Text style={[styles.quoteValue, getPriceImpact() > 3 && styles.warningText]}>
-                {getPriceImpact().toFixed(3)}%
-              </Text>
-            </View>
-          )}
-          <View style={styles.quoteRow}>
-            <Text style={styles.quoteLabel}>Slippage</Text>
-            <Text style={styles.quoteValue}>{slippage}%</Text>
+      {/* You Pay row */}
+      <View style={styles.inputRow}>
+        <View style={styles.inputRowTop}>
+          <Text style={styles.inputRowLabel}>You Pay</Text>
+          <View style={styles.balanceRow}>
+            <Text style={styles.balanceText}>Balance: {fromBalance.toFixed(4)} {fromSymbol}</Text>
+            <TouchableOpacity style={styles.maxBtn} onPress={handleMax}>
+              <Text style={styles.maxBtnText}>MAX</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      )}
+        <View style={styles.inputBox}>
+          <TextInput
+            style={styles.amountInput}
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0.00"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="decimal-pad"
+            editable={!isProcessing}
+          />
+          <View style={styles.tokenSelector}>
+            {fromLogoUrl ? (
+              <Image source={{ uri: fromLogoUrl }} style={styles.tokenLogo} />
+            ) : (
+              <View style={[styles.tokenLogo, styles.tokenLogoFallback]}>
+                <Text style={styles.tokenLogoText}>{fromSymbol.slice(0, 2)}</Text>
+              </View>
+            )}
+            <Text style={styles.tokenSelectorText}>{fromSymbol}</Text>
+            <ChevronDown size={14} color={colors.textMuted} />
+          </View>
+        </View>
+      </View>
 
-      {/* Status Message */}
-      {status !== 'idle' && status !== 'quote_ready' && (
-        <View style={[
-          styles.statusMessage,
-          status === 'success' && styles.successMessage,
-          status === 'error' && styles.errorMessage,
-        ]}>
-          {(status === 'fetching_quote' || status === 'signing' || status === 'sending' || status === 'confirming') && (
-            <ActivityIndicator size="small" color={colors.primary} />
-          )}
-          {status === 'success' && <CheckCircle size={18} color={colors.success} />}
-          {status === 'error' && <AlertCircle size={18} color={colors.error} />}
-          <Text style={[
-            styles.statusText,
-            status === 'success' && styles.successText,
-            status === 'error' && styles.errorTextColor,
-          ]}>
-            {status === 'error' ? (error || 'Transaction failed') : STATUS_LABELS[status]}
+      {/* Swap arrow */}
+      <View style={styles.swapArrowWrapper}>
+        <TouchableOpacity style={styles.swapArrowBtn} onPress={switchMode} disabled={isProcessing}>
+          <ArrowUpDown size={16} color={colors.primary} strokeWidth={2.5} />
+        </TouchableOpacity>
+      </View>
+
+      {/* You Receive row */}
+      <View style={styles.inputRow}>
+        <Text style={styles.inputRowLabel}>You Receive (Est.)</Text>
+        <View style={styles.inputBox}>
+          <Text style={[styles.amountInput, styles.receiveAmount]}>
+            {status === 'fetching_quote' ? '...' : getEstimatedOutput()}
           </Text>
+          <View style={styles.tokenSelector}>
+            {toLogoUrl ? (
+              <Image source={{ uri: toLogoUrl }} style={styles.tokenLogo} />
+            ) : (
+              <View style={[styles.tokenLogo, styles.tokenLogoFallback]}>
+                <Text style={styles.tokenLogoText}>{toSymbol.slice(0, 2)}</Text>
+              </View>
+            )}
+            <Text style={styles.tokenSelectorText}>{toSymbol}</Text>
+            <ChevronDown size={14} color={colors.textMuted} />
+          </View>
+        </View>
+      </View>
+
+      {/* Error message */}
+      {(status === 'error' && error) && (
+        <View style={styles.errorBox}>
+          <AlertCircle size={14} color={colors.error} />
+          <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
 
-      {/* Transaction hash */}
-      {txSignature && (
-        <View style={styles.txSignature}>
-          <Text style={styles.txLabel}>Signature:</Text>
-          <Text style={styles.txHash} numberOfLines={1} ellipsizeMode="middle">
+      {/* Success message */}
+      {status === 'success' && txSignature && (
+        <View style={styles.successBox}>
+          <CheckCircle size={14} color={colors.success} />
+          <Text style={styles.successText} numberOfLines={1} ellipsizeMode="middle">
             {txSignature}
           </Text>
         </View>
@@ -325,178 +315,249 @@ export function TradingInterface({
 
       {/* Action Button */}
       <TouchableOpacity
-        style={[
-          styles.tradeButton,
-          mode === 'buy' ? styles.buyButton : styles.sellButton,
-          !canExecute && styles.tradeButtonDisabled,
-        ]}
+        style={[styles.actionBtn, getButtonStyle()]}
         onPress={executeSwap}
-        disabled={!canExecute}
+        disabled={!canExecute && status !== 'error'}
+        activeOpacity={0.85}
       >
-        <Text style={styles.tradeButtonText}>
-          {isProcessing
-            ? STATUS_LABELS[status]
-            : canExecute
-              ? (mode === 'buy' ? 'CONFIRM BUY' : 'CONFIRM SELL')
-              : 'Enter amount'}
-        </Text>
+        {(status === 'fetching_quote' || isProcessing) ? (
+          <ActivityIndicator size="small" color={colors.white} />
+        ) : null}
+        <Text style={styles.actionBtnText}>{getButtonLabel()}</Text>
       </TouchableOpacity>
+
+      {/* Slippage info */}
+      {quote && status === 'quote_ready' && (
+        <Text style={styles.slippageNote}>Slippage: {slippage}% · Price impact: {((quote.priceImpactPct || 0) * 100).toFixed(2)}%</Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.surface,
+    backgroundColor: '#12121A',
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(139, 92, 246, 0.12)',
   },
-  modeSelector: {
+  tabs: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
-    backgroundColor: colors.surfaceLight,
     borderRadius: borderRadius.md,
-    padding: 4,
+    overflow: 'hidden',
+    marginBottom: spacing.lg,
+    backgroundColor: '#1A1A28',
+    padding: 3,
   },
-  modeButton: {
+  tab: {
     flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.sm,
+    paddingVertical: 10,
     alignItems: 'center',
+    borderRadius: borderRadius.sm,
   },
-  buyActive: {
-    backgroundColor: colors.success,
+  tabBuyActive: {
+    backgroundColor: '#10b981',
   },
-  sellActive: {
-    backgroundColor: colors.error,
+  tabSellActive: {
+    backgroundColor: '#ef4444',
   },
-  modeText: {
-    fontSize: fontSize.sm,
+  tabText: {
+    fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.textMuted,
   },
-  modeTextActive: {
+  tabTextBuyActive: {
     color: colors.white,
   },
-  inputSection: {
-    marginBottom: spacing.lg,
+  tabTextSellActive: {
+    color: colors.white,
   },
-  inputLabel: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    fontWeight: '600',
-    marginBottom: spacing.sm,
+  inputRow: {
+    marginBottom: 4,
   },
-  amountInput: {
-    fontSize: fontSize.xxl,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  quoteDetails: {
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
-    gap: spacing.sm,
-  },
-  quoteRow: {
+  inputRowTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 6,
   },
-  quoteLabel: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  quoteValue: {
+  inputRowLabel: {
     fontSize: fontSize.sm,
-    color: colors.textPrimary,
-    fontWeight: '700',
+    fontWeight: '600',
+    color: colors.textMuted,
   },
-  warningText: {
-    color: colors.warning,
-  },
-  statusMessage: {
+  balanceRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    padding: spacing.md,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.lg,
+    gap: 6,
   },
-  successMessage: {
-    backgroundColor: colors.successMuted,
-  },
-  errorMessage: {
-    backgroundColor: colors.errorMuted,
-  },
-  statusText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    fontWeight: '600',
-    flex: 1,
-  },
-  successText: {
-    color: colors.success,
-  },
-  errorTextColor: {
-    color: colors.error,
-  },
-  txSignature: {
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  txLabel: {
+  balanceText: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     fontWeight: '600',
-    marginBottom: spacing.xs,
   },
-  txHash: {
-    fontSize: fontSize.xs,
+  maxBtn: {
+    backgroundColor: colors.primaryMuted,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  maxBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
     color: colors.primary,
-    fontWeight: '700',
-    fontFamily: 'SpaceMono-Regular',
   },
-  tradeButton: {
+  inputBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A1A28',
     borderRadius: borderRadius.md,
-    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.1)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    gap: spacing.sm,
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  receiveAmount: {
+    color: colors.textSecondary,
+  },
+  tokenSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#252538',
+    borderRadius: borderRadius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  tokenLogo: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+  tokenLogoFallback: {
+    backgroundColor: colors.primaryMuted,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  buyButton: {
+  tokenLogoText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  tokenSelectorText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  swapArrowWrapper: {
+    alignItems: 'center',
+    marginVertical: 2,
+    zIndex: 1,
+  },
+  swapArrowBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.errorMuted,
+    borderRadius: borderRadius.sm,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    color: colors.error,
+    fontWeight: '600',
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.successMuted,
+    borderRadius: borderRadius.sm,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  successText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    color: colors.success,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono-Regular',
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    borderRadius: borderRadius.lg,
+    paddingVertical: 16,
+    marginTop: spacing.lg,
+  },
+  btnBuy: {
+    backgroundColor: '#8B5CF6',
+  },
+  btnSell: {
+    backgroundColor: '#8B5CF6',
+  },
+  btnDisabled: {
+    backgroundColor: '#252538',
+  },
+  btnSuccess: {
     backgroundColor: colors.success,
   },
-  sellButton: {
+  btnError: {
     backgroundColor: colors.error,
   },
-  tradeButtonDisabled: {
-    backgroundColor: colors.surfaceLight,
-    opacity: 0.6,
-  },
-  tradeButtonText: {
+  actionBtnText: {
     fontSize: fontSize.md,
     fontWeight: '800',
     color: colors.white,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
-  connectWalletText: {
-    fontSize: fontSize.md,
+  slippageNote: {
+    fontSize: 11,
     color: colors.textMuted,
     textAlign: 'center',
+    marginTop: spacing.sm,
+    fontWeight: '500',
+  },
+  noWallet: {
+    backgroundColor: '#12121A',
+    borderRadius: borderRadius.lg,
+    padding: spacing.xxl,
+    marginBottom: spacing.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.12)',
+  },
+  noWalletText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
     fontWeight: '600',
-    paddingVertical: spacing.xxl,
+    textAlign: 'center',
   },
 });
