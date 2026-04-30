@@ -22,6 +22,7 @@ import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
 type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'signing' | 'sending' | 'success' | 'error';
 
@@ -39,8 +40,8 @@ export default function BuyScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
 
-  const [tokenMint, setTokenMint] = useState(SOL_MINT);
-  const [tokenSymbol, setTokenSymbol] = useState('SOL');
+  const [tokenMint, setTokenMint] = useState(DAWEN_MINT);
+  const [tokenSymbol, setTokenSymbol] = useState('DAWEN');
   const [solAmount, setSolAmount] = useState('');
   const [estimatedOutput, setEstimatedOutput] = useState('');
   const [status, setStatus] = useState<BuyStatus>('idle');
@@ -55,7 +56,7 @@ export default function BuyScreen() {
   // Debounce quote fetch
   useEffect(() => {
     const amount = parseFloat(solAmount);
-    if (!solAmount || isNaN(amount) || amount <= 0 || tokenMint === SOL_MINT) {
+    if (!solAmount || isNaN(amount) || amount <= 0 || !tokenMint || tokenMint === SOL_MINT) {
       setQuote(null);
       setEstimatedOutput('');
       return;
@@ -265,6 +266,35 @@ export default function BuyScreen() {
             </View>
           )}
 
+          {/* Featured DAWEN token */}
+          <TouchableOpacity
+            style={[styles.featuredBanner, tokenMint === DAWEN_MINT && styles.featuredBannerActive]}
+            onPress={() => {
+              setTokenMint(DAWEN_MINT);
+              setTokenSymbol('DAWEN');
+              setQuote(null);
+              setEstimatedOutput('');
+              setStatus('idle');
+              setErrorMsg(null);
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.featuredBadge}>
+              <Text style={styles.featuredBadgeText}>FEATURED</Text>
+            </View>
+            <View style={styles.featuredInfo}>
+              <Text style={styles.featuredName}>DAWEN</Text>
+              <Text style={styles.featuredMint} numberOfLines={1} ellipsizeMode="middle">
+                {DAWEN_MINT}
+              </Text>
+            </View>
+            {tokenMint === DAWEN_MINT && (
+              <View style={styles.featuredCheck}>
+                <Text style={styles.featuredCheckText}>Selected</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
           {/* Token Mint Input */}
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Token Contract Address</Text>
@@ -274,20 +304,20 @@ export default function BuyScreen() {
               onChangeText={v => {
                 const clean = v.trim();
                 setTokenMint(clean || SOL_MINT);
-                setTokenSymbol(clean ? 'TOKEN' : 'SOL');
+                setTokenSymbol(clean ? (clean === DAWEN_MINT ? 'DAWEN' : 'TOKEN') : 'SOL');
                 setQuote(null);
                 setEstimatedOutput('');
                 setStatus('idle');
                 setErrorMsg(null);
               }}
-              placeholder="Paste Solana token mint address..."
+              placeholder="Paste any Solana token mint address..."
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
               editable={!isProcessing}
             />
             <Text style={styles.mintHint}>
-              Enter the Solana mint address of the token you want to buy with SOL
+              Enter a Solana mint address or tap the featured token above
             </Text>
           </View>
 
@@ -460,6 +490,58 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.primaryLight,
     fontWeight: '600',
+  },
+  featuredBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surfaceLight,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.xl,
+  },
+  featuredBannerActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  featuredBadge: {
+    backgroundColor: colors.warning,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  featuredBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.black,
+    letterSpacing: 0.5,
+  },
+  featuredInfo: {
+    flex: 1,
+  },
+  featuredName: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  featuredMint: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  featuredCheck: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
+  },
+  featuredCheckText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.white,
   },
   section: { marginBottom: spacing.xl },
   sectionLabel: {

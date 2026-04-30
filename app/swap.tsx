@@ -24,7 +24,7 @@ import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
 type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'error';
 
@@ -39,7 +39,7 @@ const STATUS_MSG: Record<SwapStatus, string> = {
 
 export default function SwapScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, refreshWallet, tokens: walletTokens, totalBalance } = useWallet();
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -56,6 +56,11 @@ export default function SwapScreen() {
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
 
+  // Get wallet balance for the from-token
+  const fromTokenBalance = fromToken
+    ? walletTokens.find(t => t.contract_address === fromToken.address)?.balance ?? 0
+    : 0;
+
   useEffect(() => {
     loadTokens();
   }, []);
@@ -66,9 +71,14 @@ export default function SwapScreen() {
       const allTokens = await jupiterTokenListService.getVerifiedTokens();
       setTokens(allTokens);
       const sol = allTokens.find(t => t.address === SOL_MINT);
-      const usdc = allTokens.find(t => t.address === USDC_MINT);
+      const dawen = allTokens.find(t => t.address === DAWEN_MINT);
       if (sol) setFromToken(sol);
-      if (usdc) setToToken(usdc);
+      // Default TO token is DAWEN; fall back to first non-SOL token if not in list
+      if (dawen) {
+        setToToken(dawen);
+      } else if (allTokens.length > 1) {
+        setToToken(allTokens.find(t => t.address !== SOL_MINT) ?? allTokens[1]);
+      }
     } catch (e) {
       console.error('Token list load failed:', e);
     } finally {
@@ -280,7 +290,33 @@ export default function SwapScreen() {
       <ScrollView showsVerticalScrollIndicator={false} style={styles.content}>
         <View style={styles.swapCard}>
           <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>From</Text>
+            <View style={styles.inputLabelRow}>
+              <Text style={styles.inputLabel}>From</Text>
+              {hasWallet && fromToken && (
+                <View style={styles.balanceRow}>
+                  <Text style={styles.balanceText}>
+                    Balance: {fromTokenBalance.toFixed(4)} {fromToken.symbol}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.maxButton}
+                    onPress={() => {
+                      if (fromTokenBalance > 0) {
+                        // Leave small buffer for SOL gas
+                        const maxAmt = fromToken.address === SOL_MINT
+                          ? Math.max(0, fromTokenBalance - 0.01)
+                          : fromTokenBalance;
+                        setFromAmount(maxAmt.toFixed(6));
+                        setStatus('idle');
+                        setErrorMsg(null);
+                      }
+                    }}
+                    disabled={isProcessing}
+                  >
+                    <Text style={styles.maxButtonText}>MAX</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
             <View style={styles.inputRow}>
               <TextInput
                 style={styles.amountInput}
@@ -513,12 +549,41 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   inputSection: { marginBottom: spacing.md },
+  inputLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
   inputLabel: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textMuted,
-    marginBottom: spacing.sm,
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  balanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  balanceText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
+  maxButton: {
+    backgroundColor: colors.primaryMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  maxButtonText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.primary,
     letterSpacing: 0.5,
   },
   inputRow: {
