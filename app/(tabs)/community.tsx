@@ -305,12 +305,12 @@ export default function CommunityScreen() {
           ) : null}
           <View style={styles.profileStats}>
             <View style={styles.profileStatItem}>
-              <Text style={styles.profileStatValue}>{profile.followers_count || 0}</Text>
+              <Text style={styles.profileStatValue}>0</Text>
               <Text style={styles.profileStatLabel}>Followers</Text>
             </View>
             <View style={styles.profileStatDivider} />
             <View style={styles.profileStatItem}>
-              <Text style={styles.profileStatValue}>{profile.following_count || 0}</Text>
+              <Text style={styles.profileStatValue}>0</Text>
               <Text style={styles.profileStatLabel}>Following</Text>
             </View>
             <View style={styles.profileStatDivider} />

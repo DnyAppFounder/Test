@@ -58,7 +58,7 @@ export default function SwapScreen() {
 
   // Get wallet balance for the from-token
   const fromTokenBalance = fromToken
-    ? walletTokens.find(t => t.contract_address === fromToken.address)?.balance ?? 0
+    ? parseFloat(walletTokens.find(t => t.contract_address === fromToken.address)?.balance || '0')
     : 0;
 
   useEffect(() => {
