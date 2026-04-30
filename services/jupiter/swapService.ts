@@ -5,6 +5,16 @@ const JUPITER_QUOTE_API = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP_API = 'https://quote-api.jup.ag/v6/swap';
 const JUPITER_PRICE_API = 'https://price.jup.ag/v4/price';
 
+function getProxyBaseUrl(): string {
+  const supabaseUrl = typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
+    : undefined;
+  if (supabaseUrl) {
+    return `${supabaseUrl}/functions/v1/solana-rpc`;
+  }
+  return '';
+}
+
 export interface JupiterQuote {
   inputMint: string;
   inAmount: string;
@@ -34,6 +44,43 @@ export interface TokenPrice {
   };
 }
 
+async function proxyFetch(url: string, options?: RequestInit): Promise<Response> {
+  // Try direct first
+  try {
+    const response = await fetch(url, options);
+    return response;
+  } catch (directErr) {
+    // If direct fails, try via edge function proxy
+    const proxyBase = getProxyBaseUrl();
+    if (!proxyBase) throw directErr;
+
+    const parsedUrl = new URL(url);
+
+    // Determine action from URL
+    if (parsedUrl.hostname.includes('quote-api.jup.ag') && parsedUrl.pathname.includes('/quote')) {
+      const proxyUrl = `${proxyBase}?action=quote&${parsedUrl.searchParams.toString()}`;
+      return fetch(proxyUrl);
+    }
+
+    if (parsedUrl.hostname.includes('quote-api.jup.ag') && parsedUrl.pathname.includes('/swap')) {
+      const proxyUrl = `${proxyBase}?action=swap`;
+      return fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: options?.body,
+      });
+    }
+
+    if (parsedUrl.hostname.includes('price.jup.ag')) {
+      const ids = parsedUrl.searchParams.get('ids') || '';
+      const proxyUrl = `${proxyBase}?action=price&ids=${ids}`;
+      return fetch(proxyUrl);
+    }
+
+    throw directErr;
+  }
+}
+
 class JupiterSwapService {
   private get connection() {
     return SolanaConnectionService.getInstance().getConnection();
@@ -53,17 +100,14 @@ class JupiterSwapService {
     });
 
     const url = `${JUPITER_QUOTE_API}?${params.toString()}`;
-    console.log('[Jupiter] Quote request:', { inputMint, outputMint, amount, slippageBps, url });
+    console.log('[Jupiter] Quote request:', { inputMint, outputMint, amount, slippageBps });
 
     let response: Response;
     try {
-      response = await fetch(url);
+      response = await proxyFetch(url);
     } catch (fetchErr: any) {
       const msg = fetchErr?.message || 'Network request failed';
-      if (msg.includes('Load failed') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        throw new Error('Jupiter API unreachable. Check your internet connection or try again.');
-      }
-      throw new Error(`Network error: ${msg}`);
+      throw new Error(`Jupiter API unreachable: ${msg}`);
     }
 
     if (!response.ok) {
@@ -86,16 +130,18 @@ class JupiterSwapService {
     userPublicKey: string,
     wrapUnwrapSOL: boolean = true
   ): Promise<JupiterSwapResult> {
-    const response = await fetch(JUPITER_SWAP_API, {
+    const body = JSON.stringify({
+      quoteResponse: quote,
+      userPublicKey,
+      wrapUnwrapSOL,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: 'auto',
+    });
+
+    const response = await proxyFetch(JUPITER_SWAP_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        quoteResponse: quote,
-        userPublicKey,
-        wrapUnwrapSOL,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 'auto',
-      }),
+      body,
     });
 
     if (!response.ok) {
@@ -123,15 +169,41 @@ class JupiterSwapService {
     transaction = await signTransaction(transaction);
 
     const rawTransaction = transaction.serialize();
-    const txid = await this.connection.sendRawTransaction(rawTransaction, {
-      skipPreflight: true,
-      maxRetries: 2,
-    });
+    const connectionService = SolanaConnectionService.getInstance();
 
-    const confirmation = await this.connection.confirmTransaction(txid, 'confirmed');
+    // Send via RPC proxy
+    const txBase64 = Buffer.from(rawTransaction).toString('base64');
+    const sendResult = await connectionService.rpcCall('sendTransaction', [
+      txBase64,
+      { skipPreflight: true, maxRetries: 2, encoding: 'base64' },
+    ]);
 
-    if (confirmation.value.err) {
-      throw new Error(`Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+    const txid = sendResult;
+    console.log('[Jupiter] Transaction sent:', txid);
+
+    // Poll for confirmation
+    let confirmed = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const status = await connectionService.rpcCall('getSignatureStatuses', [[txid]]);
+        const value = status?.value?.[0];
+        if (value) {
+          if (value.err) {
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(value.err)}`);
+          }
+          if (value.confirmationStatus === 'confirmed' || value.confirmationStatus === 'finalized') {
+            confirmed = true;
+            break;
+          }
+        }
+      } catch (e: any) {
+        if (e.message?.includes('failed on-chain')) throw e;
+      }
+    }
+
+    if (!confirmed) {
+      console.log('[Jupiter] Transaction not confirmed after 60s, may still succeed:', txid);
     }
 
     return txid;
@@ -139,22 +211,14 @@ class JupiterSwapService {
 
   async getTokenPrice(tokenMint: string): Promise<number> {
     try {
-      const response = await fetch(`${JUPITER_PRICE_API}?ids=${tokenMint}`);
-
-      if (!response.ok) {
-        return 0;
-      }
+      const response = await proxyFetch(`${JUPITER_PRICE_API}?ids=${tokenMint}`);
+      if (!response.ok) return 0;
 
       const data = await response.json();
       const priceData = data.data?.[tokenMint];
-
-      if (!priceData) {
-        return 0;
-      }
-
-      return priceData.price || 0;
+      return priceData?.price || 0;
     } catch (error) {
-      console.error('Error fetching token price:', error);
+      console.error('[Jupiter] Price fetch error:', error);
       return 0;
     }
   }
@@ -162,11 +226,8 @@ class JupiterSwapService {
   async getMultipleTokenPrices(tokenMints: string[]): Promise<Map<string, number>> {
     try {
       const ids = tokenMints.join(',');
-      const response = await fetch(`${JUPITER_PRICE_API}?ids=${ids}`);
-
-      if (!response.ok) {
-        return new Map();
-      }
+      const response = await proxyFetch(`${JUPITER_PRICE_API}?ids=${ids}`);
+      if (!response.ok) return new Map();
 
       const data = await response.json();
       const prices = new Map<string, number>();
@@ -180,21 +241,9 @@ class JupiterSwapService {
 
       return prices;
     } catch (error) {
-      console.error('Error fetching multiple token prices:', error);
+      console.error('[Jupiter] Batch price error:', error);
       return new Map();
     }
-  }
-
-  calculatePriceImpact(quote: JupiterQuote): number {
-    return quote.priceImpactPct * 100;
-  }
-
-  calculateMinimumReceived(quote: JupiterQuote, decimals: number): number {
-    return parseInt(quote.otherAmountThreshold) / Math.pow(10, decimals);
-  }
-
-  formatAmount(amount: number, decimals: number): string {
-    return (amount / Math.pow(10, decimals)).toFixed(decimals > 6 ? 6 : decimals);
   }
 }
 

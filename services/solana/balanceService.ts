@@ -1,4 +1,4 @@
-import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { SolanaConnectionService } from './connectionService';
 
 export interface TokenBalance {
@@ -13,17 +13,15 @@ export interface WalletBalances {
   tokens: TokenBalance[];
 }
 
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1500): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
     } catch (error: any) {
-      const isRateLimit = error?.message?.includes('429') || error?.status === 429;
       if (i === retries) throw error;
-      const wait = isRateLimit ? delayMs * (i + 2) : delayMs;
-      await new Promise(r => setTimeout(r, wait));
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
     }
   }
   throw new Error('withRetry exhausted');
@@ -38,12 +36,13 @@ export class SolanaBalanceService {
 
   async getSOLBalance(address: string): Promise<number> {
     console.log('[BalanceService] Fetching SOL balance for:', address);
-    const publicKey = new PublicKey(address);
 
     try {
-      const lamports = await withRetry(() =>
-        this.connectionService.getConnection().getBalance(publicKey)
+      const result = await withRetry(() =>
+        this.connectionService.rpcCall('getBalance', [address, { commitment: 'confirmed' }])
       );
+
+      const lamports = typeof result === 'object' ? result.value : result;
       const solBalance = lamports / LAMPORTS_PER_SOL;
       console.log('[BalanceService] SOL lamports:', lamports, '| SOL balance:', solBalance);
       return solBalance;
@@ -55,35 +54,37 @@ export class SolanaBalanceService {
 
   async getTokenAccounts(address: string): Promise<TokenBalance[]> {
     console.log('[BalanceService] Fetching SPL token accounts for:', address);
-    const publicKey = new PublicKey(address);
-    const connection = this.connectionService.getConnection();
 
     try {
-      const tokenAccounts = await withRetry(() =>
-        connection.getParsedTokenAccountsByOwner(publicKey, {
-          programId: TOKEN_PROGRAM_ID,
-        })
+      const result = await withRetry(() =>
+        this.connectionService.rpcCall('getTokenAccountsByOwner', [
+          address,
+          { programId: TOKEN_PROGRAM_ID },
+          { encoding: 'jsonParsed', commitment: 'confirmed' },
+        ])
       );
 
-      console.log('[BalanceService] Raw token accounts found:', tokenAccounts.value.length);
+      const accounts = result?.value ?? [];
+      console.log('[BalanceService] Raw token accounts found:', accounts.length);
 
       const tokens: TokenBalance[] = [];
 
-      for (const accountInfo of tokenAccounts.value) {
+      for (const account of accounts) {
         try {
-          const parsedInfo = accountInfo.account.data.parsed.info;
+          const parsedInfo = account.account.data.parsed.info;
           const tokenAmount = parsedInfo.tokenAmount;
+          const uiAmount = tokenAmount.uiAmount;
 
-          if (tokenAmount.uiAmount && tokenAmount.uiAmount > 0) {
+          if (uiAmount && uiAmount > 0) {
             tokens.push({
               mint: parsedInfo.mint,
               balance: parseInt(tokenAmount.amount),
               decimals: tokenAmount.decimals,
-              uiAmount: tokenAmount.uiAmount,
+              uiAmount,
             });
           }
         } catch {
-          // skip malformed account data
+          // skip malformed
         }
       }
 

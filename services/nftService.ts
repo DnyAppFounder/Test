@@ -25,7 +25,15 @@ export interface NFTCollection {
   blockchain_id: string;
 }
 
-const HELIUS_RPC = 'https://mainnet.helius-rpc.com/?api-key=demo';
+function getNftRpcUrl(): string {
+  const supabaseUrl = typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
+    : undefined;
+  if (supabaseUrl) {
+    return `${supabaseUrl}/functions/v1/solana-rpc`;
+  }
+  return 'https://api.mainnet-beta.solana.com';
+}
 
 function sanitizeImageUrl(url?: string): string | null {
   if (!url) return null;
@@ -41,7 +49,7 @@ export class NFTService {
     if (!walletAddress) return [];
 
     try {
-      const response = await fetch(HELIUS_RPC, {
+      const response = await fetch(getNftRpcUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -115,7 +123,7 @@ export class NFTService {
 
   static async getNFTById(nftId: string): Promise<NFT | null> {
     try {
-      const response = await fetch(HELIUS_RPC, {
+      const response = await fetch(getNftRpcUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

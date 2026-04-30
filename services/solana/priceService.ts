@@ -6,7 +6,7 @@ export interface TokenPrice {
   lastUpdated: number;
 }
 
-const JUPITER_PRICE_API = 'https://price.jup.ag/v4/price';
+const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
 
 export class SolanaPriceService {
   private priceCache: Map<string, TokenPrice>;
@@ -23,21 +23,22 @@ export class SolanaPriceService {
     }
 
     try {
-      const response = await fetch(`${JUPITER_PRICE_API}?ids=${mintAddress}`);
+      const response = await fetch(`${DEXSCREENER_API}/${mintAddress}`);
       if (!response.ok) {
-        console.log('[PriceService] API error:', response.status);
+        console.log('[PriceService] DexScreener error:', response.status);
         return this.getFallback(mintAddress);
       }
 
       const data = await response.json();
-      const priceData = data?.data?.[mintAddress];
+      const pairs = data?.pairs;
 
-      if (priceData && priceData.price) {
+      if (pairs && pairs.length > 0) {
+        const pair = pairs[0];
         const price: TokenPrice = {
           mint: mintAddress,
-          price: priceData.price,
-          priceChange24h: 0,
-          volume24h: 0,
+          price: parseFloat(pair.priceUsd) || 0,
+          priceChange24h: pair.priceChange?.h24 || 0,
+          volume24h: pair.volume?.h24 || 0,
           lastUpdated: Date.now(),
         };
         this.priceCache.set(mintAddress, price);
@@ -46,7 +47,7 @@ export class SolanaPriceService {
 
       return this.getFallback(mintAddress);
     } catch (error) {
-      console.log('[PriceService] Fetch error for', mintAddress, error);
+      console.log('[PriceService] Fetch error for', mintAddress.slice(0, 8), error);
       return this.getFallback(mintAddress);
     }
   }
@@ -66,30 +67,15 @@ export class SolanaPriceService {
 
     if (uncached.length === 0) return results;
 
-    try {
-      const ids = uncached.join(',');
-      const response = await fetch(`${JUPITER_PRICE_API}?ids=${ids}`);
-
-      if (response.ok) {
-        const data = await response.json();
-        for (const mint of uncached) {
-          const priceData = data?.data?.[mint];
-          if (priceData && priceData.price) {
-            const price: TokenPrice = {
-              mint,
-              price: priceData.price,
-              priceChange24h: 0,
-              volume24h: 0,
-              lastUpdated: Date.now(),
-            };
-            this.priceCache.set(mint, price);
-            results.set(mint, price);
-          }
+    // DexScreener doesn't support batch, fetch individually
+    await Promise.allSettled(
+      uncached.map(async (mint) => {
+        const price = await this.getTokenPrice(mint);
+        if (price && price.price > 0) {
+          results.set(mint, price);
         }
-      }
-    } catch (error) {
-      console.log('[PriceService] Batch fetch error:', error);
-    }
+      })
+    );
 
     return results;
   }

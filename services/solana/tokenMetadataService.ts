@@ -1,4 +1,3 @@
-import { PublicKey } from '@solana/web3.js';
 import { SolanaConnectionService } from './connectionService';
 import { jupiterTokenListService } from '../jupiter/tokenListService';
 
@@ -101,12 +100,13 @@ export class TokenMetadataService {
 
     // Fallback to on-chain mint info for decimals
     try {
-      const connection = this.connectionService.getConnection();
-      const mintPublicKey = new PublicKey(mintAddress);
-      const mintInfo = await connection.getParsedAccountInfo(mintPublicKey);
+      const result = await this.connectionService.rpcCall('getAccountInfo', [
+        mintAddress,
+        { encoding: 'jsonParsed', commitment: 'confirmed' },
+      ]);
 
-      if (mintInfo.value && 'parsed' in mintInfo.value.data) {
-        const parsedData = mintInfo.value.data.parsed;
+      if (result?.value && result.value.data?.parsed) {
+        const parsedData = result.value.data.parsed;
         const decimals = parsedData.info?.decimals || 9;
 
         const metadata: TokenMetadata = {

@@ -1,6 +1,16 @@
 const JUPITER_TOKEN_LIST_URL = 'https://token.jup.ag/all';
 const CACHE_DURATION = 5 * 60 * 1000;
 
+function getProxyTokenListUrl(): string {
+  const supabaseUrl = typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
+    : undefined;
+  if (supabaseUrl) {
+    return `${supabaseUrl}/functions/v1/solana-rpc?action=tokens`;
+  }
+  return '';
+}
+
 export interface JupiterToken {
   address: string;
   chainId: number;
@@ -17,6 +27,7 @@ export interface JupiterToken {
 class JupiterTokenListService {
   private cache: JupiterToken[] = [];
   private cacheTime = 0;
+  private fetchInProgress: Promise<JupiterToken[]> | null = null;
 
   async getAllTokens(): Promise<JupiterToken[]> {
     const now = Date.now();
@@ -24,18 +35,44 @@ class JupiterTokenListService {
       return this.cache;
     }
 
+    if (this.fetchInProgress) return this.fetchInProgress;
+
+    this.fetchInProgress = this.doFetch();
+    try {
+      return await this.fetchInProgress;
+    } finally {
+      this.fetchInProgress = null;
+    }
+  }
+
+  private async doFetch(): Promise<JupiterToken[]> {
+    // Try direct first
     try {
       const response = await fetch(JUPITER_TOKEN_LIST_URL);
-      if (!response.ok) return this.cache;
+      if (response.ok) {
+        const tokens = await response.json();
+        this.cache = tokens;
+        this.cacheTime = Date.now();
+        return tokens;
+      }
+    } catch {}
 
-      const tokens = await response.json();
-      this.cache = tokens;
-      this.cacheTime = now;
-      return tokens;
-    } catch (error) {
-      console.error('Error fetching Jupiter token list:', error);
-      return this.cache;
+    // Try via proxy
+    const proxyUrl = getProxyTokenListUrl();
+    if (proxyUrl) {
+      try {
+        const response = await fetch(proxyUrl);
+        if (response.ok) {
+          const tokens = await response.json();
+          this.cache = tokens;
+          this.cacheTime = Date.now();
+          return tokens;
+        }
+      } catch {}
     }
+
+    console.log('[TokenList] Both direct and proxy failed, returning cache');
+    return this.cache;
   }
 
   async searchTokens(query: string): Promise<JupiterToken[]> {
