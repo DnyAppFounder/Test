@@ -70,15 +70,20 @@ export default function SwapScreen() {
     try {
       const allTokens = await jupiterTokenListService.getVerifiedTokens();
       setTokens(allTokens);
-      const sol = allTokens.find(t => t.address === SOL_MINT);
-      const dawen = allTokens.find(t => t.address === DAWEN_MINT);
-      if (sol) setFromToken(sol);
-      // Default TO token is DAWEN; fall back to first non-SOL token if not in list
-      if (dawen) {
-        setToToken(dawen);
-      } else if (allTokens.length > 1) {
-        setToToken(allTokens.find(t => t.address !== SOL_MINT) ?? allTokens[1]);
-      }
+
+      const sol = allTokens.find(t => t.address === SOL_MINT) ?? {
+        address: SOL_MINT, chainId: 101, decimals: 9,
+        name: 'Solana', symbol: 'SOL',
+        logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+      };
+      setFromToken(sol);
+
+      // DAWEN may be a pump.fun token not in the verified list — create fallback entry
+      const dawen = allTokens.find(t => t.address === DAWEN_MINT) ?? {
+        address: DAWEN_MINT, chainId: 101, decimals: 6,
+        name: 'DAWEN', symbol: 'DAWEN', logoURI: undefined,
+      };
+      setToToken(dawen);
     } catch (e) {
       console.error('Token list load failed:', e);
     } finally {
@@ -156,11 +161,12 @@ export default function SwapScreen() {
 
   /**
    * Sign with internal (imported/created) wallet keypair.
+   * Auto-unlocks the wallet if locked.
    */
   const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
+    if (!selectedAccount) throw new Error('No account selected');
     const walletManager = SecureWalletManager.getInstance();
-    const mnemonic = walletManager.getMnemonic();
-    if (!mnemonic || !selectedAccount) throw new Error('Wallet locked or unavailable');
+    const mnemonic = await walletManager.getMnemonicUnlocked();
 
     const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex ?? 0);
     const txBuf = Buffer.from(serializedTx, 'base64');
@@ -192,9 +198,6 @@ export default function SwapScreen() {
 
       // Build transaction via Jupiter (never opens Jupiter website)
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
-      if (!swapResult?.swapTransaction) {
-        throw new Error('Failed to build swap transaction. Pair may have insufficient liquidity.');
-      }
 
       // Sign inside the app with the connected wallet provider
       let signedTx: VersionedTransaction;
@@ -213,8 +216,6 @@ export default function SwapScreen() {
         swapResult.swapTransaction,
         async () => signedTx
       );
-
-      if (!signature) throw new Error('Transaction rejected by network');
 
       setTxSignature(signature);
       setStatus('success');

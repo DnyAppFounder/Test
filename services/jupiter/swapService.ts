@@ -49,93 +49,79 @@ class JupiterSwapService {
     amount: number,
     slippageBps: number = 50
   ): Promise<JupiterQuote | null> {
-    try {
-      const params = new URLSearchParams({
-        inputMint,
-        outputMint,
-        amount: amount.toString(),
-        slippageBps: slippageBps.toString(),
-      });
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: amount.toString(),
+      slippageBps: slippageBps.toString(),
+    });
 
-      const response = await fetch(`${JUPITER_QUOTE_API}?${params.toString()}`);
+    const response = await fetch(`${JUPITER_QUOTE_API}?${params.toString()}`);
 
-      if (!response.ok) {
-        console.error('Jupiter quote error:', response.status, response.statusText);
-        return null;
-      }
-
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      console.error('Error fetching Jupiter quote:', error);
-      return null;
+    if (!response.ok) {
+      if (response.status === 400) return null; // No route
+      throw new Error(`Jupiter quote failed (${response.status}): ${response.statusText}`);
     }
+
+    const data = await response.json();
+    if (data.error) return null; // No route available
+    return data as JupiterQuote;
   }
 
   async getSwapTransaction(
     quote: JupiterQuote,
     userPublicKey: string,
     wrapUnwrapSOL: boolean = true
-  ): Promise<JupiterSwapResult | null> {
-    try {
-      const response = await fetch(JUPITER_SWAP_API, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          quoteResponse: quote,
-          userPublicKey,
-          wrapUnwrapSOL,
-          dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: 'auto',
-        }),
-      });
+  ): Promise<JupiterSwapResult> {
+    const response = await fetch(JUPITER_SWAP_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quoteResponse: quote,
+        userPublicKey,
+        wrapUnwrapSOL,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: 'auto',
+      }),
+    });
 
-      if (!response.ok) {
-        console.error('Jupiter swap error:', response.status, response.statusText);
-        return null;
-      }
-
-      const data = await response.json();
-      return {
-        swapTransaction: data.swapTransaction,
-        lastValidBlockHeight: data.lastValidBlockHeight || 0,
-      };
-    } catch (error) {
-      console.error('Error getting swap transaction:', error);
-      return null;
+    if (!response.ok) {
+      const errText = await response.text().catch(() => response.statusText);
+      throw new Error(`Jupiter swap build failed (${response.status}): ${errText}`);
     }
+
+    const data = await response.json();
+    if (!data.swapTransaction) {
+      throw new Error('Jupiter returned no swapTransaction');
+    }
+    return {
+      swapTransaction: data.swapTransaction,
+      lastValidBlockHeight: data.lastValidBlockHeight || 0,
+    };
   }
 
   async executeSwap(
     serializedTransaction: string,
     signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>
-  ): Promise<string | null> {
-    try {
-      const transactionBuf = Buffer.from(serializedTransaction, 'base64');
-      let transaction = VersionedTransaction.deserialize(transactionBuf);
+  ): Promise<string> {
+    const transactionBuf = Buffer.from(serializedTransaction, 'base64');
+    let transaction = VersionedTransaction.deserialize(transactionBuf);
 
-      transaction = await signTransaction(transaction);
+    transaction = await signTransaction(transaction);
 
-      const rawTransaction = transaction.serialize();
-      const txid = await this.connection.sendRawTransaction(rawTransaction, {
-        skipPreflight: true,
-        maxRetries: 2,
-      });
+    const rawTransaction = transaction.serialize();
+    const txid = await this.connection.sendRawTransaction(rawTransaction, {
+      skipPreflight: true,
+      maxRetries: 2,
+    });
 
-      const confirmation = await this.connection.confirmTransaction(txid, 'confirmed');
+    const confirmation = await this.connection.confirmTransaction(txid, 'confirmed');
 
-      if (confirmation.value.err) {
-        console.error('Transaction failed:', confirmation.value.err);
-        return null;
-      }
-
-      return txid;
-    } catch (error) {
-      console.error('Error executing swap:', error);
-      return null;
+    if (confirmation.value.err) {
+      throw new Error(`Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
     }
+
+    return txid;
   }
 
   async getTokenPrice(tokenMint: string): Promise<number> {

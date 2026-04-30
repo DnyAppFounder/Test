@@ -182,8 +182,19 @@ export class SecureWalletManager {
 
   getMnemonic(): string {
     if (!this.isUnlocked()) {
-      throw new Error('Wallet is locked');
+      throw new Error('Wallet is locked. Call unlockWallet() first.');
     }
+    return this.mnemonic!;
+  }
+
+  /**
+   * Returns the mnemonic, auto-unlocking if needed.
+   * Use this for signing flows where the wallet may not have been unlocked yet.
+   */
+  async getMnemonicUnlocked(): Promise<string> {
+    if (this.isUnlocked()) return this.mnemonic!;
+    const unlocked = await this.unlockWallet();
+    if (!unlocked) throw new Error('Failed to unlock wallet');
     return this.mnemonic!;
   }
 

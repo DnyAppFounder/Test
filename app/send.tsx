@@ -171,13 +171,9 @@ export default function SendScreen() {
         signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
         await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
       } else if (selectedAccount) {
-        // Internal wallet — sign with derived keypair
+        // Internal wallet — sign with derived keypair (auto-unlocks if needed)
         const walletManager = SecureWalletManager.getInstance();
-        if (!walletManager.isUnlocked()) {
-          const unlocked = await walletManager.unlockWallet();
-          if (!unlocked) throw new Error('Could not unlock wallet');
-        }
-        const mnemonic = walletManager.getMnemonic();
+        const mnemonic = await walletManager.getMnemonicUnlocked();
         const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
 
         transaction.sign(keypair);

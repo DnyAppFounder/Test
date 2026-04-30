@@ -120,7 +120,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      const result = await walletAssetLoader.loadSolanaWalletAssets(address);
+      const result = await walletAssetLoader.refreshWalletAssets('solana', address);
 
       const tokensFromChain: Token[] = result.assets.map((asset) => ({
         id: asset.id,
@@ -138,21 +138,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       setTokens(tokensFromChain);
       setTotalBalance(result.totalValue);
-
-      try {
-        const walletPortfolio = await solanaService.getWalletPortfolio(address);
-        setPortfolio(walletPortfolio);
-      } catch (error) {
-        console.log('Solana RPC error (non-fatal):', error);
-        setPortfolio(null);
-      }
+      setPortfolio(null); // reset; portfolio will load lazily if needed
     } catch (error) {
       console.error('Error refreshing portfolio:', error);
-      setPortfolio(null);
-      setTotalBalance(0);
-      setTokens([]);
     }
-  }, [selectedAccount, connectedWallet, solanaService]);
+  }, [selectedAccount, connectedWallet]);
 
   const forceReloadAccounts = useCallback(async () => {
     setIsLoading(true);
@@ -204,9 +194,31 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (activeAddress) {
-      refreshPortfolio();
+      // Use a fresh call to avoid stale closure — pass address directly
+      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then((result) => {
+        const tokensFromChain: Token[] = result.assets.map((asset) => ({
+          id: asset.id,
+          blockchain_id: 'solana',
+          contract_address: asset.address,
+          symbol: asset.symbol,
+          name: asset.name,
+          decimals: asset.decimals,
+          logo_url: asset.logoUrl ?? null,
+          is_verified: asset.verified,
+          coingecko_id: null,
+          balance: asset.balance,
+          balanceUSD: asset.value,
+        }));
+        setTokens(tokensFromChain);
+        setTotalBalance(result.totalValue);
+      }).catch((err) => {
+        console.error('[WalletContext] Portfolio load error:', err);
+      });
+    } else {
+      setTokens([]);
+      setTotalBalance(0);
     }
-  }, [activeAddress, refreshPortfolio]);
+  }, [activeAddress]);
 
   return (
     <WalletContext.Provider

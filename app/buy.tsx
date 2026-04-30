@@ -99,9 +99,9 @@ export default function BuyScreen() {
   };
 
   const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
+    if (!selectedAccount) throw new Error('No account selected');
     const walletManager = SecureWalletManager.getInstance();
-    const mnemonic = walletManager.getMnemonic();
-    if (!mnemonic || !selectedAccount) throw new Error('Wallet locked');
+    const mnemonic = await walletManager.getMnemonicUnlocked();
     const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex ?? 0);
     const txBuf = Buffer.from(serializedTx, 'base64');
     const tx = VersionedTransaction.deserialize(txBuf);
@@ -145,9 +145,6 @@ export default function BuyScreen() {
       setStatus('signing');
 
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress!, true);
-      if (!swapResult?.swapTransaction) {
-        throw new Error('Failed to build transaction');
-      }
 
       let signedTx: VersionedTransaction;
       if (connectedWallet) {
@@ -164,8 +161,6 @@ export default function BuyScreen() {
         swapResult.swapTransaction,
         async () => signedTx
       );
-
-      if (!signature) throw new Error('Transaction rejected by network');
 
       setTxSignature(signature);
       setStatus('success');
