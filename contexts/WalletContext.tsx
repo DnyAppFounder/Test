@@ -3,7 +3,7 @@ import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
 import { SolanaWalletService, WalletPortfolio } from '@/services/solana/walletService';
-import { AssetsService } from '@/services/assetsService';
+import { walletAssetLoader } from '@/services/walletAssetLoader';
 
 interface WalletContextType {
   // Internal (mnemonic-derived) accounts
@@ -120,25 +120,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      const userAssets = await AssetsService.getUserAssets(address);
-      const totalBalanceFromAssets = await AssetsService.getTotalBalance(address);
+      const result = await walletAssetLoader.loadSolanaWalletAssets(address);
 
-      const tokensFromAssets: Token[] = userAssets.map((asset) => ({
-        id: asset.token?.id || asset.token_id,
+      const tokensFromChain: Token[] = result.assets.map((asset) => ({
+        id: asset.id,
         blockchain_id: 'solana',
-        contract_address: asset.token_id,
-        symbol: asset.token?.symbol || '',
-        name: asset.token?.name || '',
-        decimals: 9,
-        logo_url: asset.token?.logo_url || null,
-        is_verified: true,
-        coingecko_id: asset.token?.coingecko_id || null,
-        balance: asset.quantity.toString(),
-        balanceUSD: asset.current_value || 0,
+        contract_address: asset.address,
+        symbol: asset.symbol,
+        name: asset.name,
+        decimals: asset.decimals,
+        logo_url: asset.logoUrl ?? null,
+        is_verified: asset.verified,
+        coingecko_id: null,
+        balance: asset.balance,
+        balanceUSD: asset.value,
       }));
 
-      setTokens(tokensFromAssets);
-      setTotalBalance(totalBalanceFromAssets);
+      setTokens(tokensFromChain);
+      setTotalBalance(result.totalValue);
 
       try {
         const walletPortfolio = await solanaService.getWalletPortfolio(address);

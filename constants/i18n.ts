@@ -132,7 +132,7 @@ const en: TranslationKeys = {
     wallet: 'Wallet',
     community: 'Community',
     gaming: 'Gaming',
-    dapps: 'dApps',
+    dapps: 'DawenCity',
     settings: 'Settings',
   },
   wallet: {
@@ -246,7 +246,7 @@ const fr: TranslationKeys = {
     wallet: 'Portefeuille',
     community: 'Communaute',
     gaming: 'Jeux',
-    dapps: 'dApps',
+    dapps: 'DawenCity',
     settings: 'Parametres',
   },
   wallet: {

@@ -1,5 +1,3 @@
-import { supabase } from '@/lib/supabase';
-
 export interface NFT {
   id: string;
   collection_id: string;
@@ -27,144 +25,156 @@ export interface NFTCollection {
   blockchain_id: string;
 }
 
+const HELIUS_RPC = 'https://mainnet.helius-rpc.com/?api-key=demo';
+
+function sanitizeImageUrl(url?: string): string | null {
+  if (!url) return null;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (url.startsWith('ipfs://')) {
+    return 'https://ipfs.io/ipfs/' + url.slice(7);
+  }
+  return null;
+}
+
 export class NFTService {
   static async getUserNFTs(walletAddress: string): Promise<NFT[]> {
-    try {
-      const mockNFTs: NFT[] = [
-        {
-          id: '1',
-          collection_id: 'bored-ape',
-          token_id: '1234',
-          name: 'Bored Ape #1234',
-          description: 'A rare Bored Ape with gold fur',
-          image_url: 'https://images.pexels.com/photos/9214396/pexels-photo-9214396.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 234,
-          last_sale_price: 45.5,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '2',
-          collection_id: 'azuki',
-          token_id: '5678',
-          name: 'Azuki #5678',
-          description: 'Cool Azuki with rare traits',
-          image_url: 'https://images.pexels.com/photos/8837386/pexels-photo-8837386.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 567,
-          last_sale_price: 12.3,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '3',
-          collection_id: 'doodles',
-          token_id: '9012',
-          name: 'Doodle #9012',
-          description: 'Colorful Doodle NFT',
-          image_url: 'https://images.pexels.com/photos/10049787/pexels-photo-10049787.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 1234,
-          last_sale_price: 8.7,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '4',
-          collection_id: 'pudgy',
-          token_id: '3456',
-          name: 'Pudgy Penguin #3456',
-          description: 'Adorable penguin',
-          image_url: 'https://images.pexels.com/photos/16218989/pexels-photo-16218989.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 789,
-          last_sale_price: 5.2,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '5',
-          collection_id: 'cool-cats',
-          token_id: '7890',
-          name: 'Cool Cat #7890',
-          description: 'Super cool cat',
-          image_url: 'https://images.pexels.com/photos/8834074/pexels-photo-8834074.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 456,
-          last_sale_price: 3.8,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '6',
-          collection_id: 'moonbirds',
-          token_id: '2345',
-          name: 'Moonbird #2345',
-          description: 'Rare Moonbird',
-          image_url: 'https://images.pexels.com/photos/16218877/pexels-photo-16218877.jpeg?auto=compress&w=400',
-          owner_address: walletAddress,
-          rarity_rank: 123,
-          last_sale_price: 15.6,
-          created_at: new Date().toISOString(),
-        },
-      ];
+    if (!walletAddress) return [];
 
-      return mockNFTs;
+    try {
+      const response = await fetch(HELIUS_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'get-assets',
+          method: 'getAssetsByOwner',
+          params: {
+            ownerAddress: walletAddress,
+            page: 1,
+            limit: 50,
+            displayOptions: {
+              showFungible: false,
+              showNativeBalance: false,
+            },
+          },
+        }),
+      });
+
+      if (!response.ok) return [];
+
+      const json = await response.json();
+      const items: any[] = json?.result?.items ?? [];
+
+      const nfts: NFT[] = [];
+      for (const asset of items) {
+        try {
+          const content = asset?.content ?? {};
+          const metadata = content?.metadata ?? {};
+          const files: any[] = content?.files ?? [];
+          const links = content?.links ?? {};
+
+          let imageUrl =
+            sanitizeImageUrl(links?.image) ??
+            sanitizeImageUrl(files.find((f: any) => f?.mime?.startsWith('image/'))?.uri) ??
+            sanitizeImageUrl(files[0]?.uri) ??
+            sanitizeImageUrl(metadata?.image) ??
+            null;
+
+          if (!imageUrl) continue;
+
+          const name = metadata?.name || asset?.id?.slice(0, 8) || 'Unknown NFT';
+          const description = metadata?.description ?? undefined;
+          const collectionName = asset?.grouping?.find((g: any) => g?.group_key === 'collection')?.group_value ?? asset?.id?.slice(0, 8) ?? 'unknown';
+
+          nfts.push({
+            id: asset.id,
+            collection_id: collectionName,
+            token_id: asset.id,
+            name,
+            description,
+            image_url: imageUrl,
+            owner_address: walletAddress,
+            metadata: metadata?.attributes ? { attributes: metadata.attributes } : undefined,
+            created_at: new Date().toISOString(),
+          });
+        } catch {
+          // skip malformed assets
+        }
+      }
+
+      return nfts;
     } catch (error) {
-      console.error('Error fetching NFTs:', error);
+      console.error('Error fetching NFTs from Helius:', error);
       return [];
     }
   }
 
   static async getNFTCollections(): Promise<NFTCollection[]> {
-    const { data } = await supabase
-      .from('nft_collections')
-      .select('*')
-      .eq('is_verified', true)
-      .order('floor_price', { ascending: false })
-      .limit(20);
-
-    return (data as NFTCollection[]) || [];
+    return [];
   }
 
   static async getNFTById(nftId: string): Promise<NFT | null> {
-    const mockNFT: NFT = {
-      id: nftId,
-      collection_id: 'bored-ape',
-      token_id: '1234',
-      name: 'Bored Ape #1234',
-      description: 'A rare Bored Ape with gold fur and laser eyes. This piece is from the iconic Bored Ape Yacht Club collection.',
-      image_url: 'https://images.pexels.com/photos/9214396/pexels-photo-9214396.jpeg?auto=compress&w=800',
-      owner_address: '0x123...abc',
-      rarity_rank: 234,
-      last_sale_price: 45.5,
-      metadata: {
-        attributes: [
-          { trait_type: 'Background', value: 'Purple' },
-          { trait_type: 'Fur', value: 'Gold' },
-          { trait_type: 'Eyes', value: 'Laser Eyes' },
-          { trait_type: 'Mouth', value: 'Bored' },
-          { trait_type: 'Clothes', value: 'Tuxedo' },
-        ],
-      },
-      created_at: new Date().toISOString(),
-    };
+    try {
+      const response = await fetch(HELIUS_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'get-asset',
+          method: 'getAsset',
+          params: { id: nftId },
+        }),
+      });
 
-    return mockNFT;
+      if (!response.ok) return null;
+      const json = await response.json();
+      const asset = json?.result;
+      if (!asset) return null;
+
+      const content = asset?.content ?? {};
+      const metadata = content?.metadata ?? {};
+      const files: any[] = content?.files ?? [];
+      const links = content?.links ?? {};
+
+      const imageUrl =
+        sanitizeImageUrl(links?.image) ??
+        sanitizeImageUrl(files.find((f: any) => f?.mime?.startsWith('image/'))?.uri) ??
+        sanitizeImageUrl(files[0]?.uri) ??
+        sanitizeImageUrl(metadata?.image) ??
+        '';
+
+      return {
+        id: asset.id,
+        collection_id: asset?.grouping?.find((g: any) => g?.group_key === 'collection')?.group_value ?? asset.id,
+        token_id: asset.id,
+        name: metadata?.name || asset.id,
+        description: metadata?.description,
+        image_url: imageUrl,
+        owner_address: '',
+        metadata: metadata?.attributes ? { attributes: metadata.attributes } : undefined,
+        created_at: new Date().toISOString(),
+      };
+    } catch {
+      return null;
+    }
   }
 
-  static async getCollectionStats(collectionId: string) {
+  static async getCollectionStats(_collectionId: string) {
     return {
-      floor_price: 45.5,
-      volume_24h: 1234.5,
-      volume_7d: 8765.4,
-      total_supply: 10000,
-      holders: 5678,
-      listed: 234,
+      floor_price: 0,
+      volume_24h: 0,
+      volume_7d: 0,
+      total_supply: 0,
+      holders: 0,
+      listed: 0,
     };
   }
 
   static formatPrice(price: number): string {
-    return `${price.toFixed(2)} ETH`;
+    return `${price.toFixed(2)} SOL`;
   }
 
-  static formatUSD(ethPrice: number, ethToUsd = 2000): string {
-    return `$${(ethPrice * ethToUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  static formatUSD(solPrice: number, solToUsd = 150): string {
+    return `$${(solPrice * solToUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 }

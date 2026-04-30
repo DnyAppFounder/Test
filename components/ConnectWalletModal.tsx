@@ -8,8 +8,9 @@ import {
   ActivityIndicator,
   Platform,
   ScrollView,
+  Linking,
 } from 'react-native';
-import { X, WifiOff, Shield, Check, Smartphone } from 'lucide-react-native';
+import { X, WifiOff, Shield, Check, Smartphone, ExternalLink } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import {
@@ -38,16 +39,32 @@ const WALLET_DESCRIPTIONS: Record<string, string> = {
   solflare: 'The original Solana wallet',
 };
 
+function getMobileDeepLinks(appUrl: string) {
+  const encoded = encodeURIComponent(appUrl);
+  return {
+    phantom: `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
+    backpack: `https://backpack.app/ul/browse/${encoded}`,
+    solflare: `https://solflare.com/ul/v1/browse/${encoded}?ref=${encoded}`,
+  };
+}
+
 export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWalletModalProps) {
   const { connectExternalWallet, connectedWallet, disconnectExternalWallet } = useWallet();
   const [installedWallets, setInstalledWallets] = useState<ExternalWalletInfo[]>([]);
   const [connecting, setConnecting] = useState<ExternalWalletId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [appUrl, setAppUrl] = useState('');
 
   const isMobile = Platform.OS !== 'web';
   const hasProvider = Platform.OS === 'web' ? ExternalWalletAdapter.hasAnyProvider() : false;
   const isInsideWalletBrowser = !isMobile && hasProvider;
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      setAppUrl(window.location.href);
+    }
+  }, []);
 
   useEffect(() => {
     if (visible) {
@@ -190,27 +207,39 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
               </View>
             )}
 
-            {/* Mobile: no injected provider — show instruction */}
+            {/* Mobile: deep link buttons to open app in wallet browser */}
             {isMobile && (
               <View style={styles.mobileMessage}>
                 <Smartphone size={28} color={colors.primary} />
                 <Text style={styles.mobileMessageTitle}>Open in Your Wallet</Text>
                 <Text style={styles.mobileMessageText}>
-                  To connect and sign transactions securely, open this app inside your wallet's built-in browser:
+                  Tap a wallet below to open this app inside its built-in browser and connect directly.
                 </Text>
                 <View style={styles.walletInstructionList}>
-                  {SUPPORTED_WALLETS.map(wallet => (
-                    <View key={wallet.id} style={styles.walletInstruction}>
-                      <LinearGradient
-                        colors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
-                        style={styles.walletInstructionIcon}
+                  {SUPPORTED_WALLETS.map(wallet => {
+                    const links = getMobileDeepLinks(appUrl || 'https://dawencity.app');
+                    const deepLink = links[wallet.id as keyof typeof links];
+                    return (
+                      <TouchableOpacity
+                        key={wallet.id}
+                        style={styles.walletInstruction}
+                        onPress={() => Linking.openURL(deepLink).catch(() => {})}
+                        activeOpacity={0.7}
                       >
-                        <Text style={styles.walletInstructionIconText}>{wallet.name[0]}</Text>
-                      </LinearGradient>
-                      <Text style={styles.walletInstructionName}>{wallet.name}</Text>
-                      <Text style={styles.walletInstructionStep}>Open → Browse → paste URL</Text>
-                    </View>
-                  ))}
+                        <LinearGradient
+                          colors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
+                          style={styles.walletInstructionIcon}
+                        >
+                          <Text style={styles.walletInstructionIconText}>{wallet.name[0]}</Text>
+                        </LinearGradient>
+                        <Text style={styles.walletInstructionName}>{wallet.name}</Text>
+                        <View style={styles.openInBrowserBadge}>
+                          <ExternalLink size={12} color={colors.primary} />
+                          <Text style={styles.openInBrowserText}>Open</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
             )}
@@ -421,6 +450,22 @@ const styles = StyleSheet.create({
   walletInstructionStep: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
+  },
+  openInBrowserBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  openInBrowserText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.primary,
   },
   // No provider
   noProviderMessage: {
