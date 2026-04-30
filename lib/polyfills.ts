@@ -1,6 +1,4 @@
 import { Buffer } from 'buffer';
-// @ts-ignore - process/browser doesn't have types
-import process from 'process/browser';
 
 const g = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : (typeof window !== 'undefined' ? window : {}) as any;
 
@@ -8,35 +6,33 @@ if (!g.Buffer) {
   g.Buffer = Buffer;
 }
 
+// Ensure process.version exists (readable-stream calls process.version.slice() at init)
 if (!g.process) {
-  g.process = process;
+  g.process = {} as any;
 }
-
 if (!g.process.version) {
   g.process.version = 'v18.0.0';
 }
-
 if (!g.process.versions) {
-  (g.process as any).versions = { node: '18.0.0' };
+  g.process.versions = { node: '18.0.0' };
 }
-
+if (!g.process.env) {
+  g.process.env = {};
+}
 if (!g.process.nextTick) {
   g.process.nextTick = ((fn: (...args: any[]) => void, ...args: any[]) => {
     setTimeout(() => fn(...args), 0);
   }) as any;
 }
+if (!g.process.cwd) {
+  g.process.cwd = () => '/';
+}
+if (!g.process.browser) {
+  g.process.browser = true;
+}
 
 if (!g.global) {
   g.global = g;
-}
-
-if (typeof crypto !== 'undefined' && !crypto.getRandomValues) {
-  crypto.getRandomValues = ((arr: any) => {
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = Math.floor(Math.random() * 256);
-    }
-    return arr;
-  }) as any;
 }
 
 export {};

@@ -18,6 +18,7 @@ config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   stream: require.resolve('stream-browserify'),
   process: require.resolve('process/browser.js'),
+  buffer: require.resolve('buffer/'),
 };
 
 module.exports = config;
