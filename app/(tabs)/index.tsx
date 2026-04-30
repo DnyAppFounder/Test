@@ -56,7 +56,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 
 export default function WalletHome() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, activeWallet } = useWallet();
+  const { activeAddress, activeWallet } = useWallet();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -71,6 +71,7 @@ export default function WalletHome() {
   const [watchlist, setWatchlist] = useState<WatchlistToken[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [assetSubTab, setAssetSubTab] = useState<AssetSubTab>('tokens');
+  const [assetsError, setAssetsError] = useState<string | null>(null);
   const [nfts, setNfts] = useState<NFT[]>([]);
   const [nftsLoading, setNftsLoading] = useState(false);
 
@@ -101,32 +102,37 @@ export default function WalletHome() {
   }, [category]);
 
   const loadWalletAssets = useCallback(async () => {
-    const address = connectedWallet?.address ?? selectedAccount?.address;
-    if (!address) {
+    if (!activeAddress) {
       setWalletAssets([]);
       setTotalBalance(0);
+      setAssetsError(null);
       return;
     }
 
     setAssetsLoading(true);
+    setAssetsError(null);
     try {
-      console.log('[MyAssets] Loading wallet assets for:', address);
-      const result = await walletAssetLoader.loadWalletAssets('solana', address);
+      console.log('[MyAssets] Loading wallet assets for:', activeAddress);
+      const result = await walletAssetLoader.loadWalletAssets('solana', activeAddress);
       console.log('[MyAssets] Assets loaded:', result.assets.length, '| Total value:', result.totalValue, '| Error:', result.error || 'none');
+
+      if (result.error) {
+        setAssetsError(result.error);
+      }
+
       setWalletAssets(result.assets);
       setTotalBalance(result.totalValue);
 
       if (result.totalValue > 0) {
-        await PortfolioHistoryService.recordSnapshot(address, result.totalValue);
+        await PortfolioHistoryService.recordSnapshot(activeAddress, result.totalValue);
       }
-    } catch (error) {
-      console.error('Error loading wallet assets:', error);
-      setWalletAssets([]);
-      setTotalBalance(0);
+    } catch (err: any) {
+      console.error('[MyAssets] Error loading wallet assets:', err);
+      setAssetsError(err?.message || 'Failed to load wallet assets');
     } finally {
       setAssetsLoading(false);
     }
-  }, [selectedAccount, connectedWallet]);
+  }, [activeAddress]);
 
   const loadWatchlist = useCallback(async () => {
     try {
@@ -139,24 +145,23 @@ export default function WalletHome() {
   }, []);
 
   const loadNFTs = useCallback(async () => {
-    const address = connectedWallet?.address ?? selectedAccount?.address;
-    if (!address) {
+    if (!activeAddress) {
       setNfts([]);
       return;
     }
     setNftsLoading(true);
     try {
-      console.log('[NFT] Fetching NFTs for:', address);
-      const result = await NFTService.getUserNFTs(address);
-      console.log('[NFT] NFT fetch result:', result.length, 'items');
+      console.log('[NFT] Fetching NFTs for:', activeAddress);
+      const result = await NFTService.getUserNFTs(activeAddress);
+      console.log('[NFT] NFT result:', result.length, 'items');
       setNfts(result);
     } catch (err) {
-      console.error('[NFT] Balance fetch error:', err);
+      console.error('[NFT] Fetch error:', err);
       setNfts([]);
     } finally {
       setNftsLoading(false);
     }
-  }, [selectedAccount, connectedWallet]);
+  }, [activeAddress]);
 
   useEffect(() => {
     loadMarketData();
@@ -617,17 +622,23 @@ export default function WalletHome() {
                     <View style={styles.emptyState}>
                       <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
                       <Text style={styles.emptyText}>
-                        {activeAddress ? 'No tokens found' : 'No wallet connected'}
+                        {!activeAddress
+                          ? 'No wallet connected'
+                          : assetsError
+                            ? 'Failed to load assets'
+                            : 'No tokens found'}
                       </Text>
                       <Text style={styles.emptySubtext}>
-                        {activeAddress
-                          ? 'Tokens you own will appear here once detected on-chain'
-                          : 'Import or create a wallet to get started'}
+                        {!activeAddress
+                          ? 'Import or create a wallet to get started'
+                          : assetsError
+                            ? assetsError
+                            : 'Tokens you own will appear here once detected on-chain'}
                       </Text>
                       {activeAddress && (
                         <TouchableOpacity style={styles.retryButton} onPress={loadWalletAssets} activeOpacity={0.7}>
                           <RefreshCw size={16} color={colors.white} />
-                          <Text style={styles.retryButtonText}>Refresh</Text>
+                          <Text style={styles.retryButtonText}>Retry</Text>
                         </TouchableOpacity>
                       )}
                     </View>

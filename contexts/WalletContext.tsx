@@ -47,6 +47,8 @@ interface WalletContextType {
   totalBalance: number;
   isLoading: boolean;
   isInitialized: boolean;
+  portfolioError: string | null;
+  isPortfolioLoading: boolean;
 
   // Actions
   refreshWallet: () => Promise<void>;
@@ -95,6 +97,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [totalBalance, setTotalBalance] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
 
   // Connected wallet takes priority as the active address
   const activeAddress = connectedWallet?.address ?? selectedAccount?.address ?? null;
@@ -268,12 +272,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (activeAddress) {
       console.log('[WalletContext] Active wallet:', activeAddress);
-      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch((err) => {
+      setIsPortfolioLoading(true);
+      setPortfolioError(null);
+      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then((result) => {
+        if (result.error) {
+          console.error('[WalletContext] Portfolio error:', result.error);
+          setPortfolioError(result.error);
+        }
+        applyPortfolioResult(result);
+      }).catch((err) => {
         console.error('[WalletContext] Portfolio load error:', err);
+        setPortfolioError(err?.message || 'Failed to load assets');
+      }).finally(() => {
+        setIsPortfolioLoading(false);
       });
     } else {
       setTokens([]);
       setTotalBalance(0);
+      setPortfolioError(null);
     }
   }, [activeAddress, applyPortfolioResult]);
 
@@ -325,6 +341,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         totalBalance,
         isLoading,
         isInitialized,
+        portfolioError,
+        isPortfolioLoading,
         refreshWallet,
         refreshPortfolio,
         loadAccounts,

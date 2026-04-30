@@ -1,6 +1,5 @@
-import { SolanaWalletService, EnrichedToken } from './solana/walletService';
+import { SolanaWalletService } from './solana/walletService';
 import { jupiterTokenListService } from './jupiter/tokenListService';
-import { dexScreenerService } from './dexscreener/tokenDiscoveryService';
 
 export interface WalletAsset {
   id: string;
@@ -36,13 +35,18 @@ class WalletAssetLoaderService {
   }
 
   async loadSolanaWalletAssets(address: string): Promise<WalletAssetsResponse> {
+    if (!address) {
+      return { assets: [], totalValue: 0, nativeBalance: 0, nativeValue: 0, loading: false };
+    }
+
+    console.log('[AssetLoader] Loading assets for wallet:', address);
+
     try {
-      console.log('[AssetLoader] Loading assets for wallet:', address);
       const portfolio = await this.solanaService.getWalletPortfolio(address);
       console.log('[AssetLoader] Portfolio loaded — SOL:', portfolio.solBalance, '| Tokens:', portfolio.tokens.length, '| Total USD:', portfolio.totalValue);
 
       const nativeAsset: WalletAsset = {
-        id: 'solana',
+        id: 'solana-native',
         blockchain: 'solana',
         address: 'So11111111111111111111111111111111111111112',
         name: 'Solana',
@@ -58,52 +62,35 @@ class WalletAssetLoaderService {
         verified: true,
       };
 
-      const tokenAssets = await Promise.all(
-        portfolio.tokens.map(async (token) => {
-          let logoUrl = token.metadata.logoURI || undefined;
+      const tokenAssets: WalletAsset[] = portfolio.tokens.map((token) => {
+        let logoUrl = token.metadata.logoURI || undefined;
+        if (!logoUrl && token.metadata.verified) {
+          logoUrl = `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`;
+        }
 
-          if (!logoUrl && token.metadata.verified) {
-            logoUrl = `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`;
-          }
-
-          if (!logoUrl) {
-            try {
-              const jupiterToken = await jupiterTokenListService.getTokenByAddress(token.mint);
-              logoUrl = jupiterToken?.logoURI;
-            } catch {}
-          }
-
-          if (!logoUrl) {
-            try {
-              const dexPairs = await dexScreenerService.getTokenByAddress(token.mint);
-              if (dexPairs.length > 0) {
-                logoUrl = dexPairs[0].info?.imageUrl;
-              }
-            } catch {}
-          }
-
-          return {
-            id: token.mint,
-            blockchain: 'solana',
-            address: token.mint,
-            name: token.metadata.name,
-            symbol: token.metadata.symbol,
-            decimals: token.decimals,
-            balance: token.balance.toString(),
-            uiBalance: token.uiAmount,
-            price: token.price?.price || 0,
-            value: token.totalValue,
-            priceChange24h: token.price?.priceChange24h || 0,
-            logoUrl,
-            isNative: false,
-            verified: token.metadata.verified,
-          } as WalletAsset;
-        })
-      );
+        return {
+          id: token.mint,
+          blockchain: 'solana',
+          address: token.mint,
+          name: token.metadata.name,
+          symbol: token.metadata.symbol,
+          decimals: token.decimals,
+          balance: token.balance.toString(),
+          uiBalance: token.uiAmount,
+          price: token.price?.price || 0,
+          value: token.totalValue,
+          priceChange24h: token.price?.priceChange24h || 0,
+          logoUrl,
+          isNative: false,
+          verified: token.metadata.verified,
+        };
+      });
 
       const allAssets = [nativeAsset, ...tokenAssets].filter((asset) => asset.uiBalance > 0);
-
       allAssets.sort((a, b) => b.value - a.value);
+
+      // Resolve missing logos in background (don't block display)
+      this.resolveLogosInBackground(tokenAssets);
 
       return {
         assets: allAssets,
@@ -112,16 +99,28 @@ class WalletAssetLoaderService {
         nativeValue: portfolio.solValue,
         loading: false,
       };
-    } catch (error) {
-      console.error('Error loading Solana wallet assets:', error);
+    } catch (error: any) {
+      console.error('[AssetLoader] Error loading Solana wallet assets:', error);
       return {
         assets: [],
         totalValue: 0,
         nativeBalance: 0,
         nativeValue: 0,
         loading: false,
-        error: error instanceof Error ? error.message : 'Failed to load wallet assets',
+        error: error?.message || 'Failed to load wallet assets from RPC',
       };
+    }
+  }
+
+  private async resolveLogosInBackground(assets: WalletAsset[]) {
+    for (const asset of assets) {
+      if (asset.logoUrl) continue;
+      try {
+        const jupToken = await jupiterTokenListService.getTokenByAddress(asset.address);
+        if (jupToken?.logoURI) {
+          asset.logoUrl = jupToken.logoURI;
+        }
+      } catch {}
     }
   }
 
@@ -129,7 +128,6 @@ class WalletAssetLoaderService {
     if (blockchain === 'solana') {
       return this.loadSolanaWalletAssets(address);
     }
-
     return {
       assets: [],
       totalValue: 0,
@@ -142,9 +140,7 @@ class WalletAssetLoaderService {
 
   async refreshWalletAssets(blockchain: string, address: string): Promise<WalletAssetsResponse> {
     this.solanaService.refreshCache();
-    dexScreenerService.clearCache();
     jupiterTokenListService.clearCache();
-
     return this.loadWalletAssets(blockchain, address);
   }
 }

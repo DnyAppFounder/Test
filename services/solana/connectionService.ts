@@ -1,18 +1,34 @@
-import { Connection, Cluster, clusterApiUrl } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
+
+const RPC_ENDPOINTS = [
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-mainnet.g.alchemy.com/v2/demo',
+];
+
+function getRpcUrl(): string {
+  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SOLANA_RPC_URL) {
+    return process.env.EXPO_PUBLIC_SOLANA_RPC_URL;
+  }
+  return RPC_ENDPOINTS[0];
+}
 
 export class SolanaConnectionService {
   private static instance: SolanaConnectionService;
   private connection: Connection;
-  private cluster: Cluster;
+  private rpcUrl: string;
 
-  private constructor(cluster: Cluster = 'mainnet-beta') {
-    this.cluster = cluster;
-    this.connection = new Connection(clusterApiUrl(cluster), 'confirmed');
+  private constructor() {
+    this.rpcUrl = getRpcUrl();
+    this.connection = new Connection(this.rpcUrl, {
+      commitment: 'confirmed',
+      confirmTransactionInitialTimeout: 30000,
+    });
+    console.log('[ConnectionService] Using RPC:', this.rpcUrl);
   }
 
-  static getInstance(cluster: Cluster = 'mainnet-beta'): SolanaConnectionService {
+  static getInstance(): SolanaConnectionService {
     if (!SolanaConnectionService.instance) {
-      SolanaConnectionService.instance = new SolanaConnectionService(cluster);
+      SolanaConnectionService.instance = new SolanaConnectionService();
     }
     return SolanaConnectionService.instance;
   }
@@ -21,17 +37,8 @@ export class SolanaConnectionService {
     return this.connection;
   }
 
-  getCluster(): Cluster {
-    return this.cluster;
-  }
-
-  switchCluster(cluster: Cluster) {
-    this.cluster = cluster;
-    this.connection = new Connection(clusterApiUrl(cluster), 'confirmed');
-  }
-
-  async getBlockHeight(): Promise<number> {
-    return await this.connection.getBlockHeight();
+  getRpcUrl(): string {
+    return this.rpcUrl;
   }
 
   async isHealthy(): Promise<boolean> {
