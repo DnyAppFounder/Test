@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
@@ -189,28 +190,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      console.log('[WalletContext] Refreshing portfolio (cache cleared) for:', address);
       const result = await walletAssetLoader.refreshWalletAssets('solana', address);
-
-      const tokensFromChain: Token[] = result.assets.map((asset) => ({
-        id: asset.id,
-        blockchain_id: 'solana',
-        contract_address: asset.address,
-        symbol: asset.symbol,
-        name: asset.name,
-        decimals: asset.decimals,
-        logo_url: asset.logoUrl ?? null,
-        is_verified: asset.verified,
-        coingecko_id: null,
-        balance: asset.balance,
-        balanceUSD: asset.value,
-      }));
-
-      setTokens(tokensFromChain);
-      setTotalBalance(result.totalValue);
+      applyPortfolioResult(result);
     } catch (error) {
-      console.error('Error refreshing portfolio:', error);
+      console.error('[WalletContext] Error refreshing portfolio:', error);
     }
-  }, [selectedAccount, connectedWallet]);
+  }, [selectedAccount, connectedWallet, applyPortfolioResult]);
 
   const forceReloadAccounts = useCallback(async () => {
     setIsLoading(true);
@@ -260,33 +246,67 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     return () => { mounted = false; };
   }, [loadAccounts, restoreExternalWallet]);
 
+  const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number }) => {
+    const tokensFromChain: Token[] = result.assets.map((asset) => ({
+      id: asset.id,
+      blockchain_id: 'solana',
+      contract_address: asset.address,
+      symbol: asset.symbol,
+      name: asset.name,
+      decimals: asset.decimals,
+      logo_url: asset.logoUrl ?? null,
+      is_verified: asset.verified,
+      coingecko_id: null,
+      balance: asset.balance,
+      balanceUSD: asset.value,
+    }));
+    setTokens(tokensFromChain);
+    setTotalBalance(result.totalValue);
+  }, []);
+
   // Load portfolio whenever the active address changes
   useEffect(() => {
     if (activeAddress) {
-      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then((result) => {
-        const tokensFromChain: Token[] = result.assets.map((asset) => ({
-          id: asset.id,
-          blockchain_id: 'solana',
-          contract_address: asset.address,
-          symbol: asset.symbol,
-          name: asset.name,
-          decimals: asset.decimals,
-          logo_url: asset.logoUrl ?? null,
-          is_verified: asset.verified,
-          coingecko_id: null,
-          balance: asset.balance,
-          balanceUSD: asset.value,
-        }));
-        setTokens(tokensFromChain);
-        setTotalBalance(result.totalValue);
-      }).catch((err) => {
+      console.log('[WalletContext] Active wallet:', activeAddress);
+      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch((err) => {
         console.error('[WalletContext] Portfolio load error:', err);
       });
     } else {
       setTokens([]);
       setTotalBalance(0);
     }
-  }, [activeAddress]);
+  }, [activeAddress, applyPortfolioResult]);
+
+  // Auto-refresh every 45 seconds while a wallet is connected
+  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    }
+    if (activeAddress) {
+      refreshIntervalRef.current = setInterval(() => {
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+      }, 45000);
+    }
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [activeAddress, applyPortfolioResult]);
+
+  // Refresh when app returns to foreground
+  useEffect(() => {
+    const handleAppState = (nextState: AppStateStatus) => {
+      if (nextState === 'active' && activeAddress) {
+        console.log('[WalletContext] App foregrounded, refreshing assets');
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+      }
+    };
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [activeAddress, applyPortfolioResult]);
 
   return (
     <WalletContext.Provider
