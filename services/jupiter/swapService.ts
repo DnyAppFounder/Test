@@ -56,15 +56,32 @@ class JupiterSwapService {
       slippageBps: slippageBps.toString(),
     });
 
-    const response = await fetch(`${JUPITER_QUOTE_API}?${params.toString()}`);
+    const url = `${JUPITER_QUOTE_API}?${params.toString()}`;
+    console.log('[Jupiter] Quote request:', { inputMint, outputMint, amount, slippageBps, url });
+
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (fetchErr: any) {
+      const msg = fetchErr?.message || 'Network request failed';
+      if (msg.includes('Load failed') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        throw new Error('Jupiter API unreachable. Check your internet connection or try again.');
+      }
+      throw new Error(`Network error: ${msg}`);
+    }
 
     if (!response.ok) {
-      if (response.status === 400) return null; // No route
+      if (response.status === 400) {
+        const body = await response.text().catch(() => '');
+        console.log('[Jupiter] No route (400):', body);
+        return null;
+      }
       throw new Error(`Jupiter quote failed (${response.status}): ${response.statusText}`);
     }
 
     const data = await response.json();
-    if (data.error) return null; // No route available
+    console.log('[Jupiter] Quote response:', { outAmount: data.outAmount, error: data.error });
+    if (data.error) return null;
     return data as JupiterQuote;
   }
 

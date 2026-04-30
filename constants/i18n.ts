@@ -130,7 +130,7 @@ type TranslationKeys = {
 const en: TranslationKeys = {
   tabs: {
     wallet: 'Wallet',
-    community: 'Community',
+    community: 'Dawen Pulse',
     gaming: 'Gaming',
     dapps: 'DawenCity',
     settings: 'Settings',
@@ -244,7 +244,7 @@ const en: TranslationKeys = {
 const fr: TranslationKeys = {
   tabs: {
     wallet: 'Portefeuille',
-    community: 'Communaute',
+    community: 'Dawen Pulse',
     gaming: 'Jeux',
     dapps: 'DawenCity',
     settings: 'Parametres',

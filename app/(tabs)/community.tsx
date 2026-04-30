@@ -26,6 +26,10 @@ import {
   Check,
   CircleAlert,
   Wallet,
+  Bell,
+  Heart,
+  UserPlus,
+  Mail,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
@@ -34,12 +38,14 @@ import { SocialService, Post, PostComment, PROMOTE_TIERS, UserProfile } from '@/
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
 
+type TopTab = 'feed' | 'profile' | 'messages' | 'notifications';
 type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 
 export default function CommunityScreen() {
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { activeAddress } = useWallet();
   const { t } = useLanguage();
+  const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,7 +67,7 @@ export default function CommunityScreen() {
   const [newCommentContent, setNewCommentContent] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
 
-  const walletAddress = selectedAccount?.address || 'anonymous';
+  const walletAddress = activeAddress || 'anonymous';
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -194,36 +200,136 @@ export default function CommunityScreen() {
   const selectedPost = posts.find((p) => p.id === selectedPostId);
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
-  return (
-    <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.neonBackground}>
-          <View style={styles.purpleGlow} />
-          <View style={styles.blueGlow} />
-          <View style={styles.pinkGlow} />
-        </View>
+  const renderTopTabs = () => (
+    <View style={styles.topTabs}>
+      {([
+        { key: 'feed', label: 'Feed' },
+        { key: 'profile', label: 'Profile' },
+        { key: 'messages', label: 'Messages' },
+        { key: 'notifications', label: 'Notifications' },
+      ] as { key: TopTab; label: string }[]).map(tab => (
+        <TouchableOpacity
+          key={tab.key}
+          style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
+          onPress={() => setActiveTab(tab.key)}
+        >
+          <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
+            {tab.label}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 
-        <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.headerTitle}>{t.community.feed}</Text>
-            <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
-          </View>
-          <TouchableOpacity style={styles.createButton} onPress={() => setShowCreateModal(true)}>
-            <Send size={18} color={colors.white} strokeWidth={2.5} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {loading ? (
+  const renderFeedTab = () => {
+    if (loading) {
+      return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      ) : (
-        <FlatList
-          data={posts}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item: post }) => (
+      );
+    }
+
+    return (
+      <FlatList
+        data={posts}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item: post }) => (
+          <PostCard
+            post={post}
+            currentProfile={profile}
+            onLike={handleLike}
+            onComment={openCommentsModal}
+            onRepost={handleRepost}
+            onPromote={openPromoteModal}
+          />
+        )}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIconWrapper}>
+              <MessageCircle size={48} color={colors.primary} strokeWidth={1.5} />
+            </View>
+            <Text style={styles.emptyTitle}>No posts yet</Text>
+            <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
+            <TouchableOpacity style={styles.emptyButton} onPress={() => setShowCreateModal(true)}>
+              <Text style={styles.emptyButtonText}>Create First Post</Text>
+            </TouchableOpacity>
+          </View>
+        }
+        contentContainerStyle={posts.length === 0 ? styles.emptyListContainer : styles.feedContainer}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      />
+    );
+  };
+
+  const renderProfileTab = () => {
+    if (!profile) {
+      return (
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrapper}>
+            <User size={48} color={colors.primary} strokeWidth={1.5} />
+          </View>
+          <Text style={styles.emptyTitle}>No Profile</Text>
+          <Text style={styles.emptySubtitle}>Connect a wallet to create your profile</Text>
+        </View>
+      );
+    }
+
+    const userPosts = posts.filter(p => p.author?.id === profile.id);
+
+    return (
+      <ScrollView
+        style={styles.profileContainer}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      >
+        <View style={styles.profileCard}>
+          <View style={styles.profileAvatarContainer}>
+            {profile.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.profileAvatar} />
+            ) : (
+              <View style={styles.profileAvatarPlaceholder}>
+                <User size={32} color={colors.textMuted} />
+              </View>
+            )}
+          </View>
+          <Text style={styles.profileUsername}>
+            {profile.username || walletAddress.slice(0, 8) + '...'}
+          </Text>
+          <Text style={styles.profileWallet}>
+            {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+          </Text>
+          {profile.bio ? (
+            <Text style={styles.profileBio}>{profile.bio}</Text>
+          ) : null}
+          <View style={styles.profileStats}>
+            <View style={styles.profileStatItem}>
+              <Text style={styles.profileStatValue}>{profile.followers_count || 0}</Text>
+              <Text style={styles.profileStatLabel}>Followers</Text>
+            </View>
+            <View style={styles.profileStatDivider} />
+            <View style={styles.profileStatItem}>
+              <Text style={styles.profileStatValue}>{profile.following_count || 0}</Text>
+              <Text style={styles.profileStatLabel}>Following</Text>
+            </View>
+            <View style={styles.profileStatDivider} />
+            <View style={styles.profileStatItem}>
+              <Text style={styles.profileStatValue}>{userPosts.length}</Text>
+              <Text style={styles.profileStatLabel}>Posts</Text>
+            </View>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>Your Posts</Text>
+        {userPosts.length === 0 ? (
+          <View style={styles.emptySection}>
+            <Text style={styles.emptySectionText}>No posts yet</Text>
+          </View>
+        ) : (
+          userPosts.map(post => (
             <PostCard
+              key={post.id}
               post={post}
               currentProfile={profile}
               onLike={handleLike}
@@ -231,25 +337,62 @@ export default function CommunityScreen() {
               onRepost={handleRepost}
               onPromote={openPromoteModal}
             />
-          )}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <View style={styles.emptyIconWrapper}>
-                <MessageCircle size={48} color={colors.primary} strokeWidth={1.5} />
-              </View>
-              <Text style={styles.emptyTitle}>No posts yet</Text>
-              <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
-              <TouchableOpacity style={styles.emptyButton} onPress={() => setShowCreateModal(true)}>
-                <Text style={styles.emptyButtonText}>Create First Post</Text>
-              </TouchableOpacity>
-            </View>
-          }
-          contentContainerStyle={posts.length === 0 ? styles.emptyListContainer : styles.feedContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-        />
-      )}
+          ))
+        )}
+        <View style={styles.bottomSpacer} />
+      </ScrollView>
+    );
+  };
 
+  const renderMessagesTab = () => (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconWrapper}>
+        <Mail size={48} color={colors.primary} strokeWidth={1.5} />
+      </View>
+      <Text style={styles.emptyTitle}>No messages yet</Text>
+      <Text style={styles.emptySubtitle}>Start a conversation with other traders in the community</Text>
+    </View>
+  );
+
+  const renderNotificationsTab = () => (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconWrapper}>
+        <Bell size={48} color={colors.primary} strokeWidth={1.5} />
+      </View>
+      <Text style={styles.emptyTitle}>No notifications yet</Text>
+      <Text style={styles.emptySubtitle}>Likes, comments, and follows will appear here</Text>
+    </View>
+  );
+
+  const renderActiveTab = () => {
+    switch (activeTab) {
+      case 'feed': return renderFeedTab();
+      case 'profile': return renderProfileTab();
+      case 'messages': return renderMessagesTab();
+      case 'notifications': return renderNotificationsTab();
+    }
+  };
+
+  return (
+    <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.headerTitle}>Dawen Pulse</Text>
+            <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
+          </View>
+          {activeTab === 'feed' && (
+            <TouchableOpacity style={styles.createButton} onPress={() => setShowCreateModal(true)}>
+              <Send size={18} color={colors.white} strokeWidth={2.5} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {renderTopTabs()}
+      {renderActiveTab()}
+
+      {/* Create Post Modal */}
       <Modal visible={showCreateModal} animationType="slide" transparent>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -326,6 +469,7 @@ export default function CommunityScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Comments Modal */}
       <Modal visible={showCommentsModal} animationType="slide" transparent>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -433,6 +577,7 @@ export default function CommunityScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Promote Modal */}
       <Modal visible={showPromoteModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -552,57 +697,16 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingTop: 56,
-    paddingBottom: spacing.xxl,
+    paddingBottom: spacing.lg,
     paddingHorizontal: spacing.xxl,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  neonBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    overflow: 'hidden',
-  },
-  purpleGlow: {
-    position: 'absolute',
-    top: -100,
-    left: -50,
-    width: 300,
-    height: 300,
-    backgroundColor: 'rgba(147, 51, 234, 0.15)',
-    borderRadius: 150,
-    transform: [{ scale: 1.5 }],
-  },
-  blueGlow: {
-    position: 'absolute',
-    top: -80,
-    right: -80,
-    width: 250,
-    height: 250,
-    backgroundColor: 'rgba(59, 130, 246, 0.12)',
-    borderRadius: 125,
-    transform: [{ scale: 1.3 }],
-  },
-  pinkGlow: {
-    position: 'absolute',
-    top: 20,
-    left: '50%',
-    width: 200,
-    height: 200,
-    backgroundColor: 'rgba(236, 72, 153, 0.08)',
-    borderRadius: 100,
-    transform: [{ translateX: -100 }],
   },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    zIndex: 1,
   },
   headerTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '900',
     color: colors.textPrimary,
     letterSpacing: -0.5,
@@ -614,25 +718,42 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   createButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     ...elevation.lg,
   },
-  content: {
+  topTabs: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  topTab: {
     flex: 1,
-    paddingTop: spacing.md,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+  },
+  topTabActive: {
+    backgroundColor: colors.primary,
+  },
+  topTabText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  topTabTextActive: {
+    color: colors.white,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  loadingIndicator: {
-    marginTop: 48,
   },
   feedContainer: {
     paddingTop: spacing.md,
@@ -643,10 +764,12 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxxl,
   },
   emptyState: {
+    flex: 1,
     alignItems: 'center',
-    paddingTop: 120,
+    justifyContent: 'center',
+    paddingTop: 80,
     paddingHorizontal: spacing.xxl,
-    gap: spacing.lg,
+    gap: spacing.md,
   },
   emptyIconWrapper: {
     width: 96,
@@ -655,10 +778,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   emptyTitle: {
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.xl,
     fontWeight: '800',
     color: colors.textPrimary,
     textAlign: 'center',
@@ -683,9 +806,97 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.white,
   },
-  bottomSpacer: {
-    height: 32,
+  // Profile tab
+  profileContainer: {
+    flex: 1,
+    paddingHorizontal: spacing.lg,
   },
+  profileCard: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xl,
+    padding: spacing.xxl,
+    alignItems: 'center',
+    marginTop: spacing.md,
+    ...elevation.md,
+  },
+  profileAvatarContainer: {
+    marginBottom: spacing.lg,
+  },
+  profileAvatar: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  profileAvatarPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileUsername: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+  },
+  profileWallet: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+  },
+  profileBio: {
+    fontSize: fontSize.md,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: spacing.lg,
+  },
+  profileStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  profileStatItem: {
+    alignItems: 'center',
+  },
+  profileStatValue: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  profileStatLabel: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  profileStatDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: colors.surfaceBorder,
+  },
+  sectionTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  emptySection: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.xxl,
+    alignItems: 'center',
+  },
+  emptySectionText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+  },
+  bottomSpacer: {
+    height: 100,
+  },
+  // Modals
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.75)',
