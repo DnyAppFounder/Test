@@ -56,7 +56,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 
 export default function WalletHome() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet } = useWallet();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -247,13 +247,13 @@ export default function WalletHome() {
               </TouchableOpacity>
             </View>
             <Text style={styles.balance}>{formatBalance(totalBalance)}</Text>
-            {selectedAccount && (
+            {activeWallet && (
               <View style={styles.accountBadge}>
-                <View style={[styles.accountDot, connectedWallet ? styles.connectedDot : undefined]} />
+                <View style={[styles.accountDot, activeWallet.type === 'connected' ? styles.connectedDot : undefined]} />
                 <Text style={styles.accountText}>
-                  {connectedWallet
-                    ? `${connectedWallet.name}: ${connectedWallet.address.slice(0, 4)}...${connectedWallet.address.slice(-4)}`
-                    : `${selectedAccount.blockchain.toUpperCase()}: ${selectedAccount.address.slice(0, 4)}...${selectedAccount.address.slice(-4)}`
+                  {activeWallet.type === 'connected'
+                    ? `${activeWallet.name}: ${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
+                    : `${(activeWallet.blockchain ?? 'SOL').toUpperCase()}: ${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
                   }
                 </Text>
               </View>
