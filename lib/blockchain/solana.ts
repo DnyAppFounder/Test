@@ -56,9 +56,9 @@ export class SolanaBlockchain {
 
   async getBalance(address: string): Promise<number> {
     try {
-      const publicKey = new PublicKey(address);
-      const balance = await this.connection.getBalance(publicKey);
-      return balance / LAMPORTS_PER_SOL;
+      const result = await SolanaConnectionService.getInstance().rpcCall('getBalance', [address, { commitment: 'confirmed' }]);
+      const lamports = typeof result === 'object' ? result.value : result;
+      return lamports / LAMPORTS_PER_SOL;
     } catch (error) {
       console.error('Error fetching Solana balance:', error);
       throw new Error('Failed to fetch balance');

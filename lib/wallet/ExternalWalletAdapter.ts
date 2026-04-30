@@ -208,8 +208,8 @@ export class ExternalWalletAdapter {
 
   static async getBalance(address: string): Promise<number> {
     try {
-      const pubkey = new PublicKey(address);
-      const lamports = await this.getConnection().getBalance(pubkey);
+      const result = await SolanaConnectionService.getInstance().rpcCall('getBalance', [address, { commitment: 'confirmed' }]);
+      const lamports = typeof result === 'object' ? result.value : result;
       return lamports / LAMPORTS_PER_SOL;
     } catch {
       return 0;
