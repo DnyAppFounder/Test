@@ -58,13 +58,39 @@ export default function SettingsScreen() {
     loadProfile();
   }, [loadProfile]);
 
+  const [isUploading, setIsUploading] = useState(false);
+
   const handleSaveProfile = async () => {
     if (!profile) return;
-    await SocialService.updateProfile(profile.id, {
-      username: editUsername.trim() || undefined,
-      bio: editBio.trim(),
-      avatar_url: editAvatarUrl.trim() || undefined,
-    });
+
+    let avatarUrl = editAvatarUrl.trim() || undefined;
+
+    // If the avatar URL is a local file/blob URI, upload it to Supabase Storage
+    if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
+      setIsUploading(true);
+      try {
+        const publicUrl = await SocialService.uploadAvatar(
+          profile.wallet_address,
+          avatarUrl,
+          profile.id
+        );
+        if (publicUrl) {
+          avatarUrl = publicUrl;
+        }
+      } catch (err) {
+        console.error('[Settings] Avatar upload failed:', err);
+      } finally {
+        setIsUploading(false);
+      }
+    } else {
+      // It's already a URL, just save it directly
+      await SocialService.updateProfile(profile.id, {
+        username: editUsername.trim() || undefined,
+        bio: editBio.trim(),
+        avatar_url: avatarUrl,
+      });
+    }
+
     await loadProfile();
     setActiveModal(null);
   };
@@ -348,8 +374,8 @@ export default function SettingsScreen() {
               maxLength={160}
             />
             <Text style={styles.charCount}>{editBio.length}/160</Text>
-            <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile}>
-              <Text style={styles.saveButtonText}>{t.common.save}</Text>
+            <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile} disabled={isUploading}>
+              <Text style={styles.saveButtonText}>{isUploading ? 'Uploading...' : t.common.save}</Text>
             </TouchableOpacity>
           </View>
         </View>

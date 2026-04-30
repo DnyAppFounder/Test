@@ -29,7 +29,7 @@ import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress } = useWallet();
 
   const [token, setToken] = useState<LiveToken | null>(null);
   const [loading, setLoading] = useState(true);
@@ -237,7 +237,29 @@ export default function TokenDetailScreen() {
             </View>
           </View>
 
-          <TradingViewChart symbol={token.symbol} currentPrice={livePrice || token.price} />
+          {/* Live Price */}
+          <View style={styles.priceSection}>
+            <Text style={styles.currentPrice}>
+              {liveMarketService.formatPrice(livePrice || token.price)}
+            </Text>
+            <View style={[styles.priceChangeBadge, changePositive ? styles.changeBadgeUp : styles.changeBadgeDown]}>
+              {changePositive
+                ? <TrendingUp size={16} color={colors.success} strokeWidth={2.5} />
+                : <TrendingDown size={16} color={colors.error} strokeWidth={2.5} />
+              }
+              <Text style={[styles.priceChangeText, changePositive ? styles.changeTextUp : styles.changeTextDown]}>
+                {liveMarketService.formatChange(token.priceChange24h)}
+              </Text>
+            </View>
+          </View>
+
+          {/* Real Dexscreener Chart */}
+          <TradingViewChart
+            symbol={token.symbol}
+            currentPrice={livePrice || token.price}
+            pairAddress={token.pairAddress}
+            tokenMint={token.address}
+          />
 
           <TradingInterface
             tokenMint={token.address}
@@ -254,7 +276,7 @@ export default function TokenDetailScreen() {
           <View style={styles.discussionSection}>
             <TokenDiscussionComponent
               tokenAddress={token.address}
-              userWallet={selectedAccount?.address}
+              userWallet={activeAddress || undefined}
             />
           </View>
 

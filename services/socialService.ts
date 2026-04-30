@@ -88,6 +88,52 @@ export class SocialService {
     return data;
   }
 
+  /**
+   * Upload a profile picture to Supabase Storage and update the profile.
+   * Returns the public URL that persists permanently.
+   */
+  static async uploadAvatar(
+    walletAddress: string,
+    imageUri: string,
+    profileId: string
+  ): Promise<string | null> {
+    try {
+      const fileName = `${walletAddress}/avatar_${Date.now()}.jpg`;
+
+      // Fetch the image data
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      // Upload to Supabase Storage
+      const { data, error } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, blob, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
+
+      if (error) {
+        console.error('[Avatar] Upload error:', error);
+        return null;
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(data.path);
+
+      const publicUrl = urlData.publicUrl;
+
+      // Update profile with the permanent URL
+      await this.updateProfile(profileId, { avatar_url: publicUrl });
+
+      return publicUrl;
+    } catch (error) {
+      console.error('[Avatar] Upload failed:', error);
+      return null;
+    }
+  }
+
   static async getFeed(currentUserId?: string, limit = 20, offset = 0): Promise<Post[]> {
     const now = new Date();
 

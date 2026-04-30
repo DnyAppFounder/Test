@@ -1,4 +1,4 @@
-const DEX_SCREENER_BASE = 'https://api.dexscreener.com/latest/dex';
+const DEX_SCREENER_BASE = 'https://api.dexscreener.com';
 const CACHE_DURATION = 2 * 60 * 1000;
 
 export interface DexPair {
@@ -82,15 +82,15 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/search?q=${encodeURIComponent(query)}`);
+      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/search?q=${encodeURIComponent(query)}`);
       if (!response.ok) return [];
 
       const data = await response.json();
-      const pairs = data.pairs || [];
+      const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
       this.setCache(cacheKey, pairs);
       return pairs;
     } catch (error) {
-      console.error('DexScreener search error:', error);
+      console.error('[DexScreener] Search error:', error);
       return [];
     }
   }
@@ -101,15 +101,15 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/tokens/${tokenAddress}`);
+      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/tokens/${tokenAddress}`);
       if (!response.ok) return [];
 
       const data = await response.json();
-      const pairs = data.pairs || [];
+      const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
       this.setCache(cacheKey, pairs);
       return pairs;
     } catch (error) {
-      console.error('DexScreener token error:', error);
+      console.error('[DexScreener] Token lookup error:', error);
       return [];
     }
   }
@@ -120,17 +120,29 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/pairs/solana/${pairAddress}`);
+      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/pairs/solana/${pairAddress}`);
       if (!response.ok) return null;
 
       const data = await response.json();
-      const pair = data.pair || null;
+      const pair = data.pair || data.pairs?.[0] || null;
       if (pair) this.setCache(cacheKey, pair);
       return pair;
     } catch (error) {
-      console.error('DexScreener pair error:', error);
+      console.error('[DexScreener] Pair lookup error:', error);
       return null;
     }
+  }
+
+  /**
+   * Get the best Solana pair for a token mint (highest liquidity).
+   * Used for embedding Dexscreener chart.
+   */
+  async getBestPairAddress(tokenMint: string): Promise<string | null> {
+    const pairs = await this.getTokenByAddress(tokenMint);
+    if (pairs.length === 0) return null;
+
+    const sorted = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+    return sorted[0].pairAddress;
   }
 
   async getTrendingSolanaTokens(): Promise<DexPair[]> {
@@ -139,50 +151,44 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      // DexScreener API format: /tokens/{chainId}
-      // Get top tokens by filtering for Solana pairs with high volume
-      const response = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-      if (!response.ok) {
-        // Fallback: get latest boosted tokens
-        return this.getBoostedSolanaTokens();
+      // token-boosts returns [{chainId, tokenAddress, amount, totalAmount, ...}]
+      // We need to resolve these to actual pair data
+      const response = await fetch(`${DEX_SCREENER_BASE}/token-boosts/top/v1`);
+      if (!response.ok) return this.getTopSolanaTokensBySearch();
+
+      const boosts: any[] = await response.json();
+      const solanaBoosts = (boosts || [])
+        .filter((item: any) => item.chainId === 'solana')
+        .slice(0, 20);
+
+      if (solanaBoosts.length === 0) return this.getTopSolanaTokensBySearch();
+
+      // Fetch actual pair data for each boosted token
+      const pairPromises = solanaBoosts.map((boost: any) =>
+        this.getTokenByAddress(boost.tokenAddress).catch(() => [] as DexPair[])
+      );
+      const pairResults = await Promise.all(pairPromises);
+
+      // Take the highest-liquidity pair for each token
+      const pairs: DexPair[] = [];
+      for (const tokenPairs of pairResults) {
+        if (tokenPairs.length > 0) {
+          const best = tokenPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+          pairs.push(best);
+        }
       }
 
-      const data = await response.json();
-
-      // Filter for Solana tokens and map to our format
-      const solanaPairs = (data || [])
-        .filter((item: any) => item.chainId === 'solana')
-        .slice(0, 50);
-
-      this.setCache(cacheKey, solanaPairs);
-      return solanaPairs;
+      this.setCache(cacheKey, pairs);
+      return pairs;
     } catch (error) {
-      console.error('DexScreener trending error:', error);
-      // Fallback to search for popular Solana tokens
+      console.error('[DexScreener] Trending error:', error);
       return this.getTopSolanaTokensBySearch();
     }
   }
 
   async getBoostedSolanaTokens(): Promise<DexPair[]> {
-    const cacheKey = 'boosted:solana';
-    const cached = this.getCache<DexPair[]>(cacheKey);
-    if (cached) return cached;
-
-    try {
-      const response = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-      if (!response.ok) return this.getTopSolanaTokensBySearch();
-
-      const data = await response.json();
-      const solanaPairs = (data || [])
-        .filter((item: any) => item.chainId === 'solana' && item.totalAmount > 0)
-        .slice(0, 50);
-
-      this.setCache(cacheKey, solanaPairs);
-      return solanaPairs;
-    } catch (error) {
-      console.error('DexScreener boosted error:', error);
-      return this.getTopSolanaTokensBySearch();
-    }
+    // Same logic as trending — both use token-boosts
+    return this.getTrendingSolanaTokens();
   }
 
   async getNewSolanaTokens(): Promise<DexPair[]> {
@@ -191,51 +197,53 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      // Get latest token profiles which includes new tokens
-      const response = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+      const response = await fetch(`${DEX_SCREENER_BASE}/token-profiles/latest/v1`);
       if (!response.ok) return this.getTopSolanaTokensBySearch();
 
-      const data = await response.json();
+      const data: any[] = await response.json();
       const addresses = (data || [])
         .filter((item: any) => item.chainId === 'solana')
-        .slice(0, 20)
+        .slice(0, 15)
         .map((item: any) => item.tokenAddress);
 
-      // Fetch pair data for these addresses
-      const pairPromises = addresses.map((addr: string) => this.getTokenByAddress(addr));
+      if (addresses.length === 0) return this.getTopSolanaTokensBySearch();
+
+      const pairPromises = addresses.map((addr: string) =>
+        this.getTokenByAddress(addr).catch(() => [] as DexPair[])
+      );
       const pairResults = await Promise.all(pairPromises);
 
-      const pairs = pairResults
-        .flat()
-        .filter((p) => p && p.pairCreatedAt)
-        .sort((a, b) => (b.pairCreatedAt || 0) - (a.pairCreatedAt || 0))
-        .slice(0, 50);
+      const pairs: DexPair[] = [];
+      for (const tokenPairs of pairResults) {
+        if (tokenPairs.length > 0) {
+          const best = tokenPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+          pairs.push(best);
+        }
+      }
+
+      pairs.sort((a, b) => (b.pairCreatedAt || 0) - (a.pairCreatedAt || 0));
 
       this.setCache(cacheKey, pairs);
       return pairs;
     } catch (error) {
-      console.error('DexScreener new tokens error:', error);
+      console.error('[DexScreener] New tokens error:', error);
       return this.getTopSolanaTokensBySearch();
     }
   }
 
   private async getTopSolanaTokensBySearch(): Promise<DexPair[]> {
-    // Fallback: search for common/popular tokens
-    const popularTokens = ['SOL', 'USDC', 'BONK', 'WIF', 'JUP', 'PYTH', 'JTO', 'ORCA'];
+    const popularTokens = ['SOL', 'BONK', 'WIF', 'JUP', 'PYTH', 'JTO', 'ORCA'];
     const results: DexPair[] = [];
 
     for (const token of popularTokens.slice(0, 5)) {
       try {
         const pairs = await this.searchTokens(token);
         if (pairs.length > 0) {
-          // Get the pair with highest liquidity for each token
-          const topPair = pairs
-            .filter((p) => p.chainId === 'solana')
-            .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+          const topPair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
           if (topPair) results.push(topPair);
         }
       } catch (err) {
-        console.error(`Error fetching ${token}:`, err);
+        console.error(`[DexScreener] Fallback fetch ${token}:`, err);
       }
     }
 

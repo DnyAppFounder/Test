@@ -156,12 +156,35 @@ export default function WalletHome() {
     return `$${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const filteredTokens = searchQuery
-    ? liveTokens.filter((token) =>
-        token.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        token.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        token.address.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+  const [searchResults, setSearchResults] = useState<LiveToken[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // API-backed search with debounce
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 2 || activeTab !== 'market') {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await liveMarketService.searchTokens(searchQuery);
+        setSearchResults(results);
+      } catch (err) {
+        console.error('[Search] API error:', err);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeTab]);
+
+  const filteredTokens = searchQuery && searchQuery.length >= 2
+    ? searchResults
     : liveTokens;
 
   const filteredAssets = walletAssets.filter((asset) => {
@@ -541,11 +564,23 @@ export default function WalletHome() {
                 <View style={styles.emptyState}>
                   <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
                   <Text style={styles.emptyText}>
-                    {selectedAccount ? 'No assets in wallet' : 'No wallet connected'}
+                    {activeAddress ? 'No tokens found in this wallet' : 'No wallet connected'}
                   </Text>
                   <Text style={styles.emptySubtext}>
-                    {selectedAccount ? 'Your tokens will appear here' : 'Import or create a wallet to get started'}
+                    {activeAddress
+                      ? 'Tokens you own will appear here once detected on-chain'
+                      : 'Import or create a wallet to get started'}
                   </Text>
+                  {activeAddress && (
+                    <TouchableOpacity
+                      style={styles.retryButton}
+                      onPress={loadWalletAssets}
+                      activeOpacity={0.7}
+                    >
+                      <RefreshCw size={16} color={colors.white} />
+                      <Text style={styles.retryButtonText}>Refresh</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               }
               contentContainerStyle={filteredAssets.length === 0 ? styles.emptyListContent : styles.listContent}
