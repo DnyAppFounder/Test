@@ -123,10 +123,17 @@ export default function SettingsScreen() {
   };
 
   const handleShowRecovery = async () => {
-    const walletManager = SecureWalletManager.getInstance();
-    const unlocked = await walletManager.unlockWallet();
-    if (unlocked) {
-      setRecoveryPhrase(walletManager.getMnemonic());
+    try {
+      const walletManager = SecureWalletManager.getInstance();
+      const mnemonic = await walletManager.getMnemonicUnlocked();
+      if (mnemonic && mnemonic.split(' ').length >= 12) {
+        setRecoveryPhrase(mnemonic);
+      } else {
+        setRecoveryPhrase('');
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to unlock wallet for recovery:', err);
+      setRecoveryPhrase('');
     }
     setActiveModal('recovery');
   };
@@ -487,10 +494,18 @@ export default function SettingsScreen() {
                 <Eye size={20} color={colors.white} />
                 <Text style={styles.revealButtonText}>Reveal Phrase</Text>
               </TouchableOpacity>
+            ) : !recoveryPhrase || recoveryPhrase.trim().split(' ').length < 12 ? (
+              <View style={styles.recoveryWarning}>
+                <Text style={styles.recoveryWarningText}>
+                  {connectedWallet
+                    ? 'Connected wallets do not have a recovery phrase stored in this app. Check your external wallet for recovery options.'
+                    : 'Unable to retrieve recovery phrase. Your wallet data may be corrupted.'}
+                </Text>
+              </View>
             ) : (
               <>
                 <View style={styles.phraseGrid}>
-                  {recoveryPhrase.split(' ').map((word, idx) => (
+                  {recoveryPhrase.trim().split(' ').map((word, idx) => (
                     <View key={idx} style={styles.phraseWord}>
                       <Text style={styles.phraseWordNum}>{idx + 1}</Text>
                       <Text style={styles.phraseWordText}>{word}</Text>

@@ -108,6 +108,12 @@ export default function SwapScreen() {
     setErrorMsg(null);
     try {
       const amountInSmallest = Math.floor(amount * Math.pow(10, fromToken.decimals));
+      if (amountInSmallest < 1) {
+        setQuote(null);
+        setErrorMsg('Amount too small.');
+        setStatus('error');
+        return;
+      }
       const q = await jupiterSwapService.getQuote(
         fromToken.address,
         toToken.address,
@@ -117,14 +123,27 @@ export default function SwapScreen() {
       if (q) {
         setQuote(q);
         setStatus('idle');
+        setErrorMsg(null);
       } else {
         setQuote(null);
-        setErrorMsg('No route found. Insufficient liquidity for this pair.');
+        const isDawen = toToken.address === DAWEN_MINT || fromToken.address === DAWEN_MINT;
+        if (isDawen) {
+          setErrorMsg('No Jupiter route available for DAWEN/DTEST yet. Try another token or check liquidity.');
+        } else {
+          setErrorMsg('No route available. Insufficient liquidity for this pair.');
+        }
         setStatus('error');
       }
     } catch (e: any) {
       setQuote(null);
-      setErrorMsg('Failed to fetch quote. Check your connection.');
+      const msg = e?.message || '';
+      if (msg.includes('400')) {
+        setErrorMsg('No route available. This token may lack liquidity on Jupiter.');
+      } else if (msg.includes('network') || msg.includes('fetch')) {
+        setErrorMsg('Network error. Check your connection and try again.');
+      } else {
+        setErrorMsg(`Jupiter API failed: ${msg || 'Unknown error'}`);
+      }
       setStatus('error');
     }
   };
@@ -254,7 +273,20 @@ export default function SwapScreen() {
 
   const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
   const isProcessing = status === 'signing' || status === 'sending';
-  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting';
+  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error';
+
+  const getSwapButtonText = (): string => {
+    if (!hasWallet) return 'Connect Wallet';
+    if (!fromToken || !toToken) return 'Select Token';
+    if (!fromAmount || parseFloat(fromAmount) <= 0) return 'Enter Amount';
+    if (status === 'quoting') return 'Getting Quote...';
+    if (status === 'signing') return 'Confirm in Wallet';
+    if (status === 'sending') return 'Transaction Pending...';
+    if (status === 'success') return 'Swap Successful';
+    if (status === 'error') return 'Swap Failed';
+    if (quote) return 'Confirm Swap';
+    return 'Enter Amount';
+  };
 
   // Mobile without wallet: show instruction
   if (isMobile && !hasWallet) {
@@ -289,6 +321,16 @@ export default function SwapScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={styles.content}>
+        {/* Wallet badge */}
+        {hasWallet && (
+          <View style={styles.walletBadge}>
+            <View style={styles.walletDot} />
+            <Text style={styles.walletBadgeText}>
+              {activeAddress!.slice(0, 4)}...{activeAddress!.slice(-4)}
+            </Text>
+          </View>
+        )}
+
         <View style={styles.swapCard}>
           <View style={styles.inputSection}>
             <View style={styles.inputLabelRow}>
@@ -429,22 +471,15 @@ export default function SwapScreen() {
         )}
 
         <TouchableOpacity
-          style={[styles.executeButton, !canSwap && styles.executeButtonDisabled]}
+          style={[styles.executeButton, !canSwap && styles.executeButtonDisabled, status === 'error' && styles.executeButtonError]}
           onPress={handleExecuteSwap}
           disabled={!canSwap}
           activeOpacity={0.8}
         >
-          {isProcessing
-            ? <ActivityIndicator size="small" color={colors.white} />
-            : <Text style={styles.executeButtonText}>
-                {!hasWallet
-                  ? 'Connect Wallet'
-                  : !quote
-                    ? 'Enter Amount'
-                    : status === 'success'
-                      ? 'Swapped!'
-                      : 'Confirm Swap'}
-              </Text>}
+          {(isProcessing || status === 'quoting') && (
+            <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />
+          )}
+          <Text style={styles.executeButtonText}>{getSwapButtonText()}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -733,17 +768,47 @@ const styles = StyleSheet.create({
     color: colors.primaryLight,
     fontWeight: '600',
   },
+  walletBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(20, 241, 149, 0.1)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+    alignSelf: 'flex-start',
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(20, 241, 149, 0.3)',
+  },
+  walletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+  },
+  walletBadgeText: {
+    fontSize: fontSize.xs,
+    color: colors.success,
+    fontWeight: '600',
+  },
   executeButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: colors.primary,
     paddingVertical: spacing.lg,
     borderRadius: borderRadius.lg,
-    alignItems: 'center',
     marginBottom: spacing.xxxl,
     ...elevation.md,
   },
   executeButtonDisabled: {
     backgroundColor: colors.surfaceLight,
     opacity: 0.5,
+  },
+  executeButtonError: {
+    backgroundColor: colors.error,
+    opacity: 0.8,
   },
   executeButtonText: {
     fontSize: fontSize.lg,

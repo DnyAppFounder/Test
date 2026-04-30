@@ -17,11 +17,13 @@ import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 
 export default function ReceiveScreen() {
   const router = useRouter();
-  const { selectedAccount, blockchains } = useWallet();
+  const { activeAddress, activeWallet } = useWallet();
   const [copied, setCopied] = useState(false);
 
-  const address = selectedAccount?.address || '';
-  const blockchain = blockchains.find(b => b.name?.toLowerCase() === selectedAccount?.blockchain) || { name: selectedAccount?.blockchain || 'Crypto' };
+  const address = activeAddress || '';
+  const blockchainName = activeWallet?.type === 'connected'
+    ? `${activeWallet.name} (Solana)`
+    : 'Solana';
 
   const copyAddress = async () => {
     await Clipboard.setStringAsync(address);
@@ -30,12 +32,31 @@ export default function ReceiveScreen() {
   };
 
   const shareAddress = async () => {
+    if (!address) return;
     try {
       await Share.share({
-        message: `My ${blockchain?.name || 'crypto'} address: ${address}`,
+        message: `My ${blockchainName} address: ${address}`,
       });
     } catch {}
   };
+
+  if (!address) {
+    return (
+      <LinearGradient colors={colors.gradient.primary} style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <ArrowLeft size={24} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Receive</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.noWalletContainer}>
+          <Text style={styles.noWalletText}>No wallet connected</Text>
+          <Text style={styles.noWalletSubtext}>Create or connect a wallet to receive tokens.</Text>
+        </View>
+      </LinearGradient>
+    );
+  }
 
   return (
     <LinearGradient colors={colors.gradient.primary} style={styles.container}>
@@ -48,19 +69,19 @@ export default function ReceiveScreen() {
       </View>
 
       <View style={styles.content}>
-        <Text style={styles.title}>My {blockchain?.name} Address</Text>
+        <Text style={styles.title}>My {blockchainName} Address</Text>
         <Text style={styles.subtitle}>Scan QR code or share the address below</Text>
 
         <View style={styles.qrContainer}>
           <View style={styles.qrWrapper}>
-            <QRCode value={address || 'placeholder'} size={220} backgroundColor="white" color={colors.background} />
+            <QRCode value={address} size={220} backgroundColor="white" color={colors.background} />
           </View>
         </View>
 
         <View style={styles.addressContainer}>
-          <Text style={styles.addressLabel}>Address</Text>
+          <Text style={styles.addressLabel}>Wallet Address</Text>
           <View style={styles.addressBox}>
-            <Text style={styles.address} numberOfLines={1} ellipsizeMode="middle">{address}</Text>
+            <Text style={styles.address} selectable>{address}</Text>
           </View>
         </View>
 
@@ -77,7 +98,7 @@ export default function ReceiveScreen() {
 
         <View style={styles.warningBox}>
           <Text style={styles.warningText}>
-            Only send {blockchain?.name} tokens to this address. Sending other tokens may result in permanent loss.
+            Only send Solana tokens to this address. Sending other tokens may result in permanent loss.
           </Text>
         </View>
       </View>
@@ -181,5 +202,22 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.warning,
     lineHeight: 18,
+  },
+  noWalletContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xxl,
+    gap: spacing.sm,
+  },
+  noWalletText: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  noWalletSubtext: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
   },
 });

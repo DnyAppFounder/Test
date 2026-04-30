@@ -26,16 +26,6 @@ const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
 type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'signing' | 'sending' | 'success' | 'error';
 
-const STATUS_MSG: Record<BuyStatus, string> = {
-  idle: '',
-  quoting: 'Getting quote...',
-  quote_ready: '',
-  signing: 'Confirm in wallet...',
-  sending: 'Sending transaction...',
-  success: 'Purchase confirmed!',
-  error: '',
-};
-
 export default function BuyScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
@@ -53,40 +43,65 @@ export default function BuyScreen() {
   const hasWallet = !!activeAddress;
   const quickAmounts = ['0.1', '0.5', '1', '2', '5'];
 
-  // Debounce quote fetch
+  const parsedAmount = parseFloat(solAmount);
+  const hasValidAmount = !isNaN(parsedAmount) && parsedAmount > 0;
+  const hasValidToken = !!tokenMint && tokenMint !== SOL_MINT;
+
+  // Auto-fetch quote when amount/token changes
   useEffect(() => {
-    const amount = parseFloat(solAmount);
-    if (!solAmount || isNaN(amount) || amount <= 0 || !tokenMint || tokenMint === SOL_MINT) {
+    if (!hasValidAmount || !hasValidToken) {
       setQuote(null);
       setEstimatedOutput('');
+      if (status === 'quoting' || status === 'quote_ready') {
+        setStatus('idle');
+      }
       return;
     }
-    const timer = setTimeout(() => fetchQuote(amount), 600);
+    setStatus('quoting');
+    setErrorMsg(null);
+    const timer = setTimeout(() => fetchQuote(parsedAmount), 600);
     return () => clearTimeout(timer);
   }, [solAmount, tokenMint]);
 
   const fetchQuote = async (solAmt: number) => {
-    setStatus('quoting');
-    setErrorMsg(null);
     try {
       const amountLamports = Math.floor(solAmt * 1e9);
+      if (amountLamports < 1000) {
+        setQuote(null);
+        setEstimatedOutput('');
+        setErrorMsg('Amount too small. Enter at least 0.000001 SOL.');
+        setStatus('error');
+        return;
+      }
+
       const q = await jupiterSwapService.getQuote(SOL_MINT, tokenMint, amountLamports, 50);
       if (q) {
         setQuote(q);
-        // Estimate output (SOL has 9 decimals, token varies — default 6 for display)
         const outAmt = parseInt(q.outAmount) / 1e6;
         setEstimatedOutput(outAmt.toFixed(6));
         setStatus('quote_ready');
+        setErrorMsg(null);
       } else {
         setQuote(null);
         setEstimatedOutput('');
-        setErrorMsg('No route found for this token');
+        if (tokenMint === DAWEN_MINT) {
+          setErrorMsg('No Jupiter route available for DAWEN/DTEST yet. Try another token or check liquidity.');
+        } else {
+          setErrorMsg('No route available. Insufficient liquidity for this pair.');
+        }
         setStatus('error');
       }
     } catch (e: any) {
       setQuote(null);
       setEstimatedOutput('');
-      setErrorMsg('Failed to get quote');
+      const msg = e?.message || '';
+      if (msg.includes('400')) {
+        setErrorMsg('No route available. This token may lack liquidity on Jupiter.');
+      } else if (msg.includes('network') || msg.includes('fetch')) {
+        setErrorMsg('Network error. Check your connection and try again.');
+      } else {
+        setErrorMsg(`Jupiter API failed: ${msg || 'Unknown error'}`);
+      }
       setStatus('error');
     }
   };
@@ -113,30 +128,7 @@ export default function BuyScreen() {
   };
 
   const handleBuy = async () => {
-    if (!hasWallet) {
-      setErrorMsg('Connect a wallet first');
-      setStatus('error');
-      return;
-    }
-
-    const amount = parseFloat(solAmount);
-    if (isNaN(amount) || amount <= 0) {
-      setErrorMsg('Enter a valid SOL amount');
-      setStatus('error');
-      return;
-    }
-
-    // If buying SOL itself, skip swap
-    if (tokenMint === SOL_MINT) {
-      setErrorMsg('Select a token to buy with SOL');
-      setStatus('error');
-      return;
-    }
-
-    if (!quote) {
-      setErrorMsg('Waiting for quote...');
-      return;
-    }
+    if (!hasWallet || !quote || !hasValidAmount || !hasValidToken) return;
 
     setErrorMsg(null);
     setTxSignature(null);
@@ -166,14 +158,6 @@ export default function BuyScreen() {
       setStatus('success');
 
       if (refreshWallet) await refreshWallet();
-
-      setTimeout(() => {
-        setSolAmount('');
-        setQuote(null);
-        setEstimatedOutput('');
-        setStatus('idle');
-        setTxSignature(null);
-      }, 5000);
     } catch (err: any) {
       console.error('[Buy] error:', err);
       let msg = err?.message || 'Transaction failed';
@@ -181,13 +165,29 @@ export default function BuyScreen() {
         msg = 'Transaction rejected in wallet';
       } else if (msg.includes('insufficient') || msg.includes('balance')) {
         msg = 'Insufficient SOL balance';
+      } else if (msg.includes('slippage')) {
+        msg = 'Price moved beyond slippage. Try again.';
       }
       setErrorMsg(msg);
       setStatus('error');
     }
   };
 
-  const isProcessing = status === 'signing' || status === 'sending' || status === 'quoting';
+  const isProcessing = status === 'signing' || status === 'sending';
+
+  const getButtonText = (): string => {
+    if (!hasWallet) return 'Connect Wallet';
+    if (!hasValidToken) return 'Select Token';
+    if (!hasValidAmount) return 'Enter Amount';
+    if (status === 'quoting') return 'Getting Quote...';
+    if (status === 'quote_ready' && quote) return 'Confirm Buy';
+    if (status === 'signing') return 'Confirm in Wallet';
+    if (status === 'sending') return 'Transaction Pending...';
+    if (status === 'success') return 'Buy Successful';
+    if (status === 'error') return 'Transaction Failed';
+    return 'Review Buy';
+  };
+
   const canBuy = hasWallet && !!quote && status === 'quote_ready' && !isProcessing;
 
   // Mobile without wallet
@@ -205,7 +205,7 @@ export default function BuyScreen() {
           <Smartphone size={48} color={colors.primary} />
           <Text style={styles.mobileMessageTitle}>Open in Wallet Browser</Text>
           <Text style={styles.mobileMessageText}>
-            To buy tokens, open this app inside Phantom, Backpack, or Solflare's built-in browser. Transactions are signed securely inside the app.
+            To buy tokens, open this app inside Phantom, Backpack, or Solflare's built-in browser.
           </Text>
         </View>
       </LinearGradient>
@@ -219,7 +219,7 @@ export default function BuyScreen() {
           <View style={styles.doneIcon}>
             <CheckCircle size={48} color={colors.success} />
           </View>
-          <Text style={styles.doneTitle}>Purchase Confirmed</Text>
+          <Text style={styles.doneTitle}>Buy Successful</Text>
           <Text style={styles.doneSubtitle}>
             Bought {tokenSymbol} for {solAmount} SOL
           </Text>
@@ -255,6 +255,14 @@ export default function BuyScreen() {
 
         <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
           {/* Wallet status */}
+          {hasWallet && (
+            <View style={styles.walletBadge}>
+              <View style={styles.walletDot} />
+              <Text style={styles.walletBadgeText}>
+                {activeAddress!.slice(0, 4)}...{activeAddress!.slice(-4)}
+              </Text>
+            </View>
+          )}
           {!hasWallet && (
             <View style={styles.noWalletCard}>
               <Text style={styles.noWalletText}>Connect a wallet to buy tokens</Text>
@@ -311,9 +319,6 @@ export default function BuyScreen() {
               autoCorrect={false}
               editable={!isProcessing}
             />
-            <Text style={styles.mintHint}>
-              Enter a Solana mint address or tap the featured token above
-            </Text>
           </View>
 
           {/* SOL Amount */}
@@ -327,7 +332,6 @@ export default function BuyScreen() {
                 value={solAmount}
                 onChangeText={v => {
                   setSolAmount(v);
-                  setStatus('idle');
                   setErrorMsg(null);
                 }}
                 keyboardType="decimal-pad"
@@ -336,9 +340,9 @@ export default function BuyScreen() {
               <Text style={styles.amountSuffix}>SOL</Text>
             </View>
 
-            {estimatedOutput && tokenMint !== SOL_MINT && (
+            {estimatedOutput && status === 'quote_ready' && (
               <Text style={styles.estimatedOutput}>
-                ≈ {estimatedOutput} {tokenSymbol}
+                You receive: ~{estimatedOutput} {tokenSymbol}
               </Text>
             )}
           </View>
@@ -351,7 +355,6 @@ export default function BuyScreen() {
                 style={[styles.quickChip, solAmount === amt && styles.quickChipActive]}
                 onPress={() => {
                   setSolAmount(amt);
-                  setStatus('idle');
                   setErrorMsg(null);
                 }}
                 disabled={isProcessing}
@@ -390,19 +393,20 @@ export default function BuyScreen() {
             </View>
           )}
 
-          {/* Status */}
-          {(isProcessing || status === 'error') && (
-            <View style={[
-              styles.statusCard,
-              status === 'error' && styles.statusError,
-            ]}>
-              {isProcessing && <ActivityIndicator size="small" color={colors.primary} />}
-              {status === 'error' && <AlertCircle size={16} color={colors.error} />}
-              <Text style={[
-                styles.statusText,
-                status === 'error' && styles.statusTextError,
-              ]}>
-                {status === 'error' ? (errorMsg || 'Transaction failed') : STATUS_MSG[status]}
+          {/* Error message */}
+          {errorMsg && (
+            <View style={styles.errorCard}>
+              <AlertCircle size={16} color={colors.error} />
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          )}
+
+          {/* Processing status */}
+          {isProcessing && (
+            <View style={styles.statusCard}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.statusText}>
+                {status === 'signing' ? 'Confirm in wallet...' : 'Sending transaction...'}
               </Text>
             </View>
           )}
@@ -412,22 +416,16 @@ export default function BuyScreen() {
           <TouchableOpacity
             style={[
               styles.buyButton,
-              !canBuy && styles.buyButtonDisabled,
+              canBuy && styles.buyButtonReady,
+              status === 'error' && styles.buyButtonError,
             ]}
             onPress={handleBuy}
             disabled={!canBuy}
           >
-            {isProcessing
-              ? <ActivityIndicator size="small" color={colors.white} />
-              : <Text style={styles.buyButtonText}>
-                  {status === 'quoting'
-                    ? 'Getting Quote...'
-                    : !hasWallet
-                      ? 'Connect Wallet'
-                      : !quote
-                        ? 'Enter Amount'
-                        : 'CONFIRM BUY'}
-                </Text>}
+            {(status === 'quoting' || isProcessing) && (
+              <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />
+            )}
+            <Text style={styles.buyButtonText}>{getButtonText()}</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -454,7 +452,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: spacing.xxl,
   },
-  // Mobile message
   mobileMessage: {
     flex: 1,
     justifyContent: 'center',
@@ -473,6 +470,30 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  walletBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(20, 241, 149, 0.1)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+    alignSelf: 'flex-start',
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(20, 241, 149, 0.3)',
+  },
+  walletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+  },
+  walletBadgeText: {
+    fontSize: fontSize.xs,
+    color: colors.success,
+    fontWeight: '600',
   },
   noWalletCard: {
     backgroundColor: colors.primaryMuted,
@@ -555,12 +576,6 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textPrimary,
     fontFamily: 'SpaceMono-Regular',
-  },
-  mintHint: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    marginTop: spacing.xs,
-    lineHeight: 16,
   },
   amountInputRow: {
     flexDirection: 'row',
@@ -645,6 +660,24 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '700',
   },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: colors.errorMuted,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  errorText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.error,
+    flex: 1,
+    lineHeight: 18,
+  },
   statusCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -654,24 +687,27 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
-  statusError: { backgroundColor: colors.errorMuted },
   statusText: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textSecondary,
     flex: 1,
   },
-  statusTextError: { color: colors.error },
   footer: { padding: spacing.xxl },
   buyButton: {
-    backgroundColor: colors.success,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceBorder,
     paddingVertical: spacing.lg,
     borderRadius: borderRadius.md,
-    alignItems: 'center',
   },
-  buyButtonDisabled: {
-    backgroundColor: colors.surfaceBorder,
-    opacity: 0.6,
+  buyButtonReady: {
+    backgroundColor: colors.success,
+  },
+  buyButtonError: {
+    backgroundColor: colors.error,
+    opacity: 0.8,
   },
   buyButtonText: {
     fontSize: fontSize.lg,
@@ -679,7 +715,6 @@ const styles = StyleSheet.create({
     color: colors.white,
     letterSpacing: 0.5,
   },
-  // Done state
   doneContainer: {
     flex: 1,
     justifyContent: 'center',

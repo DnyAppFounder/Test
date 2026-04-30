@@ -45,15 +45,22 @@ export default function NFTGalleryScreen() {
   const renderGridItem = ({ item }: { item: NFT }) => (
     <TouchableOpacity
       style={styles.gridItem}
-      onPress={() => router.push(`/nft/${item.id}` as any)}
+      onPress={() => {}}
+      activeOpacity={0.8}
     >
-      <Image source={{ uri: item.image_url }} style={styles.gridImage} />
+      {item.image_url ? (
+        <Image source={{ uri: item.image_url }} style={styles.gridImage} />
+      ) : (
+        <View style={[styles.gridImage, { backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={{ color: colors.textMuted, fontSize: 12 }}>No Image</Text>
+        </View>
+      )}
       <LinearGradient
         colors={['transparent', 'rgba(0,0,0,0.8)']}
         style={styles.gridOverlay}
       >
-        <Text style={styles.gridName} numberOfLines={1}>{item.name}</Text>
-        {item.rarity_rank && (
+        <Text style={styles.gridName} numberOfLines={1}>{item.name || 'Unknown NFT'}</Text>
+        {item.rarity_rank != null && (
           <Text style={styles.gridRank}>#{item.rarity_rank}</Text>
         )}
       </LinearGradient>
@@ -63,23 +70,30 @@ export default function NFTGalleryScreen() {
   const renderListItem = ({ item }: { item: NFT }) => (
     <TouchableOpacity
       style={styles.listItem}
-      onPress={() => router.push(`/nft/${item.id}` as any)}
+      onPress={() => {}}
+      activeOpacity={0.8}
     >
-      <Image source={{ uri: item.image_url }} style={styles.listImage} />
+      {item.image_url ? (
+        <Image source={{ uri: item.image_url }} style={styles.listImage} />
+      ) : (
+        <View style={[styles.listImage, { backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={{ color: colors.textMuted, fontSize: 10 }}>No Img</Text>
+        </View>
+      )}
       <View style={styles.listInfo}>
-        <Text style={styles.listName}>{item.name}</Text>
+        <Text style={styles.listName}>{item.name || 'Unknown NFT'}</Text>
         <Text style={styles.listCollection} numberOfLines={1}>
           {item.description || 'NFT Collection'}
         </Text>
         <View style={styles.listStats}>
-          {item.rarity_rank && (
+          {item.rarity_rank != null && (
             <View style={styles.statBadge}>
               <Text style={styles.statText}>Rank #{item.rarity_rank}</Text>
             </View>
           )}
-          {item.last_sale_price && (
+          {item.last_sale_price != null && (
             <View style={styles.statBadge}>
-              <Text style={styles.statText}>{item.last_sale_price} ETH</Text>
+              <Text style={styles.statText}>{item.last_sale_price} SOL</Text>
             </View>
           )}
         </View>

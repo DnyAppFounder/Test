@@ -99,6 +99,9 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
   };
 
   const handleDisconnect = async () => {
+    setSuccess(false);
+    setConnecting(null);
+    setError(null);
     await disconnectExternalWallet();
     onClose();
   };
