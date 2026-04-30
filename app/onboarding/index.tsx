@@ -104,7 +104,7 @@ export default function OnboardingWelcome() {
               <Text style={styles.pillText}>Non-Custodial</Text>
             </View>
             <View style={[styles.pill, styles.pillAccent]}>
-              <Text style={[styles.pillText, styles.pillAccentText]}>Multi-Chain</Text>
+              <Text style={[styles.pillText, styles.pillAccentText]}>Solana Only</Text>
             </View>
           </Animated.View>
         </View>

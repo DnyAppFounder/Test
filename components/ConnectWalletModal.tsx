@@ -6,17 +6,17 @@ import {
   Modal,
   TouchableOpacity,
   ActivityIndicator,
-  Linking,
   Platform,
   ScrollView,
 } from 'react-native';
-import { X, ExternalLink, Wifi, WifiOff, Shield, Check } from 'lucide-react-native';
+import { X, WifiOff, Shield, Check, Smartphone } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import {
   ExternalWalletAdapter,
   ExternalWalletInfo,
   ExternalWalletId,
+  SUPPORTED_WALLETS,
 } from '@/lib/wallet/ExternalWalletAdapter';
 import { useWallet } from '@/contexts/WalletContext';
 
@@ -26,29 +26,28 @@ interface ConnectWalletModalProps {
   onConnected?: () => void;
 }
 
-const WALLET_COLORS: Record<ExternalWalletId, [string, string]> = {
+const WALLET_COLORS: Record<string, [string, string]> = {
   phantom: ['#AB9FF2', '#8A63F0'],
   backpack: ['#E33E3F', '#C42B2C'],
   solflare: ['#FC8F2A', '#F56B10'],
-  jupiter: ['#2ED3B7', '#1AB89F'],
-  solana: ['#9945FF', '#7B2FBE'],
 };
 
-const WALLET_DESCRIPTIONS: Record<ExternalWalletId, string> = {
+const WALLET_DESCRIPTIONS: Record<string, string> = {
   phantom: 'The most trusted Solana wallet',
   backpack: 'xNFT-powered Solana wallet',
   solflare: 'The original Solana wallet',
-  jupiter: 'Trade and earn on Jupiter',
-  solana: 'Standard Solana wallet',
 };
 
 export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWalletModalProps) {
   const { connectExternalWallet, connectedWallet, disconnectExternalWallet } = useWallet();
   const [installedWallets, setInstalledWallets] = useState<ExternalWalletInfo[]>([]);
-  const [allWallets] = useState<ExternalWalletInfo[]>(ExternalWalletAdapter.getSupportedWallets());
   const [connecting, setConnecting] = useState<ExternalWalletId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  const isMobile = Platform.OS !== 'web';
+  const hasProvider = Platform.OS === 'web' ? ExternalWalletAdapter.hasAnyProvider() : false;
+  const isInsideWalletBrowser = !isMobile && hasProvider;
 
   useEffect(() => {
     if (visible) {
@@ -71,21 +70,15 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
       }, 1200);
     } catch (err: any) {
       if (err.message?.includes('not installed')) {
-        // On mobile or missing extension — show download link
-        setError(`${id.charAt(0).toUpperCase() + id.slice(1)} is not installed. Tap below to get it.`);
+        setError(`${id.charAt(0).toUpperCase() + id.slice(1)} is not detected. Open this page inside the ${id.charAt(0).toUpperCase() + id.slice(1)} in-app browser.`);
       } else if (err.message?.includes('rejected') || err.message?.includes('User rejected')) {
-        setError('Connection rejected. Please try again.');
+        setError('Connection rejected. Please approve the request in your wallet.');
       } else {
         setError(err.message || 'Failed to connect wallet');
       }
     } finally {
       setConnecting(null);
     }
-  };
-
-  const handleMobileDeepLink = (id: ExternalWalletId) => {
-    const url = ExternalWalletAdapter.getMobileDeepLink(id);
-    Linking.openURL(url);
   };
 
   const handleDisconnect = async () => {
@@ -95,8 +88,6 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
 
   const isInstalled = (id: ExternalWalletId) =>
     installedWallets.some(w => w.id === id);
-
-  const isMobile = Platform.OS !== 'web';
 
   if (success) {
     return (
@@ -121,7 +112,6 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
     );
   }
 
-  // Already connected — show info + disconnect
   if (connectedWallet) {
     return (
       <Modal visible={visible} animationType="slide" transparent presentationStyle="overFullScreen">
@@ -138,7 +128,7 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
 
               <View style={styles.connectedCard}>
                 <LinearGradient
-                  colors={WALLET_COLORS[connectedWallet.id] ?? ['#8B5CF6', '#6D28D9']}
+                  colors={WALLET_COLORS[connectedWallet.id] ?? ['#3B82F6', '#1D4ED8']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.connectedGradient}
@@ -191,7 +181,7 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
             </View>
 
             <Text style={styles.sheetSubtitle}>
-              Connect your Solana wallet to start trading
+              Connect your Solana wallet to trade
             </Text>
 
             {error && (
@@ -200,55 +190,62 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
               </View>
             )}
 
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.walletList}>
-              {/* Detected / installed wallets first */}
-              {!isMobile && installedWallets.length > 0 && (
-                <>
+            {/* Mobile: no injected provider — show instruction */}
+            {isMobile && (
+              <View style={styles.mobileMessage}>
+                <Smartphone size={28} color={colors.primary} />
+                <Text style={styles.mobileMessageTitle}>Open in Your Wallet</Text>
+                <Text style={styles.mobileMessageText}>
+                  To connect and sign transactions securely, open this app inside your wallet's built-in browser:
+                </Text>
+                <View style={styles.walletInstructionList}>
+                  {SUPPORTED_WALLETS.map(wallet => (
+                    <View key={wallet.id} style={styles.walletInstruction}>
+                      <LinearGradient
+                        colors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
+                        style={styles.walletInstructionIcon}
+                      >
+                        <Text style={styles.walletInstructionIconText}>{wallet.name[0]}</Text>
+                      </LinearGradient>
+                      <Text style={styles.walletInstructionName}>{wallet.name}</Text>
+                      <Text style={styles.walletInstructionStep}>Open → Browse → paste URL</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Desktop: no wallet extension detected */}
+            {!isMobile && !hasProvider && (
+              <View style={styles.noProviderMessage}>
+                <Text style={styles.noProviderText}>
+                  No Solana wallet detected. Install Phantom, Backpack, or Solflare browser extension, then refresh.
+                </Text>
+              </View>
+            )}
+
+            {/* Desktop: wallet extension detected — show wallet list */}
+            {!isMobile && hasProvider && (
+              <ScrollView showsVerticalScrollIndicator={false} style={styles.walletList}>
+                {installedWallets.length > 0 && (
                   <Text style={styles.sectionLabel}>Detected</Text>
-                  {installedWallets.map(wallet => (
+                )}
+                {SUPPORTED_WALLETS.map(wallet => {
+                  const installed = isInstalled(wallet.id);
+                  return (
                     <WalletRow
                       key={wallet.id}
                       wallet={wallet}
-                      isInstalled={true}
+                      isInstalled={installed}
                       isConnecting={connecting === wallet.id}
-                      isMobile={isMobile}
                       onConnect={handleConnect}
-                      onMobileOpen={handleMobileDeepLink}
-                      colors={WALLET_COLORS[wallet.id]}
-                      description={WALLET_DESCRIPTIONS[wallet.id]}
+                      gradColors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
+                      description={WALLET_DESCRIPTIONS[wallet.id] ?? ''}
                     />
-                  ))}
-                  <View style={styles.divider} />
-                  <Text style={styles.sectionLabel}>All Wallets</Text>
-                </>
-              )}
-
-              {isMobile && (
-                <View style={styles.mobileNote}>
-                  <Wifi size={14} color={colors.primary} />
-                  <Text style={styles.mobileNoteText}>
-                    Open in wallet browser or install from the links below
-                  </Text>
-                </View>
-              )}
-
-              {allWallets.map(wallet => {
-                const installed = isInstalled(wallet.id);
-                return (
-                  <WalletRow
-                    key={wallet.id}
-                    wallet={wallet}
-                    isInstalled={installed}
-                    isConnecting={connecting === wallet.id}
-                    isMobile={isMobile}
-                    onConnect={handleConnect}
-                    onMobileOpen={handleMobileDeepLink}
-                    colors={WALLET_COLORS[wallet.id]}
-                    description={WALLET_DESCRIPTIONS[wallet.id]}
-                  />
-                );
-              })}
-            </ScrollView>
+                  );
+                })}
+              </ScrollView>
+            )}
 
             <View style={styles.footer}>
               <Shield size={13} color={colors.textMuted} />
@@ -267,36 +264,16 @@ interface WalletRowProps {
   wallet: ExternalWalletInfo;
   isInstalled: boolean;
   isConnecting: boolean;
-  isMobile: boolean;
   onConnect: (id: ExternalWalletId) => void;
-  onMobileOpen: (id: ExternalWalletId) => void;
-  colors: [string, string];
+  gradColors: [string, string];
   description: string;
 }
 
-function WalletRow({
-  wallet,
-  isInstalled,
-  isConnecting,
-  isMobile,
-  onConnect,
-  onMobileOpen,
-  colors: gradColors,
-  description,
-}: WalletRowProps) {
-  const handlePress = () => {
-    if (isMobile) {
-      // On mobile: try to connect via deep link or show download page
-      onConnect(wallet.id);
-    } else {
-      onConnect(wallet.id);
-    }
-  };
-
+function WalletRow({ wallet, isInstalled, isConnecting, onConnect, gradColors, description }: WalletRowProps) {
   return (
     <TouchableOpacity
       style={styles.walletRow}
-      onPress={handlePress}
+      onPress={() => onConnect(wallet.id)}
       disabled={isConnecting}
       activeOpacity={0.7}
     >
@@ -312,7 +289,7 @@ function WalletRow({
       <View style={styles.walletRowInfo}>
         <View style={styles.walletNameRow}>
           <Text style={styles.walletName}>{wallet.name}</Text>
-          {isInstalled && !isMobile && (
+          {isInstalled && (
             <View style={styles.detectedBadge}>
               <Text style={styles.detectedBadgeText}>Detected</Text>
             </View>
@@ -323,10 +300,6 @@ function WalletRow({
 
       {isConnecting ? (
         <ActivityIndicator size="small" color={gradColors[0]} />
-      ) : isMobile ? (
-        <TouchableOpacity onPress={() => onMobileOpen(wallet.id)} style={styles.externalLinkBtn}>
-          <ExternalLink size={14} color={colors.textMuted} />
-        </TouchableOpacity>
       ) : (
         <View style={styles.connectChevron}>
           <Text style={styles.connectArrow}>›</Text>
@@ -348,7 +321,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 28,
     paddingHorizontal: spacing.xxl,
     paddingBottom: 40,
-    maxHeight: '85%',
+    maxHeight: '90%',
   },
   handleBar: {
     width: 40,
@@ -395,9 +368,76 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: fontSize.sm,
     color: colors.error,
+    lineHeight: 18,
   },
+  // Mobile message
+  mobileMessage: {
+    alignItems: 'center',
+    paddingVertical: spacing.xl,
+    gap: spacing.md,
+  },
+  mobileMessageTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  mobileMessageText: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  walletInstructionList: {
+    width: '100%',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  walletInstruction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+  },
+  walletInstructionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  walletInstructionIconText: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: colors.white,
+  },
+  walletInstructionName: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  walletInstructionStep: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+  },
+  // No provider
+  noProviderMessage: {
+    backgroundColor: colors.primaryMuted,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  noProviderText: {
+    fontSize: fontSize.sm,
+    color: colors.primaryLight,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  // Wallet list
   walletList: {
-    maxHeight: 400,
+    maxHeight: 300,
   },
   sectionLabel: {
     fontSize: fontSize.xs,
@@ -406,26 +446,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: spacing.sm,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.surfaceLight,
-    marginVertical: spacing.lg,
-  },
-  mobileNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.primaryMuted,
-    borderRadius: borderRadius.sm,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  mobileNoteText: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    color: colors.primaryLight,
-    lineHeight: 16,
   },
   walletRow: {
     flexDirection: 'row',
@@ -489,9 +509,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: -2,
   },
-  externalLinkBtn: {
-    padding: spacing.sm,
-  },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -543,7 +560,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.surfaceBorderLight,
+    borderColor: colors.surfaceBorder,
   },
   connectedGradient: {
     width: 52,

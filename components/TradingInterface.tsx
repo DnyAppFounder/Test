@@ -120,28 +120,27 @@ export function TradingInterface({
       setError(null);
       setStatus('signing');
 
-      // Get swap transaction from Jupiter
+      // Build transaction via Jupiter API (no external redirect)
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
-      if (!swapResult) {
+      if (!swapResult?.swapTransaction) {
         throw new Error('Failed to build swap transaction');
       }
 
-      // Sign based on wallet type
+      // Sign inside the app with the connected wallet provider
       let signedTx: VersionedTransaction;
 
       if (connectedWallet) {
-        // External wallet — delegate signing to the extension
+        // External wallet — triggers wallet popup inside the app, NOT a redirect
         const txBuf = Buffer.from(swapResult.swapTransaction, 'base64');
         const transaction = VersionedTransaction.deserialize(txBuf);
-        signedTx = await ExternalWalletAdapter.signTransaction(connectedWallet.id, transaction as any) as any;
+        signedTx = await ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, transaction);
       } else if (selectedAccount) {
-        // Internal wallet — sign with derived keypair
+        // Internal (imported/created) wallet — sign with keypair
         signedTx = await signWithInternalWallet(swapResult.swapTransaction);
       } else {
         throw new Error('No wallet available');
       }
 
-      // Send transaction
       setStatus('sending');
 
       const signature = await jupiterSwapService.executeSwap(
@@ -167,7 +166,13 @@ export function TradingInterface({
       }, 4000);
     } catch (err: any) {
       console.error('[Trade] Swap error:', err);
-      setError(err.message || 'Transaction failed');
+      let msg = err?.message || 'Transaction failed';
+      if (msg.includes('User rejected') || msg.includes('rejected')) {
+        msg = 'Transaction rejected in wallet';
+      } else if (msg.includes('insufficient') || msg.includes('balance')) {
+        msg = 'Insufficient balance';
+      }
+      setError(msg);
       setStatus('error');
     }
   };

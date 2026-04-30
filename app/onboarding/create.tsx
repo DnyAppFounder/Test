@@ -91,8 +91,8 @@ export default function CreateWallet() {
       <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
         <View style={styles.centeredContent}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.creatingText}>Creating Multi-Chain Wallet...</Text>
-          <Text style={styles.creatingSubtext}>Deriving accounts across all supported networks</Text>
+          <Text style={styles.creatingText}>Creating Solana Wallet...</Text>
+          <Text style={styles.creatingSubtext}>Deriving your Solana account from recovery phrase</Text>
         </View>
       </LinearGradient>
     );
@@ -112,13 +112,13 @@ export default function CreateWallet() {
 
           <Text style={styles.title}>Wallet Created Successfully</Text>
           <Text style={styles.subtitle}>
-            Your multi-chain wallet is ready with {createdAddresses.length} network{createdAddresses.length > 1 ? 's' : ''}
+            Your Solana wallet is ready with {createdAddresses.length} network{createdAddresses.length > 1 ? 's' : ''}
           </Text>
 
           <View style={styles.walletInfoCard}>
-            <Text style={styles.walletInfoTitle}>Multi-Chain Wallet</Text>
+            <Text style={styles.walletInfoTitle}>Solana Wallet</Text>
             <Text style={styles.walletInfoDesc}>
-              One recovery phrase controls all your accounts across different blockchains
+              Your recovery phrase is the only key to your Solana wallet. Keep it safe.
             </Text>
           </View>
 

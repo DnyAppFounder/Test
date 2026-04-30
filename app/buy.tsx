@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,180 +8,235 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, CreditCard, Building2, ChevronDown, Info } from 'lucide-react-native';
+import { ArrowLeft, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Smartphone } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
-import { AssetsService } from '@/services/assetsService';
+import { jupiterSwapService } from '@/services/jupiter/swapService';
+import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
+import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
+import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 
-type PaymentMethod = 'card' | 'bank';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-const TOKENS = [
-  { id: 'd09e8c0c-fcbd-462a-8678-76b909099714', symbol: 'SOL', name: 'Solana', price: 142.50 },
-  { id: 'bb871a99-c4c2-4cac-a5a7-f0af1b9d09d3', symbol: 'ETH', name: 'Ethereum', price: 3450.00 },
-  { id: '32bab46d-24e3-4f41-b0d7-da07f070577c', symbol: 'MATIC', name: 'Polygon', price: 0.85 },
-  { id: 'd6e4a47c-f050-4935-a17e-be50f8390ccb', symbol: 'USDC', name: 'USD Coin', price: 1.00 },
-];
+type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'signing' | 'sending' | 'success' | 'error';
+
+const STATUS_MSG: Record<BuyStatus, string> = {
+  idle: '',
+  quoting: 'Getting quote...',
+  quote_ready: '',
+  signing: 'Confirm in wallet...',
+  sending: 'Sending transaction...',
+  success: 'Purchase confirmed!',
+  error: '',
+};
 
 export default function BuyScreen() {
   const router = useRouter();
-  const { selectedAccount, refreshWallet, refreshPortfolio } = useWallet();
-  const [amount, setAmount] = useState('');
-  const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
-  const [showTokenPicker, setShowTokenPicker] = useState(false);
-  const [step, setStep] = useState<'input' | 'confirm' | 'done'>('input');
+  const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
 
-  const amountNum = parseFloat(amount) || 0;
-  const tokenAmount = amountNum > 0 ? (amountNum / selectedToken.price).toFixed(6) : '0';
-  const fee = (amountNum * 0.015).toFixed(2);
-  const total = (amountNum + parseFloat(fee)).toFixed(2);
+  const [tokenMint, setTokenMint] = useState(SOL_MINT);
+  const [tokenSymbol, setTokenSymbol] = useState('SOL');
+  const [solAmount, setSolAmount] = useState('');
+  const [estimatedOutput, setEstimatedOutput] = useState('');
+  const [status, setStatus] = useState<BuyStatus>('idle');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [quote, setQuote] = useState<any>(null);
 
-  const quickAmounts = [25, 50, 100, 250, 500];
+  const isMobile = Platform.OS !== 'web';
+  const hasWallet = !!activeAddress;
+  const quickAmounts = ['0.1', '0.5', '1', '2', '5'];
 
-  const handleConfirmPurchase = async () => {
-    if (!selectedAccount?.address) {
-      console.error('No wallet address');
+  // Debounce quote fetch
+  useEffect(() => {
+    const amount = parseFloat(solAmount);
+    if (!solAmount || isNaN(amount) || amount <= 0 || tokenMint === SOL_MINT) {
+      setQuote(null);
+      setEstimatedOutput('');
       return;
     }
+    const timer = setTimeout(() => fetchQuote(amount), 600);
+    return () => clearTimeout(timer);
+  }, [solAmount, tokenMint]);
 
+  const fetchQuote = async (solAmt: number) => {
+    setStatus('quoting');
+    setErrorMsg(null);
     try {
-      const tokenQty = parseFloat(tokenAmount);
-
-      await AssetsService.recordTransaction(
-        selectedAccount.address,
-        selectedToken.id,
-        'buy',
-        tokenQty,
-        selectedToken.price,
-        {
-          fee: parseFloat(fee),
-          status: 'completed',
-          notes: `Simulated purchase via ${paymentMethod}`,
-        }
-      );
-
-      setStep('done');
-      await refreshWallet();
-      await refreshPortfolio();
-    } catch (error) {
-      console.error('Failed to record purchase:', error);
-      alert('Failed to record purchase. Please try again.');
+      const amountLamports = Math.floor(solAmt * 1e9);
+      const q = await jupiterSwapService.getQuote(SOL_MINT, tokenMint, amountLamports, 50);
+      if (q) {
+        setQuote(q);
+        // Estimate output (SOL has 9 decimals, token varies — default 6 for display)
+        const outAmt = parseInt(q.outAmount) / 1e6;
+        setEstimatedOutput(outAmt.toFixed(6));
+        setStatus('quote_ready');
+      } else {
+        setQuote(null);
+        setEstimatedOutput('');
+        setErrorMsg('No route found for this token');
+        setStatus('error');
+      }
+    } catch (e: any) {
+      setQuote(null);
+      setEstimatedOutput('');
+      setErrorMsg('Failed to get quote');
+      setStatus('error');
     }
   };
 
-  if (step === 'done') {
+  const signWithExternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
+    if (!connectedWallet) throw new Error('No external wallet connected');
+    const txBuf = Buffer.from(serializedTx, 'base64');
+    const tx = VersionedTransaction.deserialize(txBuf);
+    return ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, tx);
+  };
+
+  const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
+    const walletManager = SecureWalletManager.getInstance();
+    const mnemonic = walletManager.getMnemonic();
+    if (!mnemonic || !selectedAccount) throw new Error('Wallet locked');
+    const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex ?? 0);
+    const txBuf = Buffer.from(serializedTx, 'base64');
+    const tx = VersionedTransaction.deserialize(txBuf);
+    tx.sign([{
+      publicKey: new PublicKey(selectedAccount.address),
+      secretKey: keypair.secretKey,
+    }]);
+    return tx;
+  };
+
+  const handleBuy = async () => {
+    if (!hasWallet) {
+      setErrorMsg('Connect a wallet first');
+      setStatus('error');
+      return;
+    }
+
+    const amount = parseFloat(solAmount);
+    if (isNaN(amount) || amount <= 0) {
+      setErrorMsg('Enter a valid SOL amount');
+      setStatus('error');
+      return;
+    }
+
+    // If buying SOL itself, skip swap
+    if (tokenMint === SOL_MINT) {
+      setErrorMsg('Select a token to buy with SOL');
+      setStatus('error');
+      return;
+    }
+
+    if (!quote) {
+      setErrorMsg('Waiting for quote...');
+      return;
+    }
+
+    setErrorMsg(null);
+    setTxSignature(null);
+
+    try {
+      setStatus('signing');
+
+      const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress!, true);
+      if (!swapResult?.swapTransaction) {
+        throw new Error('Failed to build transaction');
+      }
+
+      let signedTx: VersionedTransaction;
+      if (connectedWallet) {
+        signedTx = await signWithExternalWallet(swapResult.swapTransaction);
+      } else if (selectedAccount) {
+        signedTx = await signWithInternalWallet(swapResult.swapTransaction);
+      } else {
+        throw new Error('No wallet available');
+      }
+
+      setStatus('sending');
+
+      const signature = await jupiterSwapService.executeSwap(
+        swapResult.swapTransaction,
+        async () => signedTx
+      );
+
+      if (!signature) throw new Error('Transaction rejected by network');
+
+      setTxSignature(signature);
+      setStatus('success');
+
+      if (refreshWallet) await refreshWallet();
+
+      setTimeout(() => {
+        setSolAmount('');
+        setQuote(null);
+        setEstimatedOutput('');
+        setStatus('idle');
+        setTxSignature(null);
+      }, 5000);
+    } catch (err: any) {
+      console.error('[Buy] error:', err);
+      let msg = err?.message || 'Transaction failed';
+      if (msg.includes('User rejected') || msg.includes('rejected')) {
+        msg = 'Transaction rejected in wallet';
+      } else if (msg.includes('insufficient') || msg.includes('balance')) {
+        msg = 'Insufficient SOL balance';
+      }
+      setErrorMsg(msg);
+      setStatus('error');
+    }
+  };
+
+  const isProcessing = status === 'signing' || status === 'sending' || status === 'quoting';
+  const canBuy = hasWallet && !!quote && status === 'quote_ready' && !isProcessing;
+
+  // Mobile without wallet
+  if (isMobile && !hasWallet) {
     return (
       <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-        <View style={styles.doneContainer}>
-          <View style={styles.doneIcon}>
-            <Text style={styles.doneIconText}>OK</Text>
-          </View>
-          <Text style={styles.doneTitle}>Purchase Submitted</Text>
-          <Text style={styles.doneSubtitle}>
-            Your order for {tokenAmount} {selectedToken.symbol} has been submitted.
-          </Text>
-          <View style={styles.doneDetails}>
-            <View style={styles.doneRow}>
-              <Text style={styles.doneLabel}>Amount</Text>
-              <Text style={styles.doneValue}>${amount}</Text>
-            </View>
-            <View style={styles.doneRow}>
-              <Text style={styles.doneLabel}>Token</Text>
-              <Text style={styles.doneValue}>{tokenAmount} {selectedToken.symbol}</Text>
-            </View>
-            <View style={styles.doneRow}>
-              <Text style={styles.doneLabel}>Status</Text>
-              <View style={styles.statusBadge}>
-                <Text style={styles.statusText}>SIMULATED</Text>
-              </View>
-            </View>
-          </View>
-          <View style={styles.mockNotice}>
-            <Info size={16} color={colors.warning} />
-            <Text style={styles.mockNoticeText}>
-              This is a simulated purchase. No real payment is processed. Fiat on-ramp integration coming soon.
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.doneButton}
-            onPress={async () => {
-              await refreshWallet();
-              await refreshPortfolio();
-              router.back();
-            }}
-          >
-            <Text style={styles.doneButtonText}>Return to Wallet</Text>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <ArrowLeft size={24} color={colors.textSecondary} />
           </TouchableOpacity>
+          <Text style={styles.headerTitle}>Buy</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.mobileMessage}>
+          <Smartphone size={48} color={colors.primary} />
+          <Text style={styles.mobileMessageTitle}>Open in Wallet Browser</Text>
+          <Text style={styles.mobileMessageText}>
+            To buy tokens, open this app inside Phantom, Backpack, or Solflare's built-in browser. Transactions are signed securely inside the app.
+          </Text>
         </View>
       </LinearGradient>
     );
   }
 
-  if (step === 'confirm') {
+  if (status === 'success') {
     return (
       <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => setStep('input')}>
-            <ArrowLeft size={24} color={colors.textSecondary} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Confirm Purchase</Text>
-          <View style={{ width: 24 }} />
-        </View>
-        <ScrollView style={styles.confirmContent}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmLabel}>You pay</Text>
-            <Text style={styles.confirmAmount}>${amount}</Text>
+        <View style={styles.doneContainer}>
+          <View style={styles.doneIcon}>
+            <CheckCircle size={48} color={colors.success} />
           </View>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmLabel}>You receive</Text>
-            <Text style={styles.confirmAmount}>{tokenAmount} {selectedToken.symbol}</Text>
-          </View>
-          <View style={styles.breakdownCard}>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Token Price</Text>
-              <Text style={styles.breakdownValue}>${selectedToken.price.toLocaleString()}</Text>
-            </View>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Network Fee (1.5%)</Text>
-              <Text style={styles.breakdownValue}>${fee}</Text>
-            </View>
-            <View style={[styles.breakdownRow, styles.breakdownRowTotal]}>
-              <Text style={styles.breakdownTotalLabel}>Total</Text>
-              <Text style={styles.breakdownTotalValue}>${total}</Text>
-            </View>
-          </View>
-          <View style={styles.breakdownCard}>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Payment</Text>
-              <Text style={styles.breakdownValue}>{paymentMethod === 'card' ? 'Credit/Debit Card' : 'Bank Transfer'}</Text>
-            </View>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Destination</Text>
-              <Text style={styles.breakdownValue} numberOfLines={1}>
-                {selectedAccount?.address?.slice(0, 12)}...
+          <Text style={styles.doneTitle}>Purchase Confirmed</Text>
+          <Text style={styles.doneSubtitle}>
+            Bought {tokenSymbol} for {solAmount} SOL
+          </Text>
+          {txSignature && (
+            <View style={styles.txCard}>
+              <Text style={styles.txLabel}>Transaction:</Text>
+              <Text style={styles.txHash} numberOfLines={1} ellipsizeMode="middle">
+                {txSignature}
               </Text>
             </View>
-          </View>
-          <View style={styles.mockNotice}>
-            <Info size={16} color={colors.warning} />
-            <Text style={styles.mockNoticeText}>
-              This is a simulated purchase. No real transaction will occur.
-            </Text>
-          </View>
-        </ScrollView>
-        <View style={styles.footer}>
-          <TouchableOpacity style={styles.buyButton} onPress={handleConfirmPurchase}>
-            <LinearGradient
-              colors={colors.gradient.accent}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.buyButtonGradient}
-            >
-              <Text style={styles.buyButtonText}>Confirm Purchase</Text>
-            </LinearGradient>
+          )}
+          <TouchableOpacity style={styles.doneButton} onPress={() => router.back()}>
+            <Text style={styles.doneButtonText}>Return to Wallet</Text>
           </TouchableOpacity>
         </View>
       </LinearGradient>
@@ -198,118 +253,156 @@ export default function BuyScreen() {
           <TouchableOpacity onPress={() => router.back()}>
             <ArrowLeft size={24} color={colors.textSecondary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Buy Crypto</Text>
+          <Text style={styles.headerTitle}>Buy Token</Text>
           <View style={{ width: 24 }} />
         </View>
 
-        <ScrollView style={styles.inputContent} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity
-            style={styles.tokenSelector}
-            onPress={() => setShowTokenPicker(!showTokenPicker)}
-          >
-            <View style={styles.tokenBadge}>
-              <Text style={styles.tokenBadgeText}>{selectedToken.symbol.substring(0, 2)}</Text>
+        <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
+          {/* Wallet status */}
+          {!hasWallet && (
+            <View style={styles.noWalletCard}>
+              <Text style={styles.noWalletText}>Connect a wallet to buy tokens</Text>
             </View>
-            <View style={styles.tokenSelectorInfo}>
-              <Text style={styles.tokenSelectorName}>{selectedToken.name}</Text>
-              <Text style={styles.tokenSelectorPrice}>${selectedToken.price.toLocaleString()}</Text>
-            </View>
-            <ChevronDown size={20} color={colors.textMuted} />
-          </TouchableOpacity>
-
-          {showTokenPicker && (
-            <ScrollView style={styles.tokenPickerList} nestedScrollEnabled>
-              {TOKENS.map((tk) => (
-                <TouchableOpacity
-                  key={tk.symbol}
-                  style={[styles.tokenPickerItem, tk.symbol === selectedToken.symbol && styles.tokenPickerItemActive]}
-                  onPress={() => { setSelectedToken(tk); setShowTokenPicker(false); }}
-                >
-                  <Text style={styles.tokenPickerSymbol}>{tk.symbol}</Text>
-                  <Text style={styles.tokenPickerName}>{tk.name}</Text>
-                  <Text style={styles.tokenPickerPrice}>${tk.price.toLocaleString()}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
           )}
 
-          <View style={styles.amountSection}>
-            <Text style={styles.sectionLabel}>Amount (USD)</Text>
-            <View style={styles.amountInputContainer}>
-              <Text style={styles.currencyPrefix}>$</Text>
+          {/* Token Mint Input */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Token Contract Address</Text>
+            <TextInput
+              style={styles.mintInput}
+              value={tokenMint === SOL_MINT ? '' : tokenMint}
+              onChangeText={v => {
+                const clean = v.trim();
+                setTokenMint(clean || SOL_MINT);
+                setTokenSymbol(clean ? 'TOKEN' : 'SOL');
+                setQuote(null);
+                setEstimatedOutput('');
+                setStatus('idle');
+                setErrorMsg(null);
+              }}
+              placeholder="Paste Solana token mint address..."
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isProcessing}
+            />
+            <Text style={styles.mintHint}>
+              Enter the Solana mint address of the token you want to buy with SOL
+            </Text>
+          </View>
+
+          {/* SOL Amount */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Amount (SOL)</Text>
+            <View style={styles.amountInputRow}>
               <TextInput
                 style={styles.amountInput}
                 placeholder="0.00"
                 placeholderTextColor={colors.textMuted}
-                value={amount}
-                onChangeText={setAmount}
+                value={solAmount}
+                onChangeText={v => {
+                  setSolAmount(v);
+                  setStatus('idle');
+                  setErrorMsg(null);
+                }}
                 keyboardType="decimal-pad"
+                editable={!isProcessing}
               />
+              <Text style={styles.amountSuffix}>SOL</Text>
             </View>
-            {amountNum > 0 && (
-              <Text style={styles.conversionText}>
-                = {tokenAmount} {selectedToken.symbol}
+
+            {estimatedOutput && tokenMint !== SOL_MINT && (
+              <Text style={styles.estimatedOutput}>
+                ≈ {estimatedOutput} {tokenSymbol}
               </Text>
             )}
           </View>
 
+          {/* Quick amounts */}
           <View style={styles.quickAmounts}>
-            {quickAmounts.map((qa) => (
+            {quickAmounts.map(amt => (
               <TouchableOpacity
-                key={qa}
-                style={[styles.quickChip, amount === String(qa) && styles.quickChipActive]}
-                onPress={() => setAmount(String(qa))}
+                key={amt}
+                style={[styles.quickChip, solAmount === amt && styles.quickChipActive]}
+                onPress={() => {
+                  setSolAmount(amt);
+                  setStatus('idle');
+                  setErrorMsg(null);
+                }}
+                disabled={isProcessing}
               >
-                <Text style={[styles.quickChipText, amount === String(qa) && styles.quickChipTextActive]}>${qa}</Text>
+                <Text style={[styles.quickChipText, solAmount === amt && styles.quickChipTextActive]}>
+                  {amt} SOL
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <View style={styles.paymentSection}>
-            <Text style={styles.sectionLabel}>Payment Method</Text>
-            <TouchableOpacity
-              style={[styles.paymentOption, paymentMethod === 'card' && styles.paymentOptionActive]}
-              onPress={() => setPaymentMethod('card')}
-            >
-              <CreditCard size={20} color={paymentMethod === 'card' ? colors.primary : colors.textMuted} />
-              <View style={styles.paymentOptionInfo}>
-                <Text style={[styles.paymentOptionTitle, paymentMethod === 'card' && styles.paymentOptionTitleActive]}>
-                  Credit / Debit Card
-                </Text>
-                <Text style={styles.paymentOptionDesc}>Instant, 1.5% fee</Text>
+          {/* Quote details */}
+          {quote && status === 'quote_ready' && (
+            <View style={styles.quoteCard}>
+              <Text style={styles.quoteTitle}>Order Preview</Text>
+              <View style={styles.quoteRow}>
+                <Text style={styles.quoteLabel}>You pay</Text>
+                <Text style={styles.quoteValue}>{solAmount} SOL</Text>
               </View>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.paymentOption, paymentMethod === 'bank' && styles.paymentOptionActive]}
-              onPress={() => setPaymentMethod('bank')}
-            >
-              <Building2 size={20} color={paymentMethod === 'bank' ? colors.primary : colors.textMuted} />
-              <View style={styles.paymentOptionInfo}>
-                <Text style={[styles.paymentOptionTitle, paymentMethod === 'bank' && styles.paymentOptionTitleActive]}>
-                  Bank Transfer
-                </Text>
-                <Text style={styles.paymentOptionDesc}>1-3 days, 0.5% fee</Text>
+              <View style={styles.quoteRow}>
+                <Text style={styles.quoteLabel}>You receive</Text>
+                <Text style={styles.quoteValue}>~{estimatedOutput} {tokenSymbol}</Text>
               </View>
-            </TouchableOpacity>
-          </View>
+              <View style={styles.quoteRow}>
+                <Text style={styles.quoteLabel}>Slippage</Text>
+                <Text style={styles.quoteValue}>0.5%</Text>
+              </View>
+              {(quote.priceImpactPct || 0) * 100 > 1 && (
+                <View style={styles.quoteRow}>
+                  <Text style={[styles.quoteLabel, { color: colors.warning }]}>Price Impact</Text>
+                  <Text style={[styles.quoteValue, { color: colors.warning }]}>
+                    {((quote.priceImpactPct || 0) * 100).toFixed(2)}%
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Status */}
+          {(isProcessing || status === 'error') && (
+            <View style={[
+              styles.statusCard,
+              status === 'error' && styles.statusError,
+            ]}>
+              {isProcessing && <ActivityIndicator size="small" color={colors.primary} />}
+              {status === 'error' && <AlertCircle size={16} color={colors.error} />}
+              <Text style={[
+                styles.statusText,
+                status === 'error' && styles.statusTextError,
+              ]}>
+                {status === 'error' ? (errorMsg || 'Transaction failed') : STATUS_MSG[status]}
+              </Text>
+            </View>
+          )}
         </ScrollView>
 
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.buyButton, amountNum <= 0 && styles.buyButtonDisabled]}
-            onPress={() => setStep('confirm')}
-            disabled={amountNum <= 0}
+            style={[
+              styles.buyButton,
+              !canBuy && styles.buyButtonDisabled,
+            ]}
+            onPress={handleBuy}
+            disabled={!canBuy}
           >
-            <LinearGradient
-              colors={amountNum > 0 ? colors.gradient.accent : [colors.surfaceBorder, colors.surfaceBorder]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.buyButtonGradient}
-            >
-              <Text style={styles.buyButtonText}>
-                {amountNum > 0 ? `Buy ${tokenAmount} ${selectedToken.symbol}` : 'Enter amount'}
-              </Text>
-            </LinearGradient>
+            {isProcessing
+              ? <ActivityIndicator size="small" color={colors.white} />
+              : <Text style={styles.buyButtonText}>
+                  {status === 'quoting'
+                    ? 'Getting Quote...'
+                    : !hasWallet
+                      ? 'Connect Wallet'
+                      : !quote
+                        ? 'Enter Amount'
+                        : 'CONFIRM BUY'}
+                </Text>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -318,9 +411,7 @@ export default function BuyScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -334,91 +425,67 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textPrimary,
   },
-  inputContent: {
+  content: {
     flex: 1,
     paddingHorizontal: spacing.xxl,
   },
-  tokenSelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surfaceLight,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
-  },
-  tokenBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.primaryMuted,
+  // Mobile message
+  mobileMessage: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: spacing.xxl,
+    gap: spacing.lg,
   },
-  tokenBadgeText: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  tokenSelectorInfo: {
-    flex: 1,
-    marginLeft: spacing.md,
-  },
-  tokenSelectorName: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
+  mobileMessageTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
     color: colors.textPrimary,
+    textAlign: 'center',
   },
-  tokenSelectorPrice: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  tokenPickerList: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.lg,
-    marginTop: -spacing.sm,
-  },
-  tokenPickerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
-  },
-  tokenPickerItemActive: {
-    backgroundColor: colors.primaryMuted,
-  },
-  tokenPickerSymbol: {
+  mobileMessageText: {
     fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    width: 60,
-  },
-  tokenPickerName: {
-    fontSize: fontSize.sm,
     color: colors.textSecondary,
-    flex: 1,
+    textAlign: 'center',
+    lineHeight: 22,
   },
-  tokenPickerPrice: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  amountSection: {
+  noWalletCard: {
+    backgroundColor: colors.primaryMuted,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
     marginBottom: spacing.lg,
+    alignItems: 'center',
   },
+  noWalletText: {
+    fontSize: fontSize.sm,
+    color: colors.primaryLight,
+    fontWeight: '600',
+  },
+  section: { marginBottom: spacing.xl },
   sectionLabel: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textSecondary,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
-  amountInputContainer: {
+  mintInput: {
+    backgroundColor: colors.surfaceLight,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    fontSize: fontSize.sm,
+    color: colors.textPrimary,
+    fontFamily: 'SpaceMono-Regular',
+  },
+  mintHint: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    lineHeight: 16,
+  },
+  amountInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.surfaceLight,
@@ -427,12 +494,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.lg,
   },
-  currencyPrefix: {
-    fontSize: 28,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginRight: spacing.sm,
-  },
   amountInput: {
     flex: 1,
     fontSize: 28,
@@ -440,24 +501,30 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: spacing.lg,
   },
-  conversionText: {
+  amountSuffix: {
+    fontSize: fontSize.md,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+  estimatedOutput: {
     fontSize: fontSize.sm,
-    color: colors.primary,
+    color: colors.success,
     marginTop: spacing.sm,
+    fontWeight: '600',
   },
   quickAmounts: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.xxl,
+    marginBottom: spacing.xl,
+    flexWrap: 'wrap',
   },
   quickChip: {
-    flex: 1,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: borderRadius.full,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    alignItems: 'center',
   },
   quickChipActive: {
     backgroundColor: colors.primaryMuted,
@@ -468,208 +535,116 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textMuted,
   },
-  quickChipTextActive: {
-    color: colors.primary,
-  },
-  paymentSection: {
-    marginBottom: spacing.xxl,
-  },
-  paymentOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  quickChipTextActive: { color: colors.primary },
+  quoteCard: {
     backgroundColor: colors.surfaceLight,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
     padding: spacing.lg,
-    marginBottom: spacing.sm,
-    gap: spacing.md,
-  },
-  paymentOptionActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryMuted,
-  },
-  paymentOptionInfo: {
-    flex: 1,
-  },
-  paymentOptionTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  paymentOptionTitleActive: {
-    color: colors.primary,
-  },
-  paymentOptionDesc: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  footer: {
-    padding: spacing.xxl,
-  },
-  buyButton: {
-    borderRadius: borderRadius.md,
-    overflow: 'hidden',
-  },
-  buyButtonDisabled: {
-    opacity: 0.5,
-  },
-  buyButtonGradient: {
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-  },
-  buyButtonText: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.white,
-  },
-  confirmContent: {
-    flex: 1,
-    paddingHorizontal: spacing.xxl,
-  },
-  confirmCard: {
-    backgroundColor: colors.surface,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
-    padding: spacing.xxl,
-    alignItems: 'center',
-    marginBottom: spacing.md,
   },
-  confirmLabel: {
+  quoteTitle: {
     fontSize: fontSize.sm,
+    fontWeight: '700',
     color: colors.textSecondary,
     marginBottom: spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  confirmAmount: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  breakdownCard: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginBottom: spacing.md,
-  },
-  breakdownRow: {
+  quoteRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.sm,
   },
-  breakdownRowTotal: {
-    borderTopWidth: 1,
-    borderTopColor: colors.surfaceBorder,
-    marginTop: spacing.sm,
-    paddingTop: spacing.md,
-  },
-  breakdownLabel: {
+  quoteLabel: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: colors.textMuted,
+    fontWeight: '600',
   },
-  breakdownValue: {
+  quoteValue: {
     fontSize: fontSize.sm,
-    fontWeight: '600',
     color: colors.textPrimary,
-  },
-  breakdownTotalLabel: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  breakdownTotalValue: {
-    fontSize: fontSize.md,
     fontWeight: '700',
-    color: colors.textPrimary,
   },
-  mockNotice: {
+  statusCard: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.warningMuted,
-    borderWidth: 1,
-    borderColor: colors.warning,
+    backgroundColor: colors.surfaceLight,
     borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginTop: spacing.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
   },
-  mockNoticeText: {
-    flex: 1,
+  statusError: { backgroundColor: colors.errorMuted },
+  statusText: {
     fontSize: fontSize.sm,
-    color: colors.warning,
-    lineHeight: 18,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    flex: 1,
   },
+  statusTextError: { color: colors.error },
+  footer: { padding: spacing.xxl },
+  buyButton: {
+    backgroundColor: colors.success,
+    paddingVertical: spacing.lg,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  buyButtonDisabled: {
+    backgroundColor: colors.surfaceBorder,
+    opacity: 0.6,
+  },
+  buyButtonText: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.white,
+    letterSpacing: 0.5,
+  },
+  // Done state
   doneContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.xxl,
+    gap: spacing.lg,
   },
   doneIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: colors.successMuted,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: spacing.xxl,
-  },
-  doneIconText: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.success,
   },
   doneTitle: {
     fontSize: fontSize.xl,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.textPrimary,
-    marginBottom: spacing.sm,
   },
   doneSubtitle: {
     fontSize: fontSize.md,
     color: colors.textSecondary,
     textAlign: 'center',
-    marginBottom: spacing.xxl,
   },
-  doneDetails: {
+  txCard: {
     width: '100%',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surfaceLight,
     borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
+    padding: spacing.md,
   },
-  doneRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-  },
-  doneLabel: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-  },
-  doneValue: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  statusBadge: {
-    backgroundColor: colors.warningMuted,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  statusText: {
+  txLabel: {
     fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  txHash: {
+    fontSize: fontSize.xs,
+    color: colors.primary,
     fontWeight: '700',
-    color: colors.warning,
+    fontFamily: 'SpaceMono-Regular',
   },
   doneButton: {
     width: '100%',

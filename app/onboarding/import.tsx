@@ -81,7 +81,7 @@ export default function ImportWallet() {
         <View style={styles.centeredContent}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.importingText}>Importing Wallet...</Text>
-          <Text style={styles.importingSubtext}>Deriving multi-chain accounts from recovery phrase</Text>
+          <Text style={styles.importingSubtext}>Deriving your Solana account from recovery phrase</Text>
         </View>
       </LinearGradient>
     );
@@ -101,13 +101,13 @@ export default function ImportWallet() {
 
           <Text style={styles.title}>Wallet Imported Successfully</Text>
           <Text style={styles.subtitle}>
-            Your multi-chain wallet has been restored with {importedAddresses.length} network{importedAddresses.length > 1 ? 's' : ''}
+            Your Solana wallet has been restored with {importedAddresses.length} network{importedAddresses.length > 1 ? 's' : ''}
           </Text>
 
           <View style={styles.walletInfoCard}>
-            <Text style={styles.walletInfoTitle}>Multi-Chain Wallet</Text>
+            <Text style={styles.walletInfoTitle}>Solana Wallet</Text>
             <Text style={styles.walletInfoDesc}>
-              One recovery phrase controls all your accounts across different blockchains
+              Your recovery phrase is the only key to your Solana wallet. Keep it safe.
             </Text>
           </View>
 
@@ -167,7 +167,7 @@ export default function ImportWallet() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.title}>Import Multi-Chain Wallet</Text>
+          <Text style={styles.title}>Import Solana Wallet</Text>
           <Text style={styles.subtitle}>
             Enter your recovery phrase to restore access to all your accounts
           </Text>
