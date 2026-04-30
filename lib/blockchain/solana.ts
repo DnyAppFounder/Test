@@ -11,6 +11,7 @@ import {
 } from '@solana/web3.js';
 import * as nacl from 'tweetnacl';
 import { KeyDerivationManager } from '../crypto/keyDerivation';
+import { SolanaConnectionService } from '@/services/solana/connectionService';
 
 export interface SolanaWallet {
   publicKey: string;
@@ -35,20 +36,7 @@ export class SolanaBlockchain {
 
   constructor(network: 'mainnet-beta' | 'devnet' | 'testnet' = 'mainnet-beta') {
     this.network = network;
-    this.connection = this.createConnection();
-  }
-
-  private createConnection(): Connection {
-    const endpoints = {
-      'mainnet-beta': 'https://api.mainnet-beta.solana.com',
-      devnet: 'https://api.devnet.solana.com',
-      testnet: 'https://api.testnet.solana.com',
-    };
-
-    return new Connection(endpoints[this.network], {
-      commitment: 'confirmed',
-      confirmTransactionInitialTimeout: 60000,
-    });
+    this.connection = SolanaConnectionService.getInstance().getConnection();
   }
 
   async getWallet(mnemonic: string, accountIndex: number = 0): Promise<SolanaWallet> {

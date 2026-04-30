@@ -1,15 +1,19 @@
 import { Connection } from '@solana/web3.js';
 
-const RPC_ENDPOINTS = [
-  'https://api.mainnet-beta.solana.com',
-  'https://solana-mainnet.g.alchemy.com/v2/demo',
-];
-
 function getRpcUrl(): string {
   if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SOLANA_RPC_URL) {
     return process.env.EXPO_PUBLIC_SOLANA_RPC_URL;
   }
-  return RPC_ENDPOINTS[0];
+
+  const supabaseUrl = typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
+    : undefined;
+
+  if (supabaseUrl) {
+    return `${supabaseUrl}/functions/v1/solana-rpc`;
+  }
+
+  return 'https://api.mainnet-beta.solana.com';
 }
 
 export class SolanaConnectionService {

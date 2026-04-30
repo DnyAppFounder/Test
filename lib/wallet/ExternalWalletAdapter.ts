@@ -9,8 +9,9 @@
  */
 
 import { Platform } from 'react-native';
-import { Connection, PublicKey, Transaction, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, Transaction, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SolanaConnectionService } from '@/services/solana/connectionService';
 
 export interface ExternalWalletInfo {
   id: ExternalWalletId;
@@ -74,7 +75,9 @@ interface SolanaProvider {
 }
 
 export class ExternalWalletAdapter {
-  private static connection = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+  private static getConnection() {
+    return SolanaConnectionService.getInstance().getConnection();
+  }
 
   static getSupportedWallets(): ExternalWalletInfo[] {
     return SUPPORTED_WALLETS;
@@ -206,7 +209,7 @@ export class ExternalWalletAdapter {
   static async getBalance(address: string): Promise<number> {
     try {
       const pubkey = new PublicKey(address);
-      const lamports = await this.connection.getBalance(pubkey);
+      const lamports = await this.getConnection().getBalance(pubkey);
       return lamports / LAMPORTS_PER_SOL;
     } catch {
       return 0;

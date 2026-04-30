@@ -1,4 +1,5 @@
-import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { SolanaConnectionService } from '../solana/connectionService';
 
 const JUPITER_QUOTE_API = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP_API = 'https://quote-api.jup.ag/v6/swap';
@@ -34,13 +35,8 @@ export interface TokenPrice {
 }
 
 class JupiterSwapService {
-  private connection: Connection;
-
-  constructor() {
-    this.connection = new Connection(
-      'https://api.mainnet-beta.solana.com',
-      'confirmed'
-    );
+  private get connection() {
+    return SolanaConnectionService.getInstance().getConnection();
   }
 
   async getQuote(
