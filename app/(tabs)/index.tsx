@@ -110,7 +110,9 @@ export default function WalletHome() {
 
     setAssetsLoading(true);
     try {
+      console.log('[MyAssets] Loading wallet assets for:', address);
       const result = await walletAssetLoader.loadWalletAssets('solana', address);
+      console.log('[MyAssets] Assets loaded:', result.assets.length, '| Total value:', result.totalValue, '| Error:', result.error || 'none');
       setWalletAssets(result.assets);
       setTotalBalance(result.totalValue);
 
@@ -144,9 +146,12 @@ export default function WalletHome() {
     }
     setNftsLoading(true);
     try {
+      console.log('[NFT] Fetching NFTs for:', address);
       const result = await NFTService.getUserNFTs(address);
+      console.log('[NFT] NFT fetch result:', result.length, 'items');
       setNfts(result);
-    } catch {
+    } catch (err) {
+      console.error('[NFT] Balance fetch error:', err);
       setNfts([]);
     } finally {
       setNftsLoading(false);
@@ -650,13 +655,18 @@ export default function WalletHome() {
                       onPress={() => router.push('/nft-gallery' as any)}
                       activeOpacity={0.85}
                     >
-                      <Image
-                        source={{ uri: nft.image_url }}
-                        style={styles.nftImage}
-                        defaultSource={undefined}
-                      />
+                      {nft.image_url ? (
+                        <Image
+                          source={{ uri: nft.image_url }}
+                          style={styles.nftImage}
+                        />
+                      ) : (
+                        <View style={[styles.nftImage, { backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' }]}>
+                          <Text style={{ color: colors.textMuted, fontSize: 12 }}>No Image</Text>
+                        </View>
+                      )}
                       <View style={styles.nftInfo}>
-                        <Text style={styles.nftName} numberOfLines={1}>{nft.name}</Text>
+                        <Text style={styles.nftName} numberOfLines={1}>{nft.name || 'Unknown NFT'}</Text>
                         {nft.rarity_rank != null && (
                           <Text style={styles.nftRank}>#{nft.rarity_rank}</Text>
                         )}
