@@ -19,17 +19,14 @@ import {
   Send,
   X,
   User,
-  Clock,
   ImagePlus,
-  Megaphone,
   MessageCircle,
   Check,
   CircleAlert,
   Wallet,
   Bell,
-  Heart,
-  UserPlus,
   Mail,
+  Clock,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
@@ -85,21 +82,16 @@ export default function CommunityScreen() {
     setPosts(feedData);
   }, [profile?.id]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
-    if (profile?.id) {
-      SocialService.getFeed(profile.id).then(setPosts);
-    }
+    if (profile?.id) SocialService.getFeed(profile.id).then(setPosts);
   }, [profile?.id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     if (profile?.id) {
-      const feedData = await SocialService.getFeed(profile.id);
-      setPosts(feedData);
+      setPosts(await SocialService.getFeed(profile.id));
     } else {
       await loadData();
     }
@@ -174,8 +166,7 @@ export default function CommunityScreen() {
     setSelectedPostId(postId);
     setShowCommentsModal(true);
     setCommentsLoading(true);
-    const data = await SocialService.getComments(postId);
-    setComments(data);
+    setComments(await SocialService.getComments(postId));
     setCommentsLoading(false);
   };
 
@@ -184,8 +175,7 @@ export default function CommunityScreen() {
     setSubmittingComment(true);
     await SocialService.addComment(selectedPostId, profile.id, newCommentContent.trim());
     setNewCommentContent('');
-    const data = await SocialService.getComments(selectedPostId);
-    setComments(data);
+    setComments(await SocialService.getComments(selectedPostId));
     setSubmittingComment(false);
     await loadFeed();
   };
@@ -197,34 +187,21 @@ export default function CommunityScreen() {
     setNewCommentContent('');
   };
 
-  const selectedPost = posts.find((p) => p.id === selectedPostId);
+  const selectedPost = posts.find(p => p.id === selectedPostId);
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
-  const renderTopTabs = () => (
-    <View style={styles.topTabs}>
-      {([
-        { key: 'feed', label: 'Feed' },
-        { key: 'profile', label: 'Profile' },
-        { key: 'messages', label: 'Messages' },
-        { key: 'notifications', label: 'Notifications' },
-      ] as { key: TopTab; label: string }[]).map(tab => (
-        <TouchableOpacity
-          key={tab.key}
-          style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
-          onPress={() => setActiveTab(tab.key)}
-        >
-          <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
-            {tab.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
+  // Top tabs
+  const TOP_TABS: { key: TopTab; label: string }[] = [
+    { key: 'feed', label: 'Feed' },
+    { key: 'profile', label: 'Profile' },
+    { key: 'messages', label: 'Messages' },
+    { key: 'notifications', label: 'Notifications' },
+  ];
 
   const renderFeedTab = () => {
     if (loading) {
       return (
-        <View style={styles.loadingContainer}>
+        <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       );
@@ -233,10 +210,10 @@ export default function CommunityScreen() {
     return (
       <FlatList
         data={posts}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item: post }) => (
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
           <PostCard
-            post={post}
+            post={item}
             currentProfile={profile}
             onLike={handleLike}
             onComment={openCommentsModal}
@@ -246,17 +223,17 @@ export default function CommunityScreen() {
         )}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <View style={styles.emptyIconWrapper}>
-              <MessageCircle size={48} color={colors.primary} strokeWidth={1.5} />
+            <View style={styles.emptyIconWrap}>
+              <MessageCircle size={44} color={colors.primary} strokeWidth={1.5} />
             </View>
             <Text style={styles.emptyTitle}>No posts yet</Text>
             <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
-            <TouchableOpacity style={styles.emptyButton} onPress={() => setShowCreateModal(true)}>
-              <Text style={styles.emptyButtonText}>Create First Post</Text>
+            <TouchableOpacity style={styles.emptyBtn} onPress={() => setShowCreateModal(true)}>
+              <Text style={styles.emptyBtnText}>Create First Post</Text>
             </TouchableOpacity>
           </View>
         }
-        contentContainerStyle={posts.length === 0 ? styles.emptyListContainer : styles.feedContainer}
+        contentContainerStyle={posts.length === 0 ? styles.emptyList : styles.feedList}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       />
@@ -267,97 +244,33 @@ export default function CommunityScreen() {
     if (!profile) {
       return (
         <View style={styles.emptyState}>
-          <View style={styles.emptyIconWrapper}>
-            <User size={48} color={colors.primary} strokeWidth={1.5} />
+          <View style={styles.emptyIconWrap}>
+            <User size={44} color={colors.primary} strokeWidth={1.5} />
           </View>
           <Text style={styles.emptyTitle}>No Profile</Text>
           <Text style={styles.emptySubtitle}>Connect a wallet to create your profile</Text>
         </View>
       );
     }
-
-    const userPosts = posts.filter(p => p.author?.id === profile.id);
-
-    return (
-      <ScrollView
-        style={styles.profileContainer}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-      >
-        <View style={styles.profileCard}>
-          <View style={styles.profileAvatarContainer}>
-            {profile.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.profileAvatar} />
-            ) : (
-              <View style={styles.profileAvatarPlaceholder}>
-                <User size={32} color={colors.textMuted} />
-              </View>
-            )}
-          </View>
-          <Text style={styles.profileUsername}>
-            {profile.username || walletAddress.slice(0, 8) + '...'}
-          </Text>
-          <Text style={styles.profileWallet}>
-            {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-          </Text>
-          {profile.bio ? (
-            <Text style={styles.profileBio}>{profile.bio}</Text>
-          ) : null}
-          <View style={styles.profileStats}>
-            <View style={styles.profileStatItem}>
-              <Text style={styles.profileStatValue}>0</Text>
-              <Text style={styles.profileStatLabel}>Followers</Text>
-            </View>
-            <View style={styles.profileStatDivider} />
-            <View style={styles.profileStatItem}>
-              <Text style={styles.profileStatValue}>0</Text>
-              <Text style={styles.profileStatLabel}>Following</Text>
-            </View>
-            <View style={styles.profileStatDivider} />
-            <View style={styles.profileStatItem}>
-              <Text style={styles.profileStatValue}>{userPosts.length}</Text>
-              <Text style={styles.profileStatLabel}>Posts</Text>
-            </View>
-          </View>
-        </View>
-
-        <Text style={styles.sectionTitle}>Your Posts</Text>
-        {userPosts.length === 0 ? (
-          <View style={styles.emptySection}>
-            <Text style={styles.emptySectionText}>No posts yet</Text>
-          </View>
-        ) : (
-          userPosts.map(post => (
-            <PostCard
-              key={post.id}
-              post={post}
-              currentProfile={profile}
-              onLike={handleLike}
-              onComment={openCommentsModal}
-              onRepost={handleRepost}
-              onPromote={openPromoteModal}
-            />
-          ))
-        )}
-        <View style={styles.bottomSpacer} />
-      </ScrollView>
-    );
+    // Navigate to the profile page
+    router.push(`/profile/${profile.id}`);
+    return null;
   };
 
   const renderMessagesTab = () => (
     <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrapper}>
-        <Mail size={48} color={colors.primary} strokeWidth={1.5} />
+      <View style={styles.emptyIconWrap}>
+        <Mail size={44} color={colors.primary} strokeWidth={1.5} />
       </View>
       <Text style={styles.emptyTitle}>No messages yet</Text>
-      <Text style={styles.emptySubtitle}>Start a conversation with other traders in the community</Text>
+      <Text style={styles.emptySubtitle}>Start a conversation with other traders</Text>
     </View>
   );
 
   const renderNotificationsTab = () => (
     <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrapper}>
-        <Bell size={48} color={colors.primary} strokeWidth={1.5} />
+      <View style={styles.emptyIconWrap}>
+        <Bell size={44} color={colors.primary} strokeWidth={1.5} />
       </View>
       <Text style={styles.emptyTitle}>No notifications yet</Text>
       <Text style={styles.emptySubtitle}>Likes, comments, and follows will appear here</Text>
@@ -374,23 +287,46 @@ export default function CommunityScreen() {
   };
 
   return (
-    <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+    <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.headerTitle}>Dawen Pulse</Text>
-            <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
-          </View>
-          {activeTab === 'feed' && (
-            <TouchableOpacity style={styles.createButton} onPress={() => setShowCreateModal(true)}>
-              <Send size={18} color={colors.white} strokeWidth={2.5} />
-            </TouchableOpacity>
-          )}
+        <View>
+          <Text style={styles.headerTitle}>Dawen Pulse</Text>
+          <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
         </View>
+        {activeTab === 'feed' && (
+          <TouchableOpacity style={styles.composeBtn} onPress={() => setShowCreateModal(true)} activeOpacity={0.85}>
+            <Send size={20} color={colors.white} strokeWidth={2.5} />
+          </TouchableOpacity>
+        )}
       </View>
 
-      {renderTopTabs()}
-      {renderActiveTab()}
+      {/* Top tabs */}
+      <View style={styles.topTabs}>
+        {TOP_TABS.map(tab => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
+            onPress={() => {
+              if (tab.key === 'profile' && profile) {
+                router.push(`/profile/${profile.id}`);
+                return;
+              }
+              setActiveTab(tab.key);
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Tab content */}
+      <View style={styles.tabContent}>
+        {renderActiveTab()}
+      </View>
 
       {/* Create Post Modal */}
       <Modal visible={showCreateModal} animationType="slide" transparent>
@@ -398,30 +334,30 @@ export default function CommunityScreen() {
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={styles.modalContent}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t.community.createPost}</Text>
+              <Text style={styles.modalTitle}>New Post</Text>
               <TouchableOpacity onPress={() => { setShowCreateModal(false); setNewPostContent(''); setNewPostImageUrl(''); }}>
-                <X size={24} color={colors.textPrimary} />
+                <X size={22} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.createPostAuthor}>
-              <View style={styles.createPostAvatar}>
-                {profile?.avatar_url ? (
-                  <Image source={{ uri: profile.avatar_url }} style={styles.createPostAvatarImage} />
-                ) : (
-                  <User size={18} color={colors.textMuted} />
-                )}
+            <View style={styles.createAuthorRow}>
+              <View style={styles.createAvatar}>
+                {profile?.avatar_url
+                  ? <Image source={{ uri: profile.avatar_url }} style={styles.createAvatarImg} />
+                  : <User size={18} color={colors.textMuted} />
+                }
               </View>
-              <Text style={styles.createPostName}>
+              <Text style={styles.createAuthorName}>
                 {profile?.username || walletAddress.slice(0, 8) + '...'}
               </Text>
             </View>
 
             <TextInput
               style={styles.postInput}
-              placeholder={t.community.whatsOnYourMind}
+              placeholder="What's on your mind?"
               placeholderTextColor={colors.textMuted}
               value={newPostContent}
               onChangeText={setNewPostContent}
@@ -431,7 +367,7 @@ export default function CommunityScreen() {
             />
 
             <View style={styles.imageUrlRow}>
-              <ImagePlus size={18} color={colors.textMuted} />
+              <ImagePlus size={16} color={colors.textMuted} />
               <TextInput
                 style={styles.imageUrlInput}
                 placeholder="Paste image URL (optional)"
@@ -444,25 +380,20 @@ export default function CommunityScreen() {
             </View>
 
             {newPostImageUrl.trim() ? (
-              <Image
-                source={{ uri: newPostImageUrl.trim() }}
-                style={styles.imagePreview}
-                resizeMode="cover"
-              />
+              <Image source={{ uri: newPostImageUrl.trim() }} style={styles.imagePreview} resizeMode="cover" />
             ) : null}
 
-            <View style={styles.createPostFooter}>
+            <View style={styles.modalFooter}>
               <Text style={styles.charCount}>{newPostContent.length}/500</Text>
               <TouchableOpacity
-                style={[styles.submitButton, !newPostContent.trim() && styles.submitButtonDisabled]}
+                style={[styles.postBtn, !newPostContent.trim() && styles.postBtnDisabled]}
                 onPress={handleCreatePost}
                 disabled={!newPostContent.trim() || posting}
               >
-                {posting ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.submitButtonText}>{t.community.post}</Text>
-                )}
+                {posting
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <Text style={styles.postBtnText}>Post</Text>
+                }
               </TouchableOpacity>
             </View>
           </View>
@@ -475,67 +406,49 @@ export default function CommunityScreen() {
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={styles.commentsModalContent}>
+          <View style={[styles.modalSheet, { maxHeight: '90%' }]}>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t.community.comments}</Text>
+              <Text style={styles.modalTitle}>Comments</Text>
               <TouchableOpacity onPress={closeCommentsModal}>
-                <X size={24} color={colors.textPrimary} />
+                <X size={22} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.commentsScrollContainer} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
               {selectedPost && (
-                <TouchableOpacity
-                  style={styles.commentPostPreview}
-                  onPress={() => {
-                    closeCommentsModal();
-                    if (selectedPost.author?.id) router.push(`/profile/${selectedPost.author.id}`);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.commentPostPreviewHeader}>
-                    <View style={styles.avatarSmall}>
-                      {selectedPost.author?.avatar_url ? (
-                        <Image source={{ uri: selectedPost.author.avatar_url }} style={styles.avatarSmallImage} />
-                      ) : (
-                        <User size={14} color={colors.textMuted} />
-                      )}
+                <View style={styles.commentPostPreview}>
+                  <View style={styles.commentPreviewHeader}>
+                    <View style={styles.avatarXS}>
+                      {selectedPost.author?.avatar_url
+                        ? <Image source={{ uri: selectedPost.author.avatar_url }} style={styles.avatarXSImg} />
+                        : <User size={12} color={colors.textMuted} />
+                      }
                     </View>
-                    <Text style={styles.commentPostPreviewAuthor}>
+                    <Text style={styles.commentPreviewAuthor}>
                       {selectedPost.author?.username || `${selectedPost.author?.wallet_address?.slice(0, 6)}...`}
                     </Text>
-                    <Text style={styles.commentPostPreviewTime}>{timeAgo(selectedPost.created_at)}</Text>
+                    <Text style={styles.commentPreviewTime}>{timeAgo(selectedPost.created_at)}</Text>
                   </View>
-                  <Text style={styles.commentPostPreviewContent} numberOfLines={3}>
-                    {selectedPost.content}
-                  </Text>
-                </TouchableOpacity>
+                  <Text style={styles.commentPreviewText} numberOfLines={3}>{selectedPost.content}</Text>
+                </View>
               )}
 
               {commentsLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={styles.commentsLoading} />
+                <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
               ) : comments.length === 0 ? (
                 <View style={styles.noComments}>
                   <Text style={styles.noCommentsText}>No comments yet</Text>
                 </View>
               ) : (
-                <View style={styles.commentsList}>
-                  {comments.map((item) => (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={styles.commentItem}
-                      onPress={() => {
-                        closeCommentsModal();
-                        if (item.author?.id) router.push(`/profile/${item.author.id}`);
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.avatarSmall}>
-                        {item.author?.avatar_url ? (
-                          <Image source={{ uri: item.author.avatar_url }} style={styles.avatarSmallImage} />
-                        ) : (
-                          <User size={14} color={colors.textMuted} />
-                        )}
+                <View style={{ paddingBottom: spacing.lg }}>
+                  {comments.map(item => (
+                    <View key={item.id} style={styles.commentItem}>
+                      <View style={styles.avatarXS}>
+                        {item.author?.avatar_url
+                          ? <Image source={{ uri: item.author.avatar_url }} style={styles.avatarXSImg} />
+                          : <User size={12} color={colors.textMuted} />
+                        }
                       </View>
                       <View style={styles.commentBody}>
                         <View style={styles.commentMeta}>
@@ -544,9 +457,9 @@ export default function CommunityScreen() {
                           </Text>
                           <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
                         </View>
-                        <Text style={styles.commentContent}>{item.content}</Text>
+                        <Text style={styles.commentText}>{item.content}</Text>
                       </View>
-                    </TouchableOpacity>
+                    </View>
                   ))}
                 </View>
               )}
@@ -555,22 +468,21 @@ export default function CommunityScreen() {
             <View style={styles.commentInputRow}>
               <TextInput
                 style={styles.commentInput}
-                placeholder={t.community.addComment}
+                placeholder="Add a comment..."
                 placeholderTextColor={colors.textMuted}
                 value={newCommentContent}
                 onChangeText={setNewCommentContent}
                 maxLength={300}
               />
               <TouchableOpacity
-                style={[styles.commentSendButton, !newCommentContent.trim() && styles.commentSendButtonDisabled]}
+                style={[styles.commentSendBtn, !newCommentContent.trim() && styles.commentSendBtnDisabled]}
                 onPress={handleAddComment}
                 disabled={!newCommentContent.trim() || submittingComment}
               >
-                {submittingComment ? (
-                  <ActivityIndicator size="small" color={colors.white} />
-                ) : (
-                  <Send size={16} color={colors.white} />
-                )}
+                {submittingComment
+                  ? <ActivityIndicator size="small" color={colors.white} />
+                  : <Send size={15} color={colors.white} />
+                }
               </TouchableOpacity>
             </View>
           </View>
@@ -580,36 +492,34 @@ export default function CommunityScreen() {
       {/* Promote Modal */}
       <Modal visible={showPromoteModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+
             {promoteStep === 'select' && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>{t.community.promotePost}</Text>
+                  <Text style={styles.modalTitle}>Promote Post</Text>
                   <TouchableOpacity onPress={closePromoteModal}>
-                    <X size={24} color={colors.textPrimary} />
+                    <X size={22} color={colors.textPrimary} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.promoteDescription}>
+                <Text style={styles.promoteDesc}>
                   Boost your post to reach more users. Promoted posts appear at the top of the feed.
                 </Text>
-                {PROMOTE_TIERS.map((tier) => (
-                  <TouchableOpacity
-                    key={tier.key}
-                    style={styles.promoteTierCard}
-                    onPress={() => handleSelectTier(tier.key)}
-                  >
-                    <View style={styles.promoteTierInfo}>
-                      <View style={styles.promoteTierIconWrap}>
-                        <Clock size={18} color={colors.primary} />
+                {PROMOTE_TIERS.map(tier => (
+                  <TouchableOpacity key={tier.key} style={styles.tierCard} onPress={() => handleSelectTier(tier.key)}>
+                    <View style={styles.tierInfo}>
+                      <View style={styles.tierIcon}>
+                        <Clock size={16} color={colors.primary} />
                       </View>
                       <View>
-                        <Text style={styles.promoteTierLabel}>{tier.label}</Text>
-                        <Text style={styles.promoteTierSub}>{tier.hours}h visibility boost</Text>
+                        <Text style={styles.tierLabel}>{tier.label}</Text>
+                        <Text style={styles.tierSub}>{tier.hours}h visibility boost</Text>
                       </View>
                     </View>
-                    <View style={styles.promoteTierPriceWrap}>
-                      <Text style={styles.promoteTierPrice}>${tier.price}</Text>
-                      <Text style={styles.promoteTierCurrency}>USD</Text>
+                    <View>
+                      <Text style={styles.tierPrice}>${tier.price}</Text>
+                      <Text style={styles.tierCurrency}>USD</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -621,10 +531,9 @@ export default function CommunityScreen() {
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Confirm Promotion</Text>
                   <TouchableOpacity onPress={() => setPromoteStep('select')}>
-                    <X size={24} color={colors.textPrimary} />
+                    <X size={22} color={colors.textPrimary} />
                   </TouchableOpacity>
                 </View>
-
                 <View style={styles.confirmCard}>
                   <View style={styles.confirmRow}>
                     <Text style={styles.confirmLabel}>Duration</Text>
@@ -638,24 +547,21 @@ export default function CommunityScreen() {
                   <View style={styles.confirmDivider} />
                   <View style={styles.confirmRow}>
                     <Text style={styles.confirmLabel}>Payment</Text>
-                    <View style={styles.confirmPaymentBadge}>
-                      <Wallet size={14} color={colors.primary} />
-                      <Text style={styles.confirmPaymentText}>Wallet</Text>
+                    <View style={styles.paymentBadge}>
+                      <Wallet size={13} color={colors.primary} />
+                      <Text style={styles.paymentBadgeText}>Wallet</Text>
                     </View>
                   </View>
                 </View>
-
                 <View style={styles.mockNotice}>
-                  <CircleAlert size={16} color={colors.warning} />
+                  <CircleAlert size={14} color={colors.warning} />
                   <Text style={styles.mockNoticeText}>
-                    SIMULATED: Payment deduction is mocked. In production, this would charge your connected wallet.
+                    SIMULATED: Payment is mocked for demo. In production this charges your connected wallet.
                   </Text>
                 </View>
-
-                <TouchableOpacity style={styles.confirmButton} onPress={handleConfirmPromotion}>
-                  <Text style={styles.confirmButtonText}>Pay ${selectedTier.price} & Promote</Text>
+                <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirmPromotion}>
+                  <Text style={styles.confirmBtnText}>Pay ${selectedTier.price} & Promote</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity style={styles.cancelLink} onPress={() => setPromoteStep('select')}>
                   <Text style={styles.cancelLinkText}>Go back</Text>
                 </TouchableOpacity>
@@ -663,64 +569,64 @@ export default function CommunityScreen() {
             )}
 
             {promoteStep === 'processing' && (
-              <View style={styles.processingContainer}>
+              <View style={styles.processingWrap}>
                 <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.processingText}>Processing payment...</Text>
-                <Text style={styles.processingSubtext}>Activating promotion</Text>
+                <Text style={styles.processingTitle}>Processing...</Text>
+                <Text style={styles.processingSubtitle}>Activating promotion</Text>
               </View>
             )}
 
             {promoteStep === 'done' && (
-              <View style={styles.processingContainer}>
+              <View style={styles.processingWrap}>
                 <View style={styles.doneIcon}>
-                  <Check size={32} color={colors.success} />
+                  <Check size={30} color={colors.success} />
                 </View>
-                <Text style={styles.processingText}>Promotion Active</Text>
-                <Text style={styles.processingSubtext}>
-                  Your post will appear at the top of the feed for {selectedTier?.label}
+                <Text style={styles.processingTitle}>Promotion Active</Text>
+                <Text style={styles.processingSubtitle}>
+                  Your post appears at the top for {selectedTier?.label}
                 </Text>
-                <TouchableOpacity style={styles.doneButton} onPress={closePromoteModal}>
-                  <Text style={styles.doneButtonText}>Done</Text>
+                <TouchableOpacity style={styles.doneBtn} onPress={closePromoteModal}>
+                  <Text style={styles.doneBtnText}>Done</Text>
                 </TouchableOpacity>
               </View>
             )}
           </View>
         </View>
       </Modal>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0A0A0F',
   },
   header: {
-    paddingTop: 56,
-    paddingBottom: spacing.lg,
-    paddingHorizontal: spacing.xxl,
-  },
-  headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: spacing.xxl,
+    paddingTop: 56,
+    paddingBottom: spacing.lg,
+    backgroundColor: '#0A0A0F',
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: '900',
     color: colors.textPrimary,
     letterSpacing: -0.5,
-    marginBottom: 4,
+    marginBottom: 3,
   },
   headerSubtitle: {
     fontSize: fontSize.sm,
-    fontWeight: '600',
+    fontWeight: '500',
     color: colors.textSecondary,
   },
-  createButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  composeBtn: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
@@ -729,39 +635,43 @@ const styles = StyleSheet.create({
   topTabs: {
     flexDirection: 'row',
     paddingHorizontal: spacing.lg,
-    marginBottom: spacing.md,
+    paddingBottom: spacing.md,
     gap: spacing.xs,
+    backgroundColor: '#0A0A0F',
   },
   topTab: {
     flex: 1,
-    paddingVertical: spacing.sm,
+    paddingVertical: 9,
     alignItems: 'center',
     borderRadius: borderRadius.md,
-    backgroundColor: colors.surface,
+    backgroundColor: '#12121A',
   },
   topTabActive: {
     backgroundColor: colors.primary,
   },
   topTabText: {
-    fontSize: fontSize.xs,
+    fontSize: 12,
     fontWeight: '700',
     color: colors.textMuted,
   },
   topTabTextActive: {
     color: colors.white,
   },
-  loadingContainer: {
+  tabContent: {
+    flex: 1,
+  },
+  centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  feedContainer: {
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xxxl,
+  feedList: {
+    paddingTop: spacing.xs,
+    paddingBottom: 100,
   },
-  emptyListContainer: {
+  emptyList: {
     flexGrow: 1,
-    paddingBottom: spacing.xxxl,
+    paddingBottom: 100,
   },
   emptyState: {
     flex: 1,
@@ -771,10 +681,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxl,
     gap: spacing.md,
   },
-  emptyIconWrapper: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+  emptyIconWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     backgroundColor: colors.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
@@ -784,141 +694,46 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
     fontWeight: '800',
     color: colors.textPrimary,
-    textAlign: 'center',
   },
   emptySubtitle: {
     fontSize: fontSize.md,
     color: colors.textMuted,
     textAlign: 'center',
-    maxWidth: 280,
+    maxWidth: 260,
     lineHeight: 22,
   },
-  emptyButton: {
+  emptyBtn: {
     backgroundColor: colors.primary,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxxl,
     borderRadius: borderRadius.full,
     marginTop: spacing.md,
-    ...elevation.md,
   },
-  emptyButtonText: {
+  emptyBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
   },
-  // Profile tab
-  profileContainer: {
-    flex: 1,
-    paddingHorizontal: spacing.lg,
-  },
-  profileCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.xl,
-    padding: spacing.xxl,
-    alignItems: 'center',
-    marginTop: spacing.md,
-    ...elevation.md,
-  },
-  profileAvatarContainer: {
-    marginBottom: spacing.lg,
-  },
-  profileAvatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-  },
-  profileAvatarPlaceholder: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.surfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileUsername: {
-    fontSize: fontSize.xl,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    marginBottom: spacing.xs,
-  },
-  profileWallet: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    marginBottom: spacing.md,
-  },
-  profileBio: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: spacing.lg,
-  },
-  profileStats: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
-  },
-  profileStatItem: {
-    alignItems: 'center',
-  },
-  profileStatValue: {
-    fontSize: fontSize.lg,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  profileStatLabel: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  profileStatDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: colors.surfaceBorder,
-  },
-  sectionTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginTop: spacing.xl,
-    marginBottom: spacing.md,
-  },
-  emptySection: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.xxl,
-    alignItems: 'center',
-  },
-  emptySectionText: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-  },
-  bottomSpacer: {
-    height: 100,
-  },
-  // Modals
+  // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
+  modalSheet: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: spacing.xxl,
     maxHeight: '85%',
   },
-  commentsModalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
-    padding: spacing.xxl,
-    maxHeight: '90%',
-  },
-  commentsScrollContainer: {
-    flex: 1,
-    marginBottom: spacing.md,
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#2A2A3A',
+    alignSelf: 'center',
+    marginBottom: spacing.lg,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -931,27 +746,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  createPostAuthor: {
+  createAuthorRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
-  createPostAvatar: {
+  createAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1E1E2E',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
   },
-  createPostAvatarImage: {
+  createAvatarImg: {
     width: 36,
     height: 36,
     borderRadius: 18,
   },
-  createPostName: {
+  createAuthorName: {
     fontSize: fontSize.md,
     fontWeight: '600',
     color: colors.textPrimary,
@@ -971,7 +786,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
@@ -987,11 +802,11 @@ const styles = StyleSheet.create({
   },
   imagePreview: {
     width: '100%',
-    height: 160,
+    height: 150,
     borderRadius: borderRadius.md,
     marginBottom: spacing.md,
   },
-  createPostFooter: {
+  modalFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1000,53 +815,50 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.textMuted,
   },
-  submitButton: {
+  postBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxl,
     borderRadius: borderRadius.md,
     alignItems: 'center',
-    minWidth: 100,
+    minWidth: 90,
   },
-  submitButtonDisabled: {
+  postBtnDisabled: {
     opacity: 0.5,
   },
-  submitButtonText: {
+  postBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
   },
+  // Comments
   commentPostPreview: {
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderRadius: borderRadius.md,
     padding: spacing.md,
     marginBottom: spacing.lg,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
   },
-  commentPostPreviewHeader: {
+  commentPreviewHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: spacing.sm,
+    gap: spacing.sm,
   },
-  commentPostPreviewAuthor: {
+  commentPreviewAuthor: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textPrimary,
-    marginLeft: spacing.sm,
   },
-  commentPostPreviewTime: {
+  commentPreviewTime: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
-    marginLeft: spacing.sm,
   },
-  commentPostPreviewContent: {
+  commentPreviewText: {
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     lineHeight: 20,
-  },
-  commentsLoading: {
-    marginTop: spacing.xxl,
   },
   noComments: {
     alignItems: 'center',
@@ -1056,36 +868,33 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textMuted,
   },
-  commentsList: {
-    flex: 1,
-    marginBottom: spacing.md,
-  },
   commentItem: {
     flexDirection: 'row',
     marginBottom: spacing.lg,
+    gap: spacing.md,
   },
-  avatarSmall: {
+  avatarXS: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1E1E2E',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
   },
-  avatarSmallImage: {
+  avatarXSImg: {
     width: 28,
     height: 28,
     borderRadius: 14,
   },
   commentBody: {
     flex: 1,
-    marginLeft: spacing.md,
   },
   commentMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    gap: spacing.sm,
+    marginBottom: 3,
   },
   commentAuthor: {
     fontSize: fontSize.sm,
@@ -1095,9 +904,8 @@ const styles = StyleSheet.create({
   commentTime: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
-    marginLeft: spacing.sm,
   },
-  commentContent: {
+  commentText: {
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     lineHeight: 20,
@@ -1109,18 +917,19 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.surfaceBorder,
     paddingTop: spacing.md,
+    marginTop: spacing.sm,
   },
   commentInput: {
     flex: 1,
     fontSize: fontSize.sm,
     color: colors.textPrimary,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderRadius: borderRadius.full,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
     maxHeight: 80,
   },
-  commentSendButton: {
+  commentSendBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -1128,32 +937,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  commentSendButtonDisabled: {
+  commentSendBtnDisabled: {
     opacity: 0.5,
   },
-  promoteDescription: {
+  // Promote
+  promoteDesc: {
     fontSize: fontSize.md,
     color: colors.textSecondary,
     marginBottom: spacing.xl,
     lineHeight: 22,
   },
-  promoteTierCard: {
+  tierCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
   },
-  promoteTierInfo: {
+  tierInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
   },
-  promoteTierIconWrap: {
+  tierIcon: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -1161,30 +971,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  promoteTierLabel: {
+  tierLabel: {
     fontSize: fontSize.md,
     fontWeight: '600',
     color: colors.textPrimary,
   },
-  promoteTierSub: {
+  tierSub: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginTop: 2,
   },
-  promoteTierPriceWrap: {
-    alignItems: 'flex-end',
-  },
-  promoteTierPrice: {
+  tierPrice: {
     fontSize: fontSize.lg,
     fontWeight: '700',
     color: colors.primary,
+    textAlign: 'right',
   },
-  promoteTierCurrency: {
+  tierCurrency: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
+    textAlign: 'right',
   },
   confirmCard: {
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.lg,
@@ -1209,9 +1018,8 @@ const styles = StyleSheet.create({
   confirmDivider: {
     height: 1,
     backgroundColor: colors.surfaceBorder,
-    marginVertical: spacing.xs,
   },
-  confirmPaymentBadge: {
+  paymentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
@@ -1220,7 +1028,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.full,
   },
-  confirmPaymentText: {
+  paymentBadgeText: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.primary,
@@ -1230,8 +1038,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: spacing.sm,
     backgroundColor: colors.warningMuted,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
     borderRadius: borderRadius.sm,
     padding: spacing.md,
     marginBottom: spacing.lg,
@@ -1242,14 +1048,14 @@ const styles = StyleSheet.create({
     color: colors.warning,
     lineHeight: 16,
   },
-  confirmButton: {
+  confirmBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.lg,
     borderRadius: borderRadius.md,
     alignItems: 'center',
     marginBottom: spacing.md,
   },
-  confirmButtonText: {
+  confirmBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
@@ -1262,37 +1068,37 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textMuted,
   },
-  processingContainer: {
+  processingWrap: {
     alignItems: 'center',
     paddingVertical: spacing.xxxl,
     gap: spacing.md,
   },
-  processingText: {
+  processingTitle: {
     fontSize: fontSize.lg,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  processingSubtext: {
+  processingSubtitle: {
     fontSize: fontSize.md,
     color: colors.textSecondary,
     textAlign: 'center',
   },
   doneIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: colors.successMuted,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  doneButton: {
+  doneBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxxl,
     borderRadius: borderRadius.md,
     marginTop: spacing.lg,
   },
-  doneButtonText: {
+  doneBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,

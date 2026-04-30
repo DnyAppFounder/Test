@@ -13,23 +13,26 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, User, Settings, X, Check } from 'lucide-react-native';
+import { ArrowLeft, MoveHorizontal as MoreHorizontal, Share2, X, Check, Copy, BadgeCheck, User } from 'lucide-react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, UserProfile, Post } from '@/services/socialService';
-import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
+import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard from '@/components/PostCard';
 
-type ProfileTab = 'posts' | 'reposts';
+type ProfileTab = 'posts' | 'replies' | 'media' | 'likes';
+
+// Default banner — a purple Pexels space image
+const DEFAULT_BANNER = 'https://images.pexels.com/photos/956999/milky-way-starry-sky-night-sky-star-956999.jpeg?auto=compress&cs=tinysrgb&w=800';
 
 export default function ProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { selectedAccount, activeAddress } = useWallet();
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [reposts, setReposts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<ProfileTab>('posts');
@@ -37,48 +40,43 @@ export default function ProfileScreen() {
   const [followingCount, setFollowingCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
+  const [copiedAddr, setCopiedAddr] = useState(false);
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [editBannerUrl, setEditBannerUrl] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const walletAddr = (selectedAccount?.address || activeAddress || '');
   const isOwnProfile = currentUserProfile?.id === id;
 
   const loadProfile = useCallback(async () => {
     if (!id) return;
     setLoading(true);
-
-    const [profileData, postsData, repostsData, followers, following] = await Promise.all([
+    const [profileData, postsData, followers, following] = await Promise.all([
       SocialService.getProfile(id),
       SocialService.getUserPosts(id),
-      SocialService.getUserReposts(id),
       SocialService.getFollowerCount(id),
       SocialService.getFollowingCount(id),
     ]);
-
     setProfile(profileData);
     setPosts(postsData);
-    setReposts(repostsData);
     setFollowerCount(followers);
     setFollowingCount(following);
 
-    if (selectedAccount?.address) {
-      const me = await SocialService.getOrCreateProfile(selectedAccount.address);
+    if (walletAddr) {
+      const me = await SocialService.getOrCreateProfile(walletAddr);
       setCurrentUserProfile(me);
       if (me && me.id !== id) {
-        const followState = await SocialService.isFollowing(me.id, id);
-        setIsFollowing(followState);
+        setIsFollowing(await SocialService.isFollowing(me.id, id));
       }
     }
-
     setLoading(false);
-  }, [id, selectedAccount?.address]);
+  }, [id, walletAddr]);
 
-  useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
+  useEffect(() => { loadProfile(); }, [loadProfile]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -100,6 +98,7 @@ export default function ProfileScreen() {
     setEditUsername(profile.username || '');
     setEditBio(profile.bio || '');
     setEditAvatarUrl(profile.avatar_url || '');
+    setEditBannerUrl((profile as any).banner_url || '');
     setShowEditModal(true);
   };
 
@@ -116,10 +115,25 @@ export default function ProfileScreen() {
     setShowEditModal(false);
   };
 
+  const copyAddress = async () => {
+    const addr = profile?.wallet_address || walletAddr;
+    if (addr) {
+      await Clipboard.setStringAsync(addr);
+      setCopiedAddr(true);
+      setTimeout(() => setCopiedAddr(false), 2000);
+    }
+  };
+
   const handleLike = async (postId: string) => {
     if (!currentUserProfile) return;
+    setPosts(prev => prev.map(p =>
+      p.id === postId ? {
+        ...p,
+        liked_by_user: !p.liked_by_user,
+        likes_count: p.liked_by_user ? Math.max(0, (p.likes_count || 0) - 1) : (p.likes_count || 0) + 1,
+      } : p
+    ));
     await SocialService.toggleLike(postId, currentUserProfile.id);
-    await loadProfile();
   };
 
   const handleRepost = async (postId: string) => {
@@ -128,139 +142,204 @@ export default function ProfileScreen() {
     await loadProfile();
   };
 
-  const displayName = profile?.username || `${profile?.wallet_address?.slice(0, 6)}...${profile?.wallet_address?.slice(-4)}`;
-  const activePosts = activeTab === 'posts' ? posts : reposts;
+  const displayName = profile?.username
+    || (profile?.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Unknown');
+
+  const shortAddr = profile?.wallet_address
+    ? `${profile.wallet_address.slice(0, 4)}...${profile.wallet_address.slice(-4)}`
+    : '';
+
+  const bannerUrl = (profile as any)?.banner_url || DEFAULT_BANNER;
 
   if (loading) {
     return (
-      <LinearGradient colors={colors.gradient.primary} style={styles.container}>
+      <View style={styles.container}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      </LinearGradient>
+      </View>
     );
   }
 
+  const PROFILE_TABS: { key: ProfileTab; label: string }[] = [
+    { key: 'posts', label: 'Posts' },
+    { key: 'replies', label: 'Replies' },
+    { key: 'media', label: 'Media' },
+    { key: 'likes', label: 'Likes' },
+  ];
+
+  const formatCount = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+
   return (
-    <LinearGradient colors={colors.gradient.primary} style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <ArrowLeft size={24} color={colors.textSecondary} />
+    <View style={styles.container}>
+      {/* Fixed top bar */}
+      <View style={styles.topBar}>
+        <TouchableOpacity style={styles.topBarBtn} onPress={() => router.back()} activeOpacity={0.8}>
+          <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        {isOwnProfile ? (
-          <TouchableOpacity onPress={openEditModal}>
-            <Settings size={22} color={colors.textSecondary} />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 24 }} />
-        )}
+        <Text style={styles.topBarTitle}>Profile</Text>
+        <TouchableOpacity style={styles.topBarBtn} activeOpacity={0.8}>
+          <MoreHorizontal size={20} color={colors.textPrimary} strokeWidth={2} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        <View style={styles.profileSection}>
-          <View style={styles.avatarLarge}>
+        {/* Banner */}
+        <View style={styles.bannerWrap}>
+          <Image source={{ uri: bannerUrl }} style={styles.banner} resizeMode="cover" />
+          {/* Dark overlay for readability */}
+          <LinearGradient
+            colors={['transparent', 'rgba(10,10,15,0.4)']}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+
+        {/* Avatar overlapping banner + username row */}
+        <View style={styles.profileTopRow}>
+          <View style={styles.avatarWrap}>
             {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatarLargeImage} />
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
             ) : (
-              <User size={40} color={colors.textMuted} />
+              <View style={styles.avatarFallback}>
+                <User size={36} color={colors.textMuted} />
+              </View>
             )}
           </View>
 
-          <Text style={styles.displayName}>{displayName}</Text>
-          {profile?.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
-
-          <View style={styles.statsRow}>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{posts.length}</Text>
-              <Text style={styles.statLabel}>Posts</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{followerCount}</Text>
-              <Text style={styles.statLabel}>Followers</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{followingCount}</Text>
-              <Text style={styles.statLabel}>Following</Text>
-            </View>
-          </View>
-
-          {!isOwnProfile && currentUserProfile && (
-            <TouchableOpacity
-              style={[styles.followButton, isFollowing && styles.followingButton]}
-              onPress={handleFollow}
-              disabled={followLoading}
-            >
-              {followLoading ? (
-                <ActivityIndicator size="small" color={isFollowing ? colors.primary : colors.white} />
-              ) : (
-                <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
-                  {isFollowing ? 'Following' : 'Follow'}
-                </Text>
+          <View style={styles.profileTitleBlock}>
+            <View style={styles.nameVerifiedRow}>
+              <Text style={styles.displayName}>{displayName}</Text>
+              {profile?.is_verified && (
+                <BadgeCheck size={18} color={colors.primary} fill={colors.primary} strokeWidth={0} />
               )}
-            </TouchableOpacity>
-          )}
-
-          {profile?.wallet_address && (
-            <View style={styles.walletBadge}>
-              <Text style={styles.walletAddress} numberOfLines={1} ellipsizeMode="middle">
-                {profile.wallet_address}
-              </Text>
             </View>
-          )}
-        </View>
-
-        <View style={styles.tabs}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'posts' && styles.activeTab]}
-            onPress={() => setActiveTab('posts')}
-          >
-            <Text style={[styles.tabText, activeTab === 'posts' && styles.activeTabText]}>Posts</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'reposts' && styles.activeTab]}
-            onPress={() => setActiveTab('reposts')}
-          >
-            <Text style={[styles.tabText, activeTab === 'reposts' && styles.activeTabText]}>Reposts</Text>
-          </TouchableOpacity>
-        </View>
-
-        {activePosts.length === 0 ? (
-          <View style={styles.emptyPosts}>
-            <Text style={styles.emptyPostsText}>
-              {activeTab === 'posts' ? 'No posts yet' : 'No reposts yet'}
-            </Text>
+            <Text style={styles.handle}>@{profile?.username?.toLowerCase() || displayName.toLowerCase().replace(/\s/g, '')}</Text>
           </View>
+
+          <TouchableOpacity style={styles.shareBtn} activeOpacity={0.8}>
+            <Share2 size={18} color={colors.textPrimary} strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Wallet address chip */}
+        {shortAddr ? (
+          <TouchableOpacity style={styles.addrChip} onPress={copyAddress} activeOpacity={0.8}>
+            <Text style={styles.addrChipText}>{shortAddr}</Text>
+            {copiedAddr
+              ? <Check size={14} color={colors.success} strokeWidth={2.5} />
+              : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+            }
+          </TouchableOpacity>
+        ) : null}
+
+        {/* Bio */}
+        {profile?.bio ? (
+          <Text style={styles.bio}>{profile.bio}</Text>
         ) : (
-          activePosts.map((post) => (
-            <PostCard
-              key={post.id}
-              post={post}
-              currentProfile={currentUserProfile}
-              onLike={handleLike}
-              onComment={() => {}}
-              onRepost={handleRepost}
-              onPromote={() => {}}
-            />
-          ))
+          isOwnProfile && <Text style={styles.bioPlaceholder}>Building the future of trading.</Text>
         )}
 
-        <View style={styles.bottomSpacer} />
+        {/* Stats */}
+        <View style={styles.statsRow}>
+          <View style={styles.stat}>
+            <Text style={styles.statValue}>{formatCount(posts.length)}</Text>
+            <Text style={styles.statLabel}>Posts</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.stat}>
+            <Text style={styles.statValue}>{formatCount(followerCount)}</Text>
+            <Text style={styles.statLabel}>Followers</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.stat}>
+            <Text style={styles.statValue}>{formatCount(followingCount)}</Text>
+            <Text style={styles.statLabel}>Following</Text>
+          </View>
+        </View>
+
+        {/* CTA button */}
+        {isOwnProfile ? (
+          <TouchableOpacity style={styles.editProfileBtn} onPress={openEditModal} activeOpacity={0.85}>
+            <Text style={styles.editProfileBtnText}>Edit Profile</Text>
+          </TouchableOpacity>
+        ) : currentUserProfile ? (
+          <TouchableOpacity
+            style={[styles.editProfileBtn, isFollowing && styles.followingBtn]}
+            onPress={handleFollow}
+            disabled={followLoading}
+            activeOpacity={0.85}
+          >
+            {followLoading
+              ? <ActivityIndicator size="small" color={isFollowing ? colors.primary : colors.white} />
+              : <Text style={[styles.editProfileBtnText, isFollowing && styles.followingBtnText]}>
+                  {isFollowing ? 'Following' : 'Follow'}
+                </Text>
+            }
+          </TouchableOpacity>
+        ) : null}
+
+        {/* Profile tabs */}
+        <View style={styles.tabBar}>
+          {PROFILE_TABS.map(tab => (
+            <TouchableOpacity
+              key={tab.key}
+              style={styles.tab}
+              onPress={() => setActiveTab(tab.key)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
+              {activeTab === tab.key && <View style={styles.tabUnderline} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Posts */}
+        {activeTab === 'posts' && (
+          posts.length === 0 ? (
+            <View style={styles.emptyPosts}>
+              <Text style={styles.emptyPostsText}>No posts yet</Text>
+            </View>
+          ) : (
+            <View style={{ paddingTop: spacing.sm }}>
+              {posts.map(post => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentProfile={currentUserProfile}
+                  onLike={handleLike}
+                  onComment={() => {}}
+                  onRepost={handleRepost}
+                  onPromote={() => {}}
+                />
+              ))}
+            </View>
+          )
+        )}
+
+        {activeTab !== 'posts' && (
+          <View style={styles.emptyPosts}>
+            <Text style={styles.emptyPostsText}>No content yet</Text>
+          </View>
+        )}
+
+        <View style={{ height: 80 }} />
       </ScrollView>
 
+      {/* Edit Profile Modal */}
       <Modal visible={showEditModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalScroll}>
-            <View style={styles.modalContent}>
+          <ScrollView style={styles.modalScroll} bounces={false}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Edit Profile</Text>
                 <TouchableOpacity onPress={() => setShowEditModal(false)}>
-                  <X size={24} color={colors.textPrimary} />
+                  <X size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
 
@@ -304,171 +383,248 @@ export default function ProfileScreen() {
               />
               <Text style={styles.editCharCount}>{editBio.length}/160</Text>
 
-              <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile} disabled={saving}>
-                {saving ? (
-                  <ActivityIndicator size="small" color={colors.white} />
-                ) : (
-                  <>
-                    <Check size={18} color={colors.white} />
-                    <Text style={styles.saveButtonText}>Save Changes</Text>
-                  </>
-                )}
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile} disabled={saving}>
+                {saving
+                  ? <ActivityIndicator size="small" color={colors.white} />
+                  : <>
+                      <Check size={17} color={colors.white} />
+                      <Text style={styles.saveBtnText}>Save Changes</Text>
+                    </>
+                }
               </TouchableOpacity>
             </View>
           </ScrollView>
         </View>
       </Modal>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0A0A0F',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#0A0A0F',
   },
-  header: {
+  // Top bar
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.xxl,
-    paddingTop: 56,
-    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 54,
+    paddingBottom: spacing.md,
+    backgroundColor: '#0A0A0F',
+    zIndex: 10,
   },
-  headerTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  profileSection: {
-    alignItems: 'center',
-    paddingHorizontal: spacing.xxl,
-    paddingBottom: spacing.xxl,
-  },
-  avatarLarge: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.surfaceLight,
+  topBarBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    overflow: 'hidden',
-    marginBottom: spacing.lg,
-    borderWidth: 2,
-    borderColor: colors.primary,
   },
-  avatarLargeImage: {
+  topBarTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  // Banner
+  bannerWrap: {
+    width: '100%',
+    height: 160,
+    backgroundColor: '#1A0B2E',
+    overflow: 'hidden',
+  },
+  banner: {
+    width: '100%',
+    height: '100%',
+  },
+  // Profile top row: avatar + name + share
+  profileTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: spacing.lg,
+    marginTop: -36,
+    marginBottom: spacing.md,
+    gap: spacing.md,
+  },
+  avatarWrap: {
+    borderRadius: 44,
+    borderWidth: 3,
+    borderColor: '#0A0A0F',
+    overflow: 'hidden',
+  },
+  avatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
+    backgroundColor: '#1A1A28',
+  },
+  avatarFallback: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileTitleBlock: {
+    flex: 1,
+    paddingBottom: 4,
+  },
+  nameVerifiedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   displayName: {
     fontSize: fontSize.xl,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.textPrimary,
-    marginBottom: spacing.sm,
+    letterSpacing: -0.3,
   },
+  handle: {
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  shareBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 4,
+  },
+  // Address chip
+  addrChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: '#1A1A28',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  addrChipText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    fontFamily: 'SpaceMono-Regular',
+  },
+  // Bio
   bio: {
     fontSize: fontSize.md,
     color: colors.textSecondary,
-    textAlign: 'center',
     lineHeight: 22,
+    paddingHorizontal: spacing.lg,
     marginBottom: spacing.lg,
-    paddingHorizontal: spacing.xxl,
   },
+  bioPlaceholder: {
+    fontSize: fontSize.md,
+    color: colors.textMuted,
+    lineHeight: 22,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  // Stats
   statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.xxl,
+    paddingHorizontal: spacing.lg,
     marginBottom: spacing.lg,
+    gap: 0,
   },
   stat: {
     flex: 1,
-    alignItems: 'center',
   },
   statValue: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
+    fontSize: fontSize.xl,
+    fontWeight: '800',
     color: colors.textPrimary,
+    letterSpacing: -0.3,
   },
   statLabel: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginTop: 2,
+    fontWeight: '500',
   },
   statDivider: {
     width: 1,
-    height: 30,
-    backgroundColor: colors.surfaceBorder,
+    height: 36,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginHorizontal: spacing.lg,
   },
-  followButton: {
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xxxl,
+  // Edit / Follow button
+  editProfileBtn: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.xl,
+    backgroundColor: '#1A1A28',
     borderRadius: borderRadius.full,
-    marginBottom: spacing.lg,
-    minWidth: 140,
+    paddingVertical: 14,
     alignItems: 'center',
-  },
-  followingButton: {
-    backgroundColor: 'transparent',
     borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  editProfileBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  followingBtn: {
+    backgroundColor: 'transparent',
     borderColor: colors.primary,
   },
-  followButtonText: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    color: colors.white,
-  },
-  followingButtonText: {
+  followingBtnText: {
     color: colors.primary,
   },
-  walletBadge: {
-    backgroundColor: colors.surfaceLight,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.full,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.lg,
-    maxWidth: '80%',
-  },
-  walletAddress: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontFamily: 'SpaceMono-Regular',
-  },
-  tabs: {
+  // Tabs
+  tabBar: {
     flexDirection: 'row',
     borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
-    marginBottom: spacing.md,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+    marginBottom: spacing.xs,
   },
   tab: {
     flex: 1,
     paddingVertical: spacing.lg,
     alignItems: 'center',
-  },
-  activeTab: {
-    borderBottomWidth: 2,
-    borderBottomColor: colors.primary,
+    position: 'relative',
   },
   tabText: {
     fontSize: fontSize.md,
     fontWeight: '600',
     color: colors.textMuted,
   },
-  activeTabText: {
+  tabTextActive: {
     color: colors.primary,
   },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: '20%',
+    right: '20%',
+    height: 2,
+    backgroundColor: colors.primary,
+    borderRadius: 1,
+  },
+  // Posts
   emptyPosts: {
     alignItems: 'center',
     paddingVertical: 60,
@@ -477,23 +633,28 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.textMuted,
   },
-  bottomSpacer: {
-    height: 40,
-  },
+  // Edit modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     justifyContent: 'flex-end',
   },
   modalScroll: {
-    maxHeight: '85%',
-    marginTop: 'auto',
+    maxHeight: '90%',
   },
-  modalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
+  modalSheet: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: spacing.xxl,
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#2A2A3A',
+    alignSelf: 'center',
+    marginBottom: spacing.lg,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -514,7 +675,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   editInput: {
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: '#1A1A28',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
@@ -540,7 +701,7 @@ const styles = StyleSheet.create({
     height: 64,
     borderRadius: 32,
   },
-  saveButton: {
+  saveBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.lg,
     borderRadius: borderRadius.md,
@@ -549,8 +710,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
     marginTop: spacing.xxl,
+    marginBottom: spacing.xxl,
   },
-  saveButtonText: {
+  saveBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
