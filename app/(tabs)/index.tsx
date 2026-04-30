@@ -12,7 +12,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import {
   ArrowDownToLine,
@@ -26,12 +25,11 @@ import {
   Flame,
   Star,
   ArrowUp,
-  ArrowDown,
   Sparkles,
   Zap,
-  Rocket,
   Coins,
   RefreshCw,
+  Image as ImageIcon,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -40,10 +38,12 @@ import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
 import { watchlistService, WatchlistToken } from '@/services/watchlistService';
 import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
 import { PortfolioChart } from '@/components/PortfolioChart';
+import { NFTService, NFT } from '@/services/nftService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 type TabKey = 'market' | 'assets' | 'watchlist';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
+type AssetSubTab = 'tokens' | 'nfts';
 
 const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
   { key: 'all', label: 'All', icon: Coins },
@@ -70,6 +70,9 @@ export default function WalletHome() {
   const [category, setCategory] = useState<CategoryKey>('all');
   const [watchlist, setWatchlist] = useState<WatchlistToken[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [assetSubTab, setAssetSubTab] = useState<AssetSubTab>('tokens');
+  const [nfts, setNfts] = useState<NFT[]>([]);
+  const [nftsLoading, setNftsLoading] = useState(false);
 
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
@@ -133,6 +136,23 @@ export default function WalletHome() {
     }
   }, []);
 
+  const loadNFTs = useCallback(async () => {
+    const address = connectedWallet?.address ?? selectedAccount?.address;
+    if (!address) {
+      setNfts([]);
+      return;
+    }
+    setNftsLoading(true);
+    try {
+      const result = await NFTService.getUserNFTs(address);
+      setNfts(result);
+    } catch {
+      setNfts([]);
+    } finally {
+      setNftsLoading(false);
+    }
+  }, [selectedAccount, connectedWallet]);
+
   useEffect(() => {
     loadMarketData();
   }, [loadMarketData]);
@@ -145,9 +165,17 @@ export default function WalletHome() {
     loadWatchlist();
   }, [loadWatchlist]);
 
+  useEffect(() => {
+    if (activeTab === 'assets' && assetSubTab === 'nfts') {
+      loadNFTs();
+    }
+  }, [activeTab, assetSubTab, loadNFTs]);
+
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadMarketData(), loadWalletAssets(), loadWatchlist()]);
+    const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
+    if (assetSubTab === 'nfts') jobs.push(loadNFTs());
+    await Promise.all(jobs);
     setRefreshing(false);
   };
 
@@ -379,9 +407,32 @@ export default function WalletHome() {
             </ScrollView>
           )}
 
-          {activeTab === 'assets' && activeAddress && totalBalance > 0 && (
+          {activeTab === 'assets' && activeAddress && totalBalance > 0 && assetSubTab === 'tokens' && (
             <View style={styles.chartWrapper}>
               <PortfolioChart walletAddress={activeAddress} currentValue={totalBalance} />
+            </View>
+          )}
+
+          {activeTab === 'assets' && (
+            <View style={styles.assetSubTabBar}>
+              <TouchableOpacity
+                style={[styles.assetSubTab, assetSubTab === 'tokens' && styles.assetSubTabActive]}
+                onPress={() => setAssetSubTab('tokens')}
+              >
+                <Coins size={14} color={assetSubTab === 'tokens' ? colors.primary : colors.textMuted} />
+                <Text style={[styles.assetSubTabText, assetSubTab === 'tokens' && styles.assetSubTabTextActive]}>
+                  Tokens
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.assetSubTab, assetSubTab === 'nfts' && styles.assetSubTabActive]}
+                onPress={() => { setAssetSubTab('nfts'); loadNFTs(); }}
+              >
+                <ImageIcon size={14} color={assetSubTab === 'nfts' ? colors.primary : colors.textMuted} />
+                <Text style={[styles.assetSubTabText, assetSubTab === 'nfts' && styles.assetSubTabTextActive]}>
+                  NFTs {nfts.length > 0 ? `(${nfts.length})` : ''}
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -413,7 +464,7 @@ export default function WalletHome() {
                         <Image source={{ uri: token.image }} style={styles.tokenLogo} />
                       ) : (
                         <View style={styles.tokenLogoPlaceholder}>
-                          <Text style={styles.tokenLogoText}>{token.symbol.substring(0, 2).toUpperCase()}</Text>
+                          <Text style={styles.tokenLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
                         </View>
                       )}
                       <View style={styles.tokenInfo}>
@@ -432,7 +483,7 @@ export default function WalletHome() {
                           )}
                         </View>
                         <View style={styles.tokenMetaRow}>
-                          <Text style={styles.tokenSymbol}>{token.symbol.toUpperCase()}</Text>
+                          <Text style={styles.tokenSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
                           {token.marketCap && token.marketCap > 0 ? (
                             <>
                               <Text style={styles.metaDot}>•</Text>
@@ -507,88 +558,136 @@ export default function WalletHome() {
             />
             )
           ) : activeTab === 'assets' ? (
-            assetsLoading ? (
-              <View style={styles.loaderContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Loading wallet assets...</Text>
-              </View>
-            ) : (
-              <FlatList
-              data={filteredAssets}
-              keyExtractor={(item) => item.address}
-              renderItem={({ item: asset }) => {
-                const changePositive = asset.priceChange24h >= 0;
-                return (
-                  <TouchableOpacity
-                    style={styles.assetCard}
-                    onPress={() => router.push(`/token-detail/${asset.address}` as any)}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.tokenLeft}>
-                      {asset.logoUrl ? (
-                        <Image source={{ uri: asset.logoUrl }} style={styles.tokenLogo} />
-                      ) : (
-                        <View style={styles.tokenLogoPlaceholder}>
-                          <Text style={styles.tokenLogoText}>{asset.symbol.substring(0, 2).toUpperCase()}</Text>
-                        </View>
-                      )}
-                      <View style={styles.tokenInfo}>
-                        <View style={styles.tokenNameRow}>
-                          <Text style={styles.tokenName} numberOfLines={1}>{asset.name}</Text>
-                          {asset.isNative && (
-                            <View style={styles.nativeBadge}>
-                              <Text style={styles.nativeBadgeText}>Native</Text>
-                            </View>
-                          )}
-                        </View>
-                        <Text style={styles.assetBalance}>
-                          {balanceHidden ? '****' : `${asset.uiBalance.toFixed(asset.isNative ? 4 : 2)} ${asset.symbol}`}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.tokenRight}>
-                      <Text style={styles.assetValue}>
-                        {balanceHidden ? '****' : `$${asset.value.toFixed(2)}`}
-                      </Text>
-                      {asset.price > 0 && (
-                        <Text style={styles.assetPrice}>
-                          {liveMarketService.formatPrice(asset.price)}
-                        </Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
-                  <Text style={styles.emptyText}>
-                    {activeAddress ? 'No tokens found in this wallet' : 'No wallet connected'}
-                  </Text>
-                  <Text style={styles.emptySubtext}>
-                    {activeAddress
-                      ? 'Tokens you own will appear here once detected on-chain'
-                      : 'Import or create a wallet to get started'}
-                  </Text>
-                  {activeAddress && (
+            assetSubTab === 'tokens' ? (
+              assetsLoading ? (
+                <View style={styles.loaderContainer}>
+                  <ActivityIndicator size="large" color={colors.primary} />
+                  <Text style={styles.loadingText}>Loading wallet assets...</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredAssets}
+                  keyExtractor={(item) => item.address}
+                  renderItem={({ item: asset }) => (
                     <TouchableOpacity
-                      style={styles.retryButton}
-                      onPress={loadWalletAssets}
-                      activeOpacity={0.7}
+                      style={styles.assetCard}
+                      onPress={() => router.push(`/token-detail/${asset.address}` as any)}
+                      activeOpacity={0.8}
                     >
-                      <RefreshCw size={16} color={colors.white} />
-                      <Text style={styles.retryButtonText}>Refresh</Text>
+                      <View style={styles.tokenLeft}>
+                        {asset.logoUrl ? (
+                          <Image source={{ uri: asset.logoUrl }} style={styles.tokenLogo} />
+                        ) : (
+                          <View style={styles.tokenLogoPlaceholder}>
+                            <Text style={styles.tokenLogoText}>{(asset.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+                          </View>
+                        )}
+                        <View style={styles.tokenInfo}>
+                          <View style={styles.tokenNameRow}>
+                            <Text style={styles.tokenName} numberOfLines={1}>{asset.name}</Text>
+                            {asset.isNative && (
+                              <View style={styles.nativeBadge}>
+                                <Text style={styles.nativeBadgeText}>Native</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={styles.assetBalance}>
+                            {balanceHidden ? '****' : `${asset.uiBalance.toFixed(asset.isNative ? 4 : 2)} ${asset.symbol}`}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.tokenRight}>
+                        <Text style={styles.assetValue}>
+                          {balanceHidden ? '****' : `$${asset.value.toFixed(2)}`}
+                        </Text>
+                        {asset.price > 0 && (
+                          <Text style={styles.assetPrice}>
+                            {liveMarketService.formatPrice(asset.price)}
+                          </Text>
+                        )}
+                      </View>
                     </TouchableOpacity>
                   )}
+                  ListEmptyComponent={
+                    <View style={styles.emptyState}>
+                      <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
+                      <Text style={styles.emptyText}>
+                        {activeAddress ? 'No tokens found' : 'No wallet connected'}
+                      </Text>
+                      <Text style={styles.emptySubtext}>
+                        {activeAddress
+                          ? 'Tokens you own will appear here once detected on-chain'
+                          : 'Import or create a wallet to get started'}
+                      </Text>
+                      {activeAddress && (
+                        <TouchableOpacity style={styles.retryButton} onPress={loadWalletAssets} activeOpacity={0.7}>
+                          <RefreshCw size={16} color={colors.white} />
+                          <Text style={styles.retryButtonText}>Refresh</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  }
+                  contentContainerStyle={filteredAssets.length === 0 ? styles.emptyListContent : styles.listContent}
+                  showsVerticalScrollIndicator={false}
+                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+                />
+              )
+            ) : (
+              /* NFT sub-tab */
+              nftsLoading ? (
+                <View style={styles.loaderContainer}>
+                  <ActivityIndicator size="large" color={colors.primary} />
+                  <Text style={styles.loadingText}>Loading NFTs...</Text>
                 </View>
-              }
-              contentContainerStyle={filteredAssets.length === 0 ? styles.emptyListContent : styles.listContent}
-              showsVerticalScrollIndicator={false}
-              refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-              }
-            />
+              ) : (
+                <FlatList
+                  data={nfts}
+                  keyExtractor={(item) => item.id}
+                  numColumns={2}
+                  renderItem={({ item: nft }) => (
+                    <TouchableOpacity
+                      style={styles.nftCard}
+                      onPress={() => router.push('/nft-gallery' as any)}
+                      activeOpacity={0.85}
+                    >
+                      <Image
+                        source={{ uri: nft.image_url }}
+                        style={styles.nftImage}
+                        defaultSource={undefined}
+                      />
+                      <View style={styles.nftInfo}>
+                        <Text style={styles.nftName} numberOfLines={1}>{nft.name}</Text>
+                        {nft.rarity_rank != null && (
+                          <Text style={styles.nftRank}>#{nft.rarity_rank}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    <View style={styles.emptyState}>
+                      <ImageIcon size={48} color={colors.textMuted} strokeWidth={1.5} />
+                      <Text style={styles.emptyText}>
+                        {activeAddress ? 'No NFTs found' : 'No wallet connected'}
+                      </Text>
+                      <Text style={styles.emptySubtext}>
+                        {activeAddress
+                          ? 'NFTs owned by this wallet will appear here'
+                          : 'Import or create a wallet to get started'}
+                      </Text>
+                      {activeAddress && (
+                        <TouchableOpacity style={styles.retryButton} onPress={loadNFTs} activeOpacity={0.7}>
+                          <RefreshCw size={16} color={colors.white} />
+                          <Text style={styles.retryButtonText}>Refresh</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  }
+                  contentContainerStyle={nfts.length === 0 ? styles.emptyListContent : styles.nftListContent}
+                  columnWrapperStyle={nfts.length > 0 ? styles.nftRow : undefined}
+                  showsVerticalScrollIndicator={false}
+                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+                />
+              )
             )
           ) : (
             <FlatList
@@ -1150,5 +1249,72 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxl,
     paddingTop: spacing.sm,
     paddingBottom: spacing.xs,
+  },
+  assetSubTabBar: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.xxl,
+    marginTop: spacing.sm,
+    marginBottom: 4,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    padding: 3,
+    gap: 3,
+  },
+  assetSubTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.sm,
+  },
+  assetSubTabActive: {
+    backgroundColor: colors.surfaceElevated,
+  },
+  assetSubTabText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  assetSubTabTextActive: {
+    color: colors.primary,
+  },
+  nftListContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: 100,
+  },
+  nftRow: {
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  nftCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    maxWidth: '50%',
+  },
+  nftImage: {
+    width: '100%',
+    aspectRatio: 1,
+    backgroundColor: colors.surfaceLight,
+  },
+  nftInfo: {
+    padding: spacing.sm,
+  },
+  nftName: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  nftRank: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: '600',
+    marginTop: 2,
   },
 });

@@ -12,7 +12,7 @@ const GRID_ITEM_SIZE = (width - spacing.lg * 3) / 2;
 
 export default function NFTGalleryScreen() {
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { activeAddress } = useWallet();
   const [loading, setLoading] = useState(true);
   const [nfts, setNFTs] = useState<NFT[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -20,15 +20,22 @@ export default function NFTGalleryScreen() {
 
   useEffect(() => {
     loadNFTs();
-  }, [selectedAccount]);
+  }, [activeAddress]);
 
   const loadNFTs = async () => {
     setLoading(true);
-    if (selectedAccount) {
-      const userNFTs = await NFTService.getUserNFTs(selectedAccount.address);
-      setNFTs(userNFTs);
+    try {
+      if (activeAddress) {
+        const userNFTs = await NFTService.getUserNFTs(activeAddress);
+        setNFTs(userNFTs);
+      } else {
+        setNFTs([]);
+      }
+    } catch {
+      setNFTs([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filteredNFTs = filter === 'rare'

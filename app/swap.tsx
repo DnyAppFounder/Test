@@ -440,7 +440,7 @@ export default function SwapScreen() {
                   {token.logoURI
                     ? <Image source={{ uri: token.logoURI }} style={styles.tokenItemLogo} />
                     : <View style={styles.tokenItemLogoPlaceholder}>
-                        <Text style={styles.tokenItemLogoText}>{token.symbol.substring(0, 2).toUpperCase()}</Text>
+                        <Text style={styles.tokenItemLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
                       </View>}
                   <View style={styles.tokenItemInfo}>
                     <Text style={styles.tokenItemName}>{token.name}</Text>

@@ -220,7 +220,7 @@ export default function TokenDetailScreen() {
               <Image source={{ uri: token.image }} style={styles.tokenLogo} />
             ) : (
               <View style={styles.tokenLogoPlaceholder}>
-                <Text style={styles.tokenLogoText}>{token.symbol.substring(0, 2).toUpperCase()}</Text>
+                <Text style={styles.tokenLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
               </View>
             )}
             <View style={styles.tokenTitleSection}>
@@ -233,7 +233,7 @@ export default function TokenDetailScreen() {
                   </View>
                 )}
               </View>
-              <Text style={styles.tokenSymbol}>{token.symbol.toUpperCase()}</Text>
+              <Text style={styles.tokenSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
             </View>
           </View>
 
