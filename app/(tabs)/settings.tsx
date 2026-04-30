@@ -10,6 +10,7 @@ import {
   Image,
   Share,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera } from 'lucide-react-native';
@@ -18,7 +19,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useWallet } from '@/contexts/WalletContext';
+import { useWallet, UnifiedWallet } from '@/contexts/WalletContext';
 import { Language, languageNames } from '@/constants/i18n';
 import { SocialService, UserProfile } from '@/services/socialService';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -29,7 +30,7 @@ type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' |
 export default function SettingsScreen() {
   const router = useRouter();
   const { t, language, setLanguage } = useLanguage();
-  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts } = useWallet();
+  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, setActiveWallet, connectedWallet, disconnectExternalWallet } = useWallet();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
   const [editUsername, setEditUsername] = useState('');
@@ -201,8 +202,8 @@ export default function SettingsScreen() {
       items: [
         {
           icon: <Wallet size={20} color={colors.primary} />,
-          label: `${accounts.length} wallet${accounts.length !== 1 ? 's' : ''}`,
-          value: selectedAccount?.name || 'Select',
+          label: `${allWallets.length} wallet${allWallets.length !== 1 ? 's' : ''}`,
+          value: activeWallet?.name || selectedAccount?.name || 'Select',
           onPress: () => setActiveModal('accounts'),
         },
       ],
@@ -391,25 +392,57 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={{ maxHeight: 400 }}>
-              {accounts.map((acc) => (
-                <TouchableOpacity
-                  key={acc.id}
-                  style={[styles.accountRow, selectedAccount?.id === acc.id && styles.accountRowActive]}
-                  onPress={() => {
-                    setSelectedAccount(acc);
-                    setActiveModal(null);
-                  }}
-                >
-                  <View style={[styles.chainDot, { backgroundColor: getChainColor(acc.blockchain) }]} />
-                  <View style={styles.accountInfo}>
-                    <Text style={styles.accountName}>{acc.name}</Text>
-                    <Text style={styles.accountAddress}>
-                      {acc.address.slice(0, 8)}...{acc.address.slice(-6)}
-                    </Text>
-                  </View>
-                  {selectedAccount?.id === acc.id && <Check size={18} color={colors.primary} />}
-                </TouchableOpacity>
-              ))}
+              {allWallets.length === 0 && (
+                <Text style={styles.noWalletsText}>No wallets connected or created yet.</Text>
+              )}
+              {allWallets.map((wallet) => {
+                const isActive = wallet.isActive;
+                return (
+                  <TouchableOpacity
+                    key={wallet.id}
+                    style={[styles.accountRow, isActive && styles.accountRowActive]}
+                    onPress={() => {
+                      setActiveWallet(wallet);
+                      setActiveModal(null);
+                    }}
+                  >
+                    {wallet.type === 'connected' && wallet.providerIcon ? (
+                      <Image
+                        source={{ uri: wallet.providerIcon }}
+                        style={styles.walletProviderIcon}
+                      />
+                    ) : (
+                      <View style={[styles.chainDot, { backgroundColor: getChainColor(wallet.blockchain || 'solana') }]} />
+                    )}
+                    <View style={styles.accountInfo}>
+                      <View style={styles.accountNameRow}>
+                        <Text style={styles.accountName}>{wallet.name}</Text>
+                        <View style={[styles.walletTypeBadge, wallet.type === 'connected' && styles.walletTypeBadgeConnected]}>
+                          <Text style={styles.walletTypeBadgeText}>
+                            {wallet.type === 'connected' ? 'Connected' : 'Internal'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.accountAddress}>
+                        {wallet.address.slice(0, 8)}...{wallet.address.slice(-6)}
+                      </Text>
+                    </View>
+                    {isActive ? (
+                      <Check size={18} color={colors.primary} />
+                    ) : wallet.type === 'connected' ? (
+                      <TouchableOpacity
+                        style={styles.disconnectButton}
+                        onPress={async () => {
+                          await disconnectExternalWallet();
+                          setActiveModal(null);
+                        }}
+                      >
+                        <Text style={styles.disconnectButtonText}>Disconnect</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
             <View style={styles.addAccountSection}>
               <Text style={styles.addAccountTitle}>Add Solana Account</Text>
@@ -849,19 +882,66 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginRight: spacing.md,
   },
+  walletProviderIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginRight: spacing.md,
+    backgroundColor: colors.surfaceBorder,
+  },
   accountInfo: {
     flex: 1,
+  },
+  accountNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: 2,
   },
   accountName: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textPrimary,
   },
+  walletTypeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceBorder,
+  },
+  walletTypeBadgeConnected: {
+    backgroundColor: 'rgba(20, 241, 149, 0.15)',
+  },
+  walletTypeBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+  },
   accountAddress: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginTop: 2,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  disconnectButton: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.errorMuted,
+    borderWidth: 1,
+    borderColor: colors.error,
+  },
+  disconnectButtonText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.error,
+  },
+  noWalletsText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: spacing.xl,
   },
   addAccountSection: {
     marginTop: spacing.xl,

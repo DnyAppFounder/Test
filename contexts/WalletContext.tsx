@@ -2,28 +2,50 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
-import { SolanaWalletService, WalletPortfolio } from '@/services/solana/walletService';
 import { walletAssetLoader } from '@/services/walletAssetLoader';
 
+export type WalletType = 'created' | 'imported' | 'connected';
+
+/**
+ * Unified wallet entry — represents any wallet regardless of type.
+ * Internal wallets (created/imported) have accountIndex and come from SecureWalletManager.
+ * Connected wallets (Phantom/Backpack/Solflare) have a provider id.
+ */
+export interface UnifiedWallet {
+  id: string;
+  type: WalletType;
+  name: string;
+  address: string;
+  publicKey: string;
+  isActive: boolean;
+  // For connected wallets
+  providerId?: ExternalWalletId;
+  providerIcon?: string;
+  // For internal wallets
+  accountIndex?: number;
+  blockchain?: 'solana';
+}
+
 interface WalletContextType {
-  // Internal (mnemonic-derived) accounts
+  // Unified wallet list — ALL wallets in one place
+  allWallets: UnifiedWallet[];
+  activeWallet: UnifiedWallet | null;
+  setActiveWallet: (wallet: UnifiedWallet) => void;
+
+  // Legacy aliases (kept for backward compatibility with existing screens)
   accounts: WalletAccount[];
   selectedAccount: WalletAccount | null;
   setSelectedAccount: (account: WalletAccount) => void;
-
-  // External (connected) wallet
   connectedWallet: ConnectedExternalWallet | null;
   connectExternalWallet: (id: ExternalWalletId) => Promise<void>;
   disconnectExternalWallet: () => Promise<void>;
-  refreshConnectedWalletBalance: () => Promise<void>;
 
-  // Portfolio data
+  // Portfolio data (same for all wallet types)
   tokens: Token[];
   blockchains: Blockchain[];
   totalBalance: number;
   isLoading: boolean;
   isInitialized: boolean;
-  portfolio: WalletPortfolio | null;
 
   // Actions
   refreshWallet: () => Promise<void>;
@@ -31,26 +53,80 @@ interface WalletContextType {
   loadAccounts: () => Promise<void>;
   forceReloadAccounts: () => Promise<void>;
 
-  // Helpers
+  // The address currently in use
   activeAddress: string | null;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
+function walletAccountToUnified(acc: WalletAccount, isActive: boolean): UnifiedWallet {
+  return {
+    id: acc.id,
+    type: 'created',
+    name: acc.name,
+    address: acc.address,
+    publicKey: acc.publicKey || acc.address,
+    isActive,
+    accountIndex: acc.accountIndex,
+    blockchain: acc.blockchain,
+  };
+}
+
+function connectedToUnified(cw: ConnectedExternalWallet, isActive: boolean): UnifiedWallet {
+  return {
+    id: `connected-${cw.id}`,
+    type: 'connected',
+    name: cw.name,
+    address: cw.address,
+    publicKey: cw.publicKey,
+    isActive,
+    providerId: cw.id,
+    providerIcon: cw.icon,
+  };
+}
+
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [accounts, setAccounts] = useState<WalletAccount[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState<WalletAccount | null>(null);
+  const [selectedAccount, setSelectedAccountState] = useState<WalletAccount | null>(null);
   const [connectedWallet, setConnectedWallet] = useState<ConnectedExternalWallet | null>(null);
   const [tokens, setTokens] = useState<Token[]>([]);
   const [blockchains, setBlockchains] = useState<Blockchain[]>([]);
   const [totalBalance, setTotalBalance] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
-  const [solanaService] = useState(() => new SolanaWalletService());
 
-  // The address currently in use — either external wallet or internal account
+  // Connected wallet takes priority as the active address
   const activeAddress = connectedWallet?.address ?? selectedAccount?.address ?? null;
+
+  // Build unified wallet list: connected wallet first (if any), then internal accounts
+  const allWallets: UnifiedWallet[] = [
+    ...(connectedWallet ? [connectedToUnified(connectedWallet, true)] : []),
+    ...accounts.map((acc) =>
+      walletAccountToUnified(acc, !connectedWallet && acc.id === selectedAccount?.id)
+    ),
+  ];
+
+  const activeWallet: UnifiedWallet | null = allWallets.find((w) => w.isActive) ?? null;
+
+  const setActiveWallet = useCallback((wallet: UnifiedWallet) => {
+    if (wallet.type === 'connected') {
+      // Re-activate connected wallet if somehow de-selected — no-op if already active
+    } else {
+      // Switch to an internal account; disconnect any external wallet session
+      const acc = accounts.find((a) => a.id === wallet.id);
+      if (acc) {
+        setSelectedAccountState(acc);
+        if (connectedWallet) {
+          ExternalWalletAdapter.disconnectExtension(connectedWallet.id).catch(() => {});
+          setConnectedWallet(null);
+        }
+      }
+    }
+  }, [accounts, connectedWallet]);
+
+  const setSelectedAccount = useCallback((account: WalletAccount) => {
+    setSelectedAccountState(account);
+  }, []);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -59,27 +135,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       if (storedAccounts.length > 0) {
         setAccounts(storedAccounts);
-        const defaultAccount = storedAccounts.find(a => a.isDefault) || storedAccounts[0];
-        setSelectedAccount(defaultAccount);
+        setSelectedAccountState((prev) => {
+          if (prev && storedAccounts.find((a) => a.id === prev.id)) return prev;
+          return storedAccounts.find((a) => a.isDefault) || storedAccounts[0];
+        });
 
-        const supportedBlockchains: Blockchain[] = [
+        setBlockchains([
           { id: 'solana', name: 'Solana', symbol: 'SOL', chain_id: null, rpc_url: '', explorer_url: '', logo_url: null, is_active: true, order_index: 1 },
-        ];
-        setBlockchains(supportedBlockchains);
+        ]);
       } else {
         setAccounts([]);
-        setSelectedAccount(null);
+        setSelectedAccountState(null);
         setBlockchains([]);
       }
     } catch (error) {
       console.error('Error loading accounts:', error);
       setAccounts([]);
-      setSelectedAccount(null);
+      setSelectedAccountState(null);
       setBlockchains([]);
     }
   }, []);
 
-  // Restore any previously connected external wallet
   const restoreExternalWallet = useCallback(async () => {
     const restored = await ExternalWalletAdapter.restoreSession();
     if (restored) {
@@ -104,16 +180,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [connectedWallet]);
 
-  const refreshConnectedWalletBalance = useCallback(async () => {
-    if (!connectedWallet) return;
-    const balance = await ExternalWalletAdapter.getBalance(connectedWallet.address);
-    setConnectedWallet(prev => prev ? { ...prev, balance } : null);
-  }, [connectedWallet]);
-
   const refreshPortfolio = useCallback(async () => {
     const address = connectedWallet?.address ?? selectedAccount?.address;
     if (!address) {
-      setPortfolio(null);
       setTotalBalance(0);
       setTokens([]);
       return;
@@ -138,7 +207,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       setTokens(tokensFromChain);
       setTotalBalance(result.totalValue);
-      setPortfolio(null); // reset; portfolio will load lazily if needed
     } catch (error) {
       console.error('Error refreshing portfolio:', error);
     }
@@ -152,10 +220,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       setAccounts(storedAccounts);
       if (storedAccounts.length > 0) {
-        const defaultAccount = storedAccounts.find(a => a.isDefault) || storedAccounts[0];
-        setSelectedAccount(defaultAccount);
+        setSelectedAccountState((prev) => {
+          if (prev && storedAccounts.find((a) => a.id === prev.id)) return prev;
+          return storedAccounts.find((a) => a.isDefault) || storedAccounts[0];
+        });
       } else {
-        setSelectedAccount(null);
+        setSelectedAccountState(null);
       }
     } catch (error) {
       console.error('Error force-reloading accounts:', error);
@@ -169,16 +239,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     try {
       await loadAccounts();
       await refreshPortfolio();
-      if (connectedWallet) {
-        await refreshConnectedWalletBalance();
-      }
     } catch (error) {
       console.error('Error refreshing wallet:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [loadAccounts, refreshPortfolio, connectedWallet, refreshConnectedWalletBalance]);
+  }, [loadAccounts, refreshPortfolio]);
 
+  // Initialize: load internal accounts and restore external wallet session
   useEffect(() => {
     let mounted = true;
     const initialize = async () => {
@@ -192,9 +260,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     return () => { mounted = false; };
   }, [loadAccounts, restoreExternalWallet]);
 
+  // Load portfolio whenever the active address changes
   useEffect(() => {
     if (activeAddress) {
-      // Use a fresh call to avoid stale closure — pass address directly
       walletAssetLoader.loadSolanaWalletAssets(activeAddress).then((result) => {
         const tokensFromChain: Token[] = result.assets.map((asset) => ({
           id: asset.id,
@@ -223,19 +291,20 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   return (
     <WalletContext.Provider
       value={{
+        allWallets,
+        activeWallet,
+        setActiveWallet,
         accounts,
         selectedAccount,
         setSelectedAccount,
         connectedWallet,
         connectExternalWallet,
         disconnectExternalWallet,
-        refreshConnectedWalletBalance,
         tokens,
         blockchains,
         totalBalance,
         isLoading,
         isInitialized,
-        portfolio,
         refreshWallet,
         refreshPortfolio,
         loadAccounts,
