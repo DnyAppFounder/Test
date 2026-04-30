@@ -37,7 +37,9 @@ class WalletAssetLoaderService {
 
   async loadSolanaWalletAssets(address: string): Promise<WalletAssetsResponse> {
     try {
+      console.log('[AssetLoader] Loading assets for wallet:', address);
       const portfolio = await this.solanaService.getWalletPortfolio(address);
+      console.log('[AssetLoader] Portfolio loaded — SOL:', portfolio.solBalance, '| Tokens:', portfolio.tokens.length, '| Total USD:', portfolio.totalValue);
 
       const nativeAsset: WalletAsset = {
         id: 'solana',
@@ -58,20 +60,26 @@ class WalletAssetLoaderService {
 
       const tokenAssets = await Promise.all(
         portfolio.tokens.map(async (token) => {
-          let logoUrl = token.metadata.verified
-            ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`
-            : undefined;
+          let logoUrl = token.metadata.logoURI || undefined;
 
-          if (!logoUrl) {
-            const jupiterToken = await jupiterTokenListService.getTokenByAddress(token.mint);
-            logoUrl = jupiterToken?.logoURI;
+          if (!logoUrl && token.metadata.verified) {
+            logoUrl = `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`;
           }
 
           if (!logoUrl) {
-            const dexPairs = await dexScreenerService.getTokenByAddress(token.mint);
-            if (dexPairs.length > 0) {
-              logoUrl = dexPairs[0].info?.imageUrl;
-            }
+            try {
+              const jupiterToken = await jupiterTokenListService.getTokenByAddress(token.mint);
+              logoUrl = jupiterToken?.logoURI;
+            } catch {}
+          }
+
+          if (!logoUrl) {
+            try {
+              const dexPairs = await dexScreenerService.getTokenByAddress(token.mint);
+              if (dexPairs.length > 0) {
+                logoUrl = dexPairs[0].info?.imageUrl;
+              }
+            } catch {}
           }
 
           return {

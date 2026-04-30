@@ -32,8 +32,11 @@ export class SolanaWalletService {
   }
 
   async getWalletPortfolio(address: string): Promise<WalletPortfolio> {
+    console.log('[WalletService] Loading portfolio for:', address);
     const balances = await this.balanceService.getWalletBalances(address);
-    const solPrice = this.priceService.getSOLPrice();
+    console.log('[WalletService] SOL balance:', balances.solBalance, '| SPL token accounts:', balances.tokens.length);
+    const solPrice = await this.priceService.getSOLPrice();
+    console.log('[WalletService] SOL price from Jupiter:', solPrice);
     const solValue = balances.solBalance * solPrice;
 
     const enrichedTokens: EnrichedToken[] = [];

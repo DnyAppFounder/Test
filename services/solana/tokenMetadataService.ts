@@ -1,5 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { SolanaConnectionService } from './connectionService';
+import { jupiterTokenListService } from '../jupiter/tokenListService';
 
 export interface TokenMetadata {
   mint: string;
@@ -80,6 +81,25 @@ export class TokenMetadataService {
       return WELL_KNOWN_TOKENS[mintAddress];
     }
 
+    // Try Jupiter token list for metadata
+    try {
+      const jupToken = await jupiterTokenListService.getTokenByAddress(mintAddress);
+      if (jupToken) {
+        const metadata: TokenMetadata = {
+          mint: mintAddress,
+          name: jupToken.name,
+          symbol: jupToken.symbol,
+          logoURI: jupToken.logoURI,
+          decimals: jupToken.decimals,
+          verified: true,
+        };
+        console.log('[TokenMetadata] Resolved from Jupiter:', jupToken.symbol, mintAddress.slice(0, 8));
+        this.metadataCache.set(mintAddress, metadata);
+        return metadata;
+      }
+    } catch {}
+
+    // Fallback to on-chain mint info for decimals
     try {
       const connection = this.connectionService.getConnection();
       const mintPublicKey = new PublicKey(mintAddress);
@@ -101,7 +121,7 @@ export class TokenMetadataService {
         return metadata;
       }
     } catch (error) {
-      console.error('Error fetching token metadata:', error);
+      console.log('[TokenMetadata] On-chain fetch failed for:', mintAddress.slice(0, 8), error);
     }
 
     const fallbackMetadata: TokenMetadata = {
@@ -112,6 +132,7 @@ export class TokenMetadataService {
       verified: false,
     };
 
+    this.metadataCache.set(mintAddress, fallbackMetadata);
     return fallbackMetadata;
   }
 

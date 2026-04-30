@@ -22,23 +22,29 @@ export class SolanaBalanceService {
 
   async getSOLBalance(address: string): Promise<number> {
     try {
+      console.log('[BalanceService] Fetching SOL balance for:', address);
       const publicKey = new PublicKey(address);
-      const balance = await this.connectionService.getConnection().getBalance(publicKey);
-      return balance / LAMPORTS_PER_SOL;
+      const lamports = await this.connectionService.getConnection().getBalance(publicKey);
+      const solBalance = lamports / LAMPORTS_PER_SOL;
+      console.log('[BalanceService] SOL lamports:', lamports, '| SOL balance:', solBalance);
+      return solBalance;
     } catch (error) {
-      console.error('Error fetching SOL balance:', error);
+      console.error('[BalanceService] Error fetching SOL balance:', error);
       return 0;
     }
   }
 
   async getTokenAccounts(address: string): Promise<TokenBalance[]> {
     try {
+      console.log('[BalanceService] Fetching SPL token accounts for:', address);
       const publicKey = new PublicKey(address);
       const connection = this.connectionService.getConnection();
 
       const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
         programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
       });
+
+      console.log('[BalanceService] Raw token accounts found:', tokenAccounts.value.length);
 
       const tokens: TokenBalance[] = [];
 
@@ -56,9 +62,10 @@ export class SolanaBalanceService {
         }
       }
 
+      console.log('[BalanceService] SPL tokens with balance > 0:', tokens.length);
       return tokens;
     } catch (error) {
-      console.error('Error fetching token accounts:', error);
+      console.error('[BalanceService] Error fetching token accounts:', error);
       return [];
     }
   }
