@@ -56,7 +56,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 
 export default function WalletHome() {
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress } = useWallet();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -98,7 +98,8 @@ export default function WalletHome() {
   }, [category]);
 
   const loadWalletAssets = useCallback(async () => {
-    if (!selectedAccount) {
+    const address = connectedWallet?.address ?? selectedAccount?.address;
+    if (!address) {
       setWalletAssets([]);
       setTotalBalance(0);
       return;
@@ -106,18 +107,12 @@ export default function WalletHome() {
 
     setAssetsLoading(true);
     try {
-      const result = await walletAssetLoader.loadWalletAssets(
-        selectedAccount.blockchain,
-        selectedAccount.address
-      );
+      const result = await walletAssetLoader.loadWalletAssets('solana', address);
       setWalletAssets(result.assets);
       setTotalBalance(result.totalValue);
 
       if (result.totalValue > 0) {
-        await PortfolioHistoryService.recordSnapshot(
-          selectedAccount.address,
-          result.totalValue
-        );
+        await PortfolioHistoryService.recordSnapshot(address, result.totalValue);
       }
     } catch (error) {
       console.error('Error loading wallet assets:', error);
@@ -126,7 +121,7 @@ export default function WalletHome() {
     } finally {
       setAssetsLoading(false);
     }
-  }, [selectedAccount]);
+  }, [selectedAccount, connectedWallet]);
 
   const loadWatchlist = useCallback(async () => {
     try {
@@ -203,9 +198,12 @@ export default function WalletHome() {
             <Text style={styles.balance}>{formatBalance(totalBalance)}</Text>
             {selectedAccount && (
               <View style={styles.accountBadge}>
-                <View style={styles.accountDot} />
+                <View style={[styles.accountDot, connectedWallet ? styles.connectedDot : undefined]} />
                 <Text style={styles.accountText}>
-                  {selectedAccount.blockchain.toUpperCase()}: {selectedAccount.address.slice(0, 4)}...{selectedAccount.address.slice(-4)}
+                  {connectedWallet
+                    ? `${connectedWallet.name}: ${connectedWallet.address.slice(0, 4)}...${connectedWallet.address.slice(-4)}`
+                    : `${selectedAccount.blockchain.toUpperCase()}: ${selectedAccount.address.slice(0, 4)}...${selectedAccount.address.slice(-4)}`
+                  }
                 </Text>
               </View>
             )}
@@ -358,9 +356,9 @@ export default function WalletHome() {
             </ScrollView>
           )}
 
-          {activeTab === 'assets' && selectedAccount && totalBalance > 0 && (
+          {activeTab === 'assets' && activeAddress && totalBalance > 0 && (
             <View style={styles.chartWrapper}>
-              <PortfolioChart walletAddress={selectedAccount.address} currentValue={totalBalance} />
+              <PortfolioChart walletAddress={activeAddress} currentValue={totalBalance} />
             </View>
           )}
         </View>
@@ -706,6 +704,9 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: colors.success,
+  },
+  connectedDot: {
+    backgroundColor: colors.primary,
   },
   accountText: {
     fontSize: fontSize.xs,

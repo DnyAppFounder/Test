@@ -28,8 +28,11 @@ export default function ImportWallet() {
   const [step, setStep] = useState<'input' | 'importing' | 'success'>('input');
 
   const handleImport = async () => {
-    const trimmed = seedPhrase.trim().toLowerCase();
-    const words = trimmed.split(/\s+/);
+    // BIP39 spec: normalize whitespace only, then lowercase for validation.
+    // Do NOT alter the original word content — lowercasing is correct because
+    // all BIP39 English wordlist words are lowercase by spec.
+    const trimmed = seedPhrase.trim().toLowerCase().replace(/\s+/g, ' ');
+    const words = trimmed.split(' ');
 
     if (words.length !== 12 && words.length !== 24) {
       setError('Please enter a valid recovery phrase (12 or 24 words)');

@@ -10,25 +10,31 @@ export class MnemonicManager {
     return mnemonic.phrase;
   }
 
+  static normalize(mnemonic: string): string {
+    // BIP39 English wordlist is all lowercase; normalize whitespace
+    return mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
   static validate(mnemonic: string): boolean {
     try {
-      const words = mnemonic.trim().split(/\s+/);
+      const normalized = this.normalize(mnemonic);
+      const words = normalized.split(' ');
       if (words.length !== 12 && words.length !== 24) {
         return false;
       }
-      return bip39.validateMnemonic(mnemonic, wordlist);
+      return bip39.validateMnemonic(normalized, wordlist);
     } catch {
       return false;
     }
   }
 
   static toSeed(mnemonic: string, passphrase: string = ''): Uint8Array {
-    if (!this.validate(mnemonic)) {
+    const normalized = this.normalize(mnemonic);
+    if (!this.validate(normalized)) {
       throw new Error('Invalid mnemonic phrase');
     }
-    // Use proper BIP39 mnemonic to seed conversion
-    // This produces a 64-byte seed, which is what Phantom uses
-    return bip39.mnemonicToSeedSync(mnemonic, passphrase);
+    // 64-byte BIP39 seed — the exact same seed Phantom derives from this mnemonic
+    return bip39.mnemonicToSeedSync(normalized, passphrase);
   }
 
   static toEntropy(mnemonic: string): Uint8Array {

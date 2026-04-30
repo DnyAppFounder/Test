@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import * as nacl from 'tweetnacl';
 import { MnemonicManager } from './mnemonic';
-import { HDKey } from '@scure/bip32';
+import { derivePath } from 'ed25519-hd-key';
 
 export interface DerivedKey {
   publicKey: Uint8Array;
@@ -15,26 +15,31 @@ export interface DerivedEVMNode {
 }
 
 export class KeyDerivationManager {
+  /**
+   * Derive a Solana ed25519 keypair using SLIP-0010 / ed25519-hd-key.
+   *
+   * This is the exact derivation Phantom, Solflare, Backpack, and Jupiter Wallet
+   * use for the path m/44'/501'/accountIndex'/0'.
+   *
+   * ed25519-hd-key implements RFC 8032 / SLIP-0010 which is the only correct
+   * way to derive ed25519 keys from a BIP39 seed. @scure/bip32 uses secp256k1
+   * and must NOT be used for Solana.
+   */
   static deriveSolanaKeyPair(
     mnemonic: string,
     accountIndex: number = 0
   ): nacl.SignKeyPair {
-    // Get the proper BIP39 seed (64 bytes)
+    // 64-byte BIP39 seed from mnemonic (Phantom-compatible)
     const seed = MnemonicManager.toSeed(mnemonic);
 
-    // Use Phantom-compatible derivation path: m/44'/501'/X'/0'
+    // Phantom-compatible derivation path (SLIP-0010 ed25519)
     const path = `m/44'/501'/${accountIndex}'/0'`;
 
-    // Use @scure/bip32 which is browser-compatible and supports Ed25519
-    const hdkey = HDKey.fromMasterSeed(seed);
-    const derivedKey = hdkey.derive(path);
+    // ed25519-hd-key implements SLIP-0010 for ed25519 — required for Solana
+    const { key: derivedKey } = derivePath(path, Buffer.from(seed).toString('hex'));
 
-    if (!derivedKey.privateKey) {
-      throw new Error('Failed to derive private key');
-    }
-
-    // Generate keypair from the derived private key (32 bytes)
-    return nacl.sign.keyPair.fromSeed(derivedKey.privateKey);
+    // Generate nacl keypair from the 32-byte derived seed
+    return nacl.sign.keyPair.fromSeed(derivedKey);
   }
 
   static deriveEthereumHDNode(
@@ -71,7 +76,7 @@ export class KeyDerivationManager {
     blockchain: 'solana' | 'ethereum' | 'polygon' | 'base' | 'bitcoin',
     accountIndex: number = 0
   ): string {
-    const paths = {
+    const paths: Record<string, string> = {
       solana: `m/44'/501'/${accountIndex}'/0'`,
       ethereum: `m/44'/60'/0'/0/${accountIndex}`,
       polygon: `m/44'/60'/0'/0/${accountIndex}`,

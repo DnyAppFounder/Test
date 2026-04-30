@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,12 +11,15 @@ import Animated, {
   withSequence,
   Easing,
 } from 'react-native-reanimated';
+import { Wallet } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import SkylineBackground from '@/components/SkylineBackground';
+import { ConnectWalletModal } from '@/components/ConnectWalletModal';
 
 export default function OnboardingWelcome() {
   const router = useRouter();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const [showConnectModal, setShowConnectModal] = useState(false);
 
   const logoOpacity = useSharedValue(0);
   const logoScale = useSharedValue(0.8);
@@ -129,8 +132,23 @@ export default function OnboardingWelcome() {
           >
             <Text style={styles.secondaryButtonText}>Import Wallet</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.connectButton}
+            onPress={() => setShowConnectModal(true)}
+            activeOpacity={0.85}
+          >
+            <Wallet size={16} color={colors.textMuted} strokeWidth={2} />
+            <Text style={styles.connectButtonText}>Connect Wallet</Text>
+          </TouchableOpacity>
         </Animated.View>
       </View>
+
+      <ConnectWalletModal
+        visible={showConnectModal}
+        onClose={() => setShowConnectModal(false)}
+        onConnected={() => router.replace('/(tabs)')}
+      />
     </View>
   );
 }
@@ -260,6 +278,19 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: colors.textSecondary,
     fontSize: fontSize.lg,
+    fontWeight: '600',
+  },
+  connectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: 14,
+    borderRadius: borderRadius.md,
+  },
+  connectButtonText: {
+    color: colors.textMuted,
+    fontSize: fontSize.md,
     fontWeight: '600',
   },
 });
