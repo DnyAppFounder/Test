@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
@@ -189,10 +190,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, [connectedWallet]);
 
   const fullLogout = useCallback(async () => {
-    // Disconnect any external wallet
+    // Disconnect any external wallet session from storage
     if (connectedWallet) {
       await ExternalWalletAdapter.disconnectExtension(connectedWallet.id).catch(() => {});
+    } else {
+      // Also clear any stale external wallet session in storage even if not in memory
+      await AsyncStorage.removeItem('external_wallet_connected').catch(() => {});
     }
+    // Clear SecureWalletManager in-memory mnemonic
+    SecureWalletManager.getInstance().lockWallet();
     // Clear all state atomically
     setConnectedWallet(null);
     setAccounts([]);

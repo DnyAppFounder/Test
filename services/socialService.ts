@@ -619,13 +619,13 @@ export class SocialService {
   }
 
   static async updateNotificationSettings(
-    userId: string,
+    settingsId: string,
     updates: Partial<Omit<NotificationSettings, 'id' | 'user_id'>>
   ): Promise<NotificationSettings | null> {
     const { data } = await supabase
       .from('notification_settings')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('user_id', userId)
+      .update(updates)
+      .eq('id', settingsId)
       .select()
       .maybeSingle();
     return data;

@@ -319,18 +319,23 @@ export default function CommunityScreen() {
   };
 
   const renderProfileTab = () => {
-    if (!profile) {
-      return (
-        <View style={styles.emptyState}>
-          <View style={styles.emptyIconWrap}>
-            <User size={44} color={colors.primary} strokeWidth={1.5} />
-          </View>
-          <Text style={styles.emptyTitle}>No Profile</Text>
-          <Text style={styles.emptySubtitle}>Connect a wallet to create your profile</Text>
+    return (
+      <View style={styles.emptyState}>
+        <View style={styles.emptyIconWrap}>
+          <User size={44} color={colors.primary} strokeWidth={1.5} />
         </View>
-      );
-    }
-    return null;
+        <Text style={styles.emptyTitle}>{profile ? profile.username || 'My Profile' : 'No Profile'}</Text>
+        <Text style={styles.emptySubtitle}>
+          {profile ? 'Tap to view your full profile' : 'Connect a wallet to create your profile'}
+        </Text>
+        <TouchableOpacity
+          style={styles.emptyBtn}
+          onPress={() => profile?.id ? router.push(`/profile/${profile.id}` as any) : router.push('/onboarding' as any)}
+        >
+          <Text style={styles.emptyBtnText}>{profile ? 'View Profile' : 'Connect Wallet'}</Text>
+        </TouchableOpacity>
+      </View>
+    );
   };
 
   const filteredConvos = conversations.filter(c => {
@@ -516,7 +521,11 @@ export default function CommunityScreen() {
       {activeTab === 'messages' ? (
         <View style={styles.msgHeader}>
           <Text style={styles.msgHeaderTitle}>Messages</Text>
-          <TouchableOpacity style={styles.composeBtn} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.composeBtn}
+            activeOpacity={0.85}
+            onPress={() => Alert.alert('New Message', 'Visit a user\'s profile to start a conversation.')}
+          >
             <Plus size={22} color={colors.white} strokeWidth={2.5} />
           </TouchableOpacity>
         </View>
@@ -553,7 +562,11 @@ export default function CommunityScreen() {
             style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
             onPress={() => {
               if (tab.key === 'profile') {
-                if (profile) router.push(`/profile/${profile.id}` as any);
+                if (profile?.id) {
+                  router.push(`/profile/${profile.id}` as any);
+                } else {
+                  setActiveTab('profile');
+                }
                 return;
               }
               setActiveTab(tab.key);
