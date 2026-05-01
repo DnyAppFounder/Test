@@ -10,7 +10,8 @@ interface PostCardProps {
   onLike: (postId: string) => void;
   onComment: (postId: string) => void;
   onRepost: (postId: string) => void;
-  onPromote: (postId: string) => void;
+  /** Only passed when post belongs to currentProfile — triggers promote flow */
+  onPromote?: (postId: string) => void;
   onDelete?: (postId: string) => void;
 }
 
@@ -26,7 +27,8 @@ export function timeAgo(date: string) {
   return `${Math.floor(days / 7)}w`;
 }
 
-export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote, onDelete }: PostCardProps) {
+export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote = undefined, onDelete }: PostCardProps) {
+  const isOwnPost = currentProfile != null && post.author_id === currentProfile.id;
   const router = useRouter();
 
   const handleProfilePress = () => {
@@ -80,11 +82,11 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
           <TouchableOpacity style={styles.moreBtn} onPress={handleDelete} activeOpacity={0.7}>
             <Trash2 size={17} color="#ef4444" strokeWidth={2} />
           </TouchableOpacity>
-        ) : (
+        ) : isOwnPost && onPromote ? (
           <TouchableOpacity style={styles.moreBtn} onPress={() => onPromote(post.id)} activeOpacity={0.7}>
             <MoreHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
           </TouchableOpacity>
-        )}
+        ) : null}
       </View>
 
       {/* Content */}

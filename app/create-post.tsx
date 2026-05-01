@@ -13,7 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { X, Check, ChevronDown, Globe, Image as ImageIcon, Video, ChartBar as BarChart2, Coins, MapPin, Lock, MessageCircle, AtSign, User } from 'lucide-react-native';
+import { X, Check, ChevronDown, ChevronRight, Globe, Image as ImageIcon, Video, ChartBar as BarChart2, Coins, MapPin, Lock, MessageCircle, AtSign, User } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService } from '@/services/socialService';

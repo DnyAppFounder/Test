@@ -1,6 +1,22 @@
-import { useEffect, useState, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, Text, TouchableOpacity, useWindowDimensions, Platform } from 'react-native';
-import Svg, { Path, Line, Rect, Text as SvgText, G } from 'react-native-svg';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import {
+  View,
+  StyleSheet,
+  ActivityIndicator,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+} from 'react-native';
+import Svg, {
+  Path,
+  Line,
+  Rect,
+  Text as SvgText,
+  Defs,
+  LinearGradient as SvgLinearGradient,
+  Stop,
+  G,
+} from 'react-native-svg';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
 
@@ -11,27 +27,32 @@ interface TradingViewChartProps {
   tokenMint?: string;
 }
 
-const TIMEFRAMES: TimeFrame[] = ['15m', '1H', '4H', '1D', '1W'];
-const CHART_HEIGHT = 280;
-const VOLUME_HEIGHT = 60;
-const PADDING = { top: 24, right: 56, bottom: 4, left: 8 };
+const TIMEFRAMES: { key: TimeFrame; label: string }[] = [
+  { key: '1m', label: '1m' },
+  { key: '5m', label: '5m' },
+  { key: '1H', label: '1h' },
+  { key: '1D', label: '1d' },
+  { key: '1W', label: '1w' },
+  { key: '1M', label: '1M' },
+];
 
-function formatPrice(price: number): string {
-  if (price === 0) return '0';
-  if (price >= 1000) return `$${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  if (price >= 1) return `$${price.toFixed(4)}`;
-  if (price >= 0.001) return `$${price.toFixed(6)}`;
-  return `$${price.toExponential(3)}`;
+// Chart layout constants
+const CHART_H = 220;
+const VOL_H = 48;
+const PAD = { top: 20, right: 60, bottom: 24, left: 4 };
+// Auto-refresh every 15 seconds
+const REFRESH_INTERVAL = 15000;
+
+function fmtPrice(p: number): string {
+  if (!p || p === 0) return '0';
+  if (p >= 10000) return p.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.001) return p.toFixed(6);
+  if (p >= 0.000001) return p.toFixed(8);
+  return p.toExponential(3);
 }
 
-function formatVolume(v: number): string {
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
-  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-  return `$${v.toFixed(0)}`;
-}
-
-function formatTime(ts: number, tf: TimeFrame): string {
+function fmtTime(ts: number, tf: TimeFrame): string {
   const d = new Date(ts);
   if (tf === '1D' || tf === '1W' || tf === '1M') {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -39,268 +60,267 @@ function formatTime(ts: number, tf: TimeFrame): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+function calcChange(candles: CandleData[]): { abs: number; pct: number } {
+  if (candles.length < 2) return { abs: 0, pct: 0 };
+  const first = candles[0].close;
+  const last = candles[candles.length - 1].close;
+  return { abs: last - first, pct: first !== 0 ? ((last - first) / first) * 100 : 0 };
+}
+
 export function TradingViewChart({ symbol, currentPrice, tokenMint }: TradingViewChartProps) {
   const { width: screenWidth } = useWindowDimensions();
-  const chartWidth = Math.min(screenWidth - spacing.xxl * 2, 600);
+  // leave room for horizontal padding from parent
+  const chartWidth = Math.min(screenWidth - 32, 600);
 
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [timeframe, setTimeframe] = useState<TimeFrame>('1H');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [chartType, setChartType] = useState<'candle' | 'line'>('candle');
+  const [hasData, setHasData] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadData = useCallback(async () => {
-    if (!tokenMint) {
-      setError(true);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(false);
+  const loadData = useCallback(async (tf: TimeFrame, silent = false) => {
+    if (!tokenMint) { setLoading(false); return; }
+    if (!silent) setLoading(true);
     try {
-      const data = await chartDataService.getOHLCVData(tokenMint, timeframe);
-      if (data.length > 0) {
+      // clear cache so we always get fresh data on explicit timeframe change
+      if (!silent) chartDataService.clearCache();
+      const data = await chartDataService.getOHLCVData(tokenMint, tf);
+      if (data && data.length > 0) {
         setCandles(data);
+        setHasData(true);
       } else {
-        setError(true);
+        setHasData(false);
       }
     } catch {
-      setError(true);
+      setHasData(false);
     } finally {
       setLoading(false);
     }
-  }, [tokenMint, timeframe]);
+  }, [tokenMint]);
 
+  // Load on mount + timeframe change
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadData(timeframe, false);
+  }, [tokenMint, timeframe, loadData]);
+
+  // Auto-refresh silently
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => loadData(timeframe, true), REFRESH_INTERVAL);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [tokenMint, timeframe, loadData]);
 
   if (loading) {
     return (
       <View style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Loading chart...</Text>
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={colors.primary} />
         </View>
       </View>
     );
   }
 
-  if (error || candles.length === 0) {
+  if (!hasData || candles.length < 2) {
     return (
       <View style={styles.container}>
-        <View style={styles.unavailableContainer}>
-          <Text style={styles.unavailableTitle}>Chart not available</Text>
-          {currentPrice !== undefined && currentPrice > 0 && (
-            <Text style={styles.priceOnly}>{formatPrice(currentPrice)}</Text>
+        <View style={styles.unavailableWrap}>
+          <Text style={styles.unavailableText}>Chart data unavailable</Text>
+          {currentPrice != null && currentPrice > 0 && (
+            <Text style={styles.priceFallback}>{fmtPrice(currentPrice)}</Text>
           )}
         </View>
       </View>
     );
   }
 
-  // Build chart geometry
-  const plotW = chartWidth - PADDING.left - PADDING.right;
-  const plotH = CHART_HEIGHT - PADDING.top - PADDING.bottom;
+  // --- Chart geometry ---
+  const plotW = chartWidth - PAD.left - PAD.right;
+  const plotH = CHART_H - PAD.top - PAD.bottom;
 
+  const closes = candles.map(c => c.close);
   const highs = candles.map(c => c.high);
   const lows = candles.map(c => c.low);
-  const maxPrice = Math.max(...highs);
-  const minPrice = Math.min(...lows);
-  const priceRange = maxPrice - minPrice || 1;
+  const maxP = Math.max(...highs);
+  const minP = Math.min(...lows);
+  const priceRange = maxP - minP || maxP * 0.01 || 1;
 
   const maxVol = Math.max(...candles.map(c => c.volume)) || 1;
-
-  const candleCount = candles.length;
-  const candleW = Math.max(2, plotW / candleCount - 1);
+  const n = candles.length;
+  const barW = Math.max(1, (plotW / n) * 0.7);
 
   function xOf(i: number) {
-    return PADDING.left + (i + 0.5) * (plotW / candleCount);
+    return PAD.left + (i + 0.5) * (plotW / n);
   }
   function yOf(price: number) {
-    return PADDING.top + plotH - ((price - minPrice) / priceRange) * plotH;
+    return PAD.top + plotH - ((price - minP) / priceRange) * plotH;
   }
-  function volH(vol: number) {
-    return (vol / maxVol) * VOLUME_HEIGHT;
+  function volBarH(vol: number) {
+    return Math.max(1, (vol / maxVol) * VOL_H * 0.9);
   }
 
-  // Price levels (5 grid lines)
-  const levels = 5;
-  const priceGrid = Array.from({ length: levels }, (_, i) => {
-    const price = minPrice + (priceRange * i) / (levels - 1);
-    const y = yOf(price);
-    return { price, y };
+  // Line path
+  const linePts = candles.map((c, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(c.close).toFixed(1)}`).join(' ');
+  // Area fill (gradient)
+  const bottomY = (PAD.top + plotH).toFixed(1);
+  const areaPath = `${linePts} L${xOf(n - 1).toFixed(1)},${bottomY} L${PAD.left.toFixed(1)},${bottomY} Z`;
+
+  // Price grid (4 lines)
+  const gridLevels = 4;
+  const priceGridLines = Array.from({ length: gridLevels }, (_, i) => {
+    const frac = i / (gridLevels - 1);
+    const price = minP + priceRange * frac;
+    return { price, y: yOf(price) };
   });
 
-  // Current price line
-  const lastClose = candles[candles.length - 1].close;
-  const currentY = yOf(lastClose);
+  // Time labels (5 evenly spaced)
+  const timeLabelIndices = [0, Math.floor(n * 0.25), Math.floor(n * 0.5), Math.floor(n * 0.75), n - 1];
 
-  // Line chart path
-  const linePath = candles.map((c, i) => {
-    const x = xOf(i);
-    const y = yOf(c.close);
-    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
+  // Current price
+  const lastClose = candles[n - 1].close;
+  const displayPrice = (currentPrice != null && currentPrice > 0) ? currentPrice : lastClose;
+  const currentY = yOf(displayPrice > maxP ? maxP : displayPrice < minP ? minP : displayPrice);
 
-  // Area fill path (under line)
-  const areaPath = linePath + ` L${xOf(candleCount - 1).toFixed(1)},${(PADDING.top + plotH).toFixed(1)} L${PADDING.left.toFixed(1)},${(PADDING.top + plotH).toFixed(1)} Z`;
+  const { abs: changeAbs, pct: changePct } = calcChange(candles);
+  const isUp = changePct >= 0;
+  const changeColor = isUp ? '#10b981' : '#ef4444';
 
-  const totalHeight = CHART_HEIGHT + VOLUME_HEIGHT + 24;
+  const totalH = CHART_H + VOL_H;
 
   return (
     <View style={styles.container}>
-      {/* Header controls */}
-      <View style={styles.chartHeader}>
-        <View style={styles.priceRow}>
-          <Text style={styles.chartPrice}>{formatPrice(lastClose)}</Text>
-          <Text style={[styles.chartSymbol, { color: colors.textMuted }]}>{symbol}</Text>
+      {/* Header row: pair label + price + change */}
+      <View style={styles.topRow}>
+        <Text style={styles.pairLabel}>{(symbol || 'TOKEN').toUpperCase()}/SOL</Text>
+        <View style={styles.priceChangeBlock}>
+          <Text style={styles.livePrice}>{fmtPrice(displayPrice)}</Text>
+          <Text style={[styles.changePct, { color: changeColor }]}>
+            {isUp ? '+' : ''}{fmtPrice(Math.abs(changeAbs))} ({isUp ? '+' : ''}{changePct.toFixed(2)}%)
+          </Text>
         </View>
-        <TouchableOpacity
-          style={styles.chartTypeToggle}
-          onPress={() => setChartType(t => t === 'candle' ? 'line' : 'candle')}
-        >
-          <Text style={styles.chartTypeText}>{chartType === 'candle' ? '┤' : '∿'}</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Timeframe selector */}
       <View style={styles.tfRow}>
         {TIMEFRAMES.map(tf => (
           <TouchableOpacity
-            key={tf}
-            style={[styles.tfButton, timeframe === tf && styles.tfButtonActive]}
-            onPress={() => setTimeframe(tf)}
+            key={tf.key}
+            style={[styles.tfBtn, timeframe === tf.key && styles.tfBtnActive]}
+            onPress={() => setTimeframe(tf.key)}
+            activeOpacity={0.7}
           >
-            <Text style={[styles.tfText, timeframe === tf && styles.tfTextActive]}>{tf}</Text>
+            <Text style={[styles.tfText, timeframe === tf.key && styles.tfTextActive]}>{tf.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* SVG Chart */}
-      <View style={styles.svgContainer}>
-        <Svg width={chartWidth} height={totalHeight}>
+      {/* SVG chart */}
+      <View style={styles.svgWrap}>
+        <Svg width={chartWidth} height={totalH}>
+          <Defs>
+            {/* Purple area gradient */}
+            <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.35" />
+              <Stop offset="70%" stopColor="#8B5CF6" stopOpacity="0.08" />
+              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
+            </SvgLinearGradient>
+          </Defs>
+
           {/* Grid lines */}
-          {priceGrid.map(({ price, y }, i) => (
-            <G key={i}>
+          {priceGridLines.map(({ price, y }, i) => (
+            <G key={`g${i}`}>
               <Line
-                x1={PADDING.left}
+                x1={PAD.left}
                 y1={y}
-                x2={chartWidth - PADDING.right}
+                x2={chartWidth - PAD.right}
                 y2={y}
-                stroke={colors.surfaceBorder}
+                stroke="rgba(255,255,255,0.05)"
                 strokeWidth={1}
-                strokeDasharray="3,4"
               />
               <SvgText
-                x={chartWidth - PADDING.right + 4}
+                x={chartWidth - PAD.right + 4}
                 y={y + 4}
                 fontSize={9}
-                fill={colors.textMuted}
+                fill="rgba(255,255,255,0.35)"
                 textAnchor="start"
               >
-                {price >= 1 ? price.toFixed(2) : price.toExponential(2)}
+                {fmtPrice(price)}
               </SvgText>
             </G>
           ))}
 
-          {/* Current price line */}
-          <Line
-            x1={PADDING.left}
-            y1={currentY}
-            x2={chartWidth - PADDING.right}
-            y2={currentY}
-            stroke={lastClose >= candles[0].open ? colors.success : colors.error}
-            strokeWidth={1}
-            strokeDasharray="6,3"
-            opacity={0.7}
-          />
+          {/* Area fill */}
+          <Path d={areaPath} fill="url(#areaGrad)" />
 
-          {chartType === 'line' ? (
-            <G>
-              {/* Area */}
-              <Path d={areaPath} fill={colors.primaryGlow} opacity={0.15} />
-              {/* Line */}
-              <Path d={linePath} stroke={colors.primary} strokeWidth={1.5} fill="none" />
-            </G>
-          ) : (
-            <G>
-              {candles.map((c, i) => {
-                const x = xOf(i);
-                const isUp = c.close >= c.open;
-                const color = isUp ? colors.success : colors.error;
-                const bodyTop = yOf(Math.max(c.open, c.close));
-                const bodyBot = yOf(Math.min(c.open, c.close));
-                const bodyH = Math.max(1, bodyBot - bodyTop);
-                const wickX = x;
-                return (
-                  <G key={i}>
-                    {/* Wick */}
-                    <Line
-                      x1={wickX}
-                      y1={yOf(c.high)}
-                      x2={wickX}
-                      y2={yOf(c.low)}
-                      stroke={color}
-                      strokeWidth={1}
-                    />
-                    {/* Body */}
-                    <Rect
-                      x={x - candleW / 2}
-                      y={bodyTop}
-                      width={candleW}
-                      height={bodyH}
-                      fill={isUp ? colors.success : colors.error}
-                      opacity={0.9}
-                    />
-                  </G>
-                );
-              })}
-            </G>
-          )}
+          {/* Purple glow line — draw twice for glow effect */}
+          <Path d={linePts} stroke="rgba(139,92,246,0.3)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Path d={linePts} stroke="#A78BFA" strokeWidth={1.8} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Current price dashed line + label */}
+          <Line
+            x1={PAD.left}
+            y1={currentY}
+            x2={chartWidth - PAD.right}
+            y2={currentY}
+            stroke="#A78BFA"
+            strokeWidth={1}
+            strokeDasharray="4,3"
+            opacity={0.6}
+          />
+          {/* Price label box on right */}
+          <Rect
+            x={chartWidth - PAD.right + 1}
+            y={currentY - 9}
+            width={PAD.right - 2}
+            height={18}
+            fill="#7C3AED"
+            rx={3}
+          />
+          <SvgText
+            x={chartWidth - PAD.right + PAD.right / 2}
+            y={currentY + 4}
+            fontSize={8.5}
+            fill="#fff"
+            textAnchor="middle"
+            fontWeight="700"
+          >
+            {fmtPrice(displayPrice)}
+          </SvgText>
 
           {/* Volume bars */}
           {candles.map((c, i) => {
-            const x = xOf(i);
-            const isUp = c.close >= c.open;
-            const h = volH(c.volume);
-            const y = CHART_HEIGHT + VOLUME_HEIGHT - h;
+            const isUpBar = c.close >= c.open;
+            const h = volBarH(c.volume);
+            const vx = xOf(i);
+            const vy = CHART_H + VOL_H - h;
             return (
               <Rect
                 key={`v${i}`}
-                x={x - candleW / 2}
-                y={y}
-                width={candleW}
+                x={vx - barW / 2}
+                y={vy}
+                width={barW}
                 height={h}
-                fill={isUp ? colors.success : colors.error}
-                opacity={0.35}
+                fill={isUpBar ? '#10b981' : '#ef4444'}
+                opacity={0.5}
               />
             );
           })}
 
-          {/* Volume axis label */}
-          <SvgText
-            x={PADDING.left}
-            y={CHART_HEIGHT + 12}
-            fontSize={9}
-            fill={colors.textMuted}
-          >
-            VOL {formatVolume(candles[candles.length - 1].volume)}
-          </SvgText>
-
-          {/* X-axis time labels (show ~5 labels) */}
-          {[0, Math.floor(candleCount * 0.25), Math.floor(candleCount * 0.5), Math.floor(candleCount * 0.75), candleCount - 1].map(i => (
-            <SvgText
-              key={`t${i}`}
-              x={xOf(i)}
-              y={totalHeight - 4}
-              fontSize={9}
-              fill={colors.textMuted}
-              textAnchor="middle"
-            >
-              {formatTime(candles[i].timestamp, timeframe)}
-            </SvgText>
-          ))}
+          {/* X-axis time labels */}
+          {timeLabelIndices.map(i => {
+            if (i >= n) return null;
+            return (
+              <SvgText
+                key={`t${i}`}
+                x={xOf(i)}
+                y={totalH - 4}
+                fontSize={9}
+                fill="rgba(255,255,255,0.35)"
+                textAnchor="middle"
+              >
+                {fmtTime(candles[i].timestamp, timeframe)}
+              </SvgText>
+            );
+          })}
         </Svg>
       </View>
     </View>
@@ -309,48 +329,61 @@ export function TradingViewChart({ symbol, currentPrice, tokenMint }: TradingVie
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.surface,
+    backgroundColor: '#0D0D17',
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(139,92,246,0.12)',
   },
-  chartHeader: {
-    flexDirection: 'row',
+  loadingWrap: {
+    height: 200,
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  unavailableWrap: {
+    height: 160,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  unavailableText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  priceFallback: {
+    fontSize: fontSize.xxl,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  topRow: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.xs,
   },
-  priceRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.sm,
-  },
-  chartPrice: {
-    fontSize: fontSize.xl,
+  pairLabel: {
+    fontSize: fontSize.md,
     fontWeight: '800',
     color: colors.textPrimary,
-    letterSpacing: -0.5,
+    letterSpacing: 0.3,
   },
-  chartSymbol: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
+  priceChangeBlock: {
+    alignItems: 'flex-end',
   },
-  chartTypeToggle: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.sm,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+  livePrice: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: '#A78BFA',
+    letterSpacing: -0.2,
   },
-  chartTypeText: {
-    fontSize: 16,
-    color: colors.primary,
+  changePct: {
+    fontSize: fontSize.xs,
     fontWeight: '700',
+    marginTop: 1,
   },
   tfRow: {
     flexDirection: 'row',
@@ -358,56 +391,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
   },
-  tfButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 4,
+  tfBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: borderRadius.sm,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  tfButtonActive: {
-    backgroundColor: colors.primaryMuted,
-    borderWidth: 1,
-    borderColor: colors.primary,
+  tfBtnActive: {
+    backgroundColor: colors.primary,
   },
   tfText: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.4)',
   },
   tfTextActive: {
-    color: colors.primary,
+    color: '#fff',
   },
-  svgContainer: {
-    paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
-  loadingContainer: {
-    height: 320,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  loadingText: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  unavailableContainer: {
-    height: 200,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.xxl,
-  },
-  unavailableTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
-  },
-  priceOnly: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.primary,
-    marginTop: spacing.lg,
+  svgWrap: {
+    paddingHorizontal: 0,
+    paddingBottom: 4,
   },
 });
