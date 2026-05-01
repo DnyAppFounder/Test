@@ -30,6 +30,10 @@ import {
   Coins,
   RefreshCw,
   Image as ImageIcon,
+  SlidersHorizontal,
+  Copy,
+  ArrowRight,
+  ChevronRight,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -232,539 +236,356 @@ export default function WalletHome() {
            asset.symbol.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
+  // Static tokens shown in My Assets when wallet has no on-chain tokens
+  const STATIC_ASSETS = [
+    { symbol: 'SOL', name: 'Solana', balance: 0, balanceUsd: 0, change: 0, logoColor: '#9945FF', logoText: 'S' },
+    { symbol: 'DAWEN', name: 'Dawen', balance: 0, balanceUsd: 0, change: 0, logoColor: colors.primary, logoText: 'D' },
+    { symbol: 'USDC', name: 'USD Coin', balance: 0, balanceUsd: 0, change: 0, logoColor: '#2775CA', logoText: '$' },
+    { symbol: 'JUP', name: 'Jupiter', balance: 0, balanceUsd: 0, change: 0, logoColor: '#14F195', logoText: 'J' },
+  ];
+  const displayAssets = filteredAssets.length > 0 ? filteredAssets : null;
+
+  const shortAddr = activeWallet
+    ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
+    : '---';
+  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Phantom';
+
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        {/* Neon background layers */}
-        <View style={styles.neonBackground}>
-          <View style={styles.purpleGlow} />
-          <View style={styles.cyanGlow} />
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+    >
+      {/* ── 1. PORTFOLIO HEADER CARD ── */}
+      <LinearGradient
+        colors={['#1A0B2E', '#12121A', '#0A0A0F']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+        style={styles.portfolioCard}
+      >
+        {/* Glow blobs */}
+        <View style={styles.glow1} />
+        <View style={styles.glow2} />
+
+        <View style={styles.portfolioTop}>
+          <Text style={styles.portfolioLabel}>PORTFOLIO VALUE</Text>
+          <TouchableOpacity onPress={() => setBalanceHidden(!balanceHidden)}>
+            {balanceHidden ? <EyeOff size={20} color="rgba(255,255,255,0.5)" /> : <Eye size={20} color="rgba(255,255,255,0.5)" />}
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.headerContent}>
-          <View style={styles.balanceSection}>
-            <View style={styles.balanceTop}>
-              <Text style={styles.balanceLabel}>Portfolio Value</Text>
-              <TouchableOpacity
-                onPress={() => setBalanceHidden(!balanceHidden)}
-                style={styles.eyeButton}
-              >
-                {balanceHidden ? (
-                  <EyeOff size={20} color="rgba(255,255,255,0.6)" />
-                ) : (
-                  <Eye size={20} color="rgba(255,255,255,0.6)" />
-                )}
+        <Text style={styles.portfolioBalance}>{formatBalance(totalBalance)}</Text>
+        <Text style={styles.portfolioChange}>
+          {balanceHidden ? '****' : `$${totalBalance.toFixed(2)} (0.00%) today`}
+        </Text>
+
+        <View style={styles.portfolioWalletRow}>
+          <View style={styles.walletPill}>
+            <View style={styles.walletPillDot} />
+            <Text style={styles.walletPillText}>{walletLabel}: {shortAddr}</Text>
+          </View>
+          <TouchableOpacity style={styles.copyBtn}>
+            <Copy size={14} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Mini chart decoration */}
+        <View style={styles.miniChartDecor}>
+          {[10, 18, 12, 22, 16, 28, 20, 35, 28, 42, 34, 50, 42, 58, 48, 65].map((h, i) => (
+            <View key={i} style={[styles.miniChartBar, { height: h, left: i * 10, opacity: 0.15 + (h / 65) * 0.6 }]} />
+          ))}
+        </View>
+      </LinearGradient>
+
+      {/* ── 2. ACTION BUTTONS ── */}
+      <View style={styles.actionsRow}>
+        {[
+          { label: 'Receive', icon: ArrowDownToLine, route: '/receive' },
+          { label: 'Send', icon: ArrowUpFromLine, route: '/send' },
+          { label: 'Buy', icon: Plus, route: '/buy' },
+          { label: 'Swap', icon: RefreshCw, route: '/swap' },
+        ].map(({ label, icon: Icon, route }) => (
+          <TouchableOpacity
+            key={label}
+            style={styles.actionBtn}
+            onPress={() => router.push(route as any)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.actionBtnIcon}>
+              <Icon size={22} color={colors.primary} strokeWidth={2.5} />
+            </View>
+            <Text style={styles.actionBtnLabel}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* ── 3. TABS ── */}
+      <View style={styles.tabsWrap}>
+        {(['assets', 'market', 'watchlist'] as TabKey[]).map((tab) => {
+          const label = tab === 'assets' ? 'My Assets' : tab === 'market' ? 'Discover' : 'Watchlist';
+          return (
+            <TouchableOpacity
+              key={tab}
+              style={[styles.tabItem, activeTab === tab && styles.tabItemActive]}
+              onPress={() => handleTabChange(tab)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.tabItemText, activeTab === tab && styles.tabItemTextActive]}>{label}</Text>
+              {activeTab === tab && <View style={styles.tabUnderline} />}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ── 4. SEARCH BAR ── */}
+      <View style={styles.searchRow}>
+        <View style={styles.searchBar}>
+          <Search size={17} color={colors.textMuted} strokeWidth={2} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search tokens..."
+            placeholderTextColor={colors.textMuted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <TouchableOpacity style={styles.filterBtn}>
+          <SlidersHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
+      </View>
+
+      {/* ── 5. MY ASSETS / DISCOVER / WATCHLIST CONTENT ── */}
+      {activeTab === 'assets' && (
+        <>
+          {/* My Assets card */}
+          <View style={styles.assetsSectionCard}>
+            <View style={styles.assetsSectionHeader}>
+              <View>
+                <Text style={styles.assetsSectionTitle}>My Assets</Text>
+                <Text style={styles.assetsSectionSub}>
+                  {displayAssets ? displayAssets.length : STATIC_ASSETS.length} tokens • {formatBalance(totalBalance)}
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.manageBtn}>
+                <Text style={styles.manageBtnText}>Manage</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.balance}>{formatBalance(totalBalance)}</Text>
-            {activeWallet && (
-              <View style={styles.accountBadge}>
-                <View style={[styles.accountDot, activeWallet.type === 'connected' ? styles.connectedDot : undefined]} />
-                <Text style={styles.accountText}>
-                  {activeWallet.type === 'connected'
-                    ? `${activeWallet.name}: ${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
-                    : `${(activeWallet.blockchain ?? 'SOL').toUpperCase()}: ${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
-                  }
-                </Text>
+
+            {assetsLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 24 }} />
+            ) : displayAssets ? (
+              displayAssets.map((asset, idx) => (
+                <TouchableOpacity
+                  key={asset.address}
+                  style={[styles.assetRow, idx < displayAssets.length - 1 && styles.assetRowBorder]}
+                  onPress={() => router.push(`/token-detail/${asset.address}` as any)}
+                  activeOpacity={0.8}
+                >
+                  {asset.logoUrl ? (
+                    <Image source={{ uri: asset.logoUrl }} style={styles.assetLogo} />
+                  ) : (
+                    <View style={[styles.assetLogoPlaceholder, { backgroundColor: colors.primary + '33' }]}>
+                      <Text style={styles.assetLogoText}>{(asset.symbol ?? '??').substring(0, 2)}</Text>
+                    </View>
+                  )}
+                  <View style={styles.assetInfo}>
+                    <Text style={styles.assetName}>{asset.name}</Text>
+                    <Text style={styles.assetSymbol}>{asset.symbol}</Text>
+                  </View>
+                  <View style={styles.assetMid}>
+                    <Text style={styles.assetBalance2}>{balanceHidden ? '****' : asset.uiBalance.toFixed(asset.isNative ? 4 : 2)}</Text>
+                    <Text style={styles.assetBalanceUsd}>${asset.value.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.assetRight}>
+                    <Text style={styles.assetValueText}>${asset.value.toFixed(2)}</Text>
+                    <Text style={styles.assetChangeText}>0.00%</Text>
+                  </View>
+                </TouchableOpacity>
+              ))
+            ) : (
+              STATIC_ASSETS.map((asset, idx) => (
+                <TouchableOpacity
+                  key={asset.symbol}
+                  style={[styles.assetRow, idx < STATIC_ASSETS.length - 1 && styles.assetRowBorder]}
+                  onPress={() => router.push('/buy' as any)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.assetLogoPlaceholder, { backgroundColor: asset.logoColor + '33' }]}>
+                    <Text style={[styles.assetLogoText, { color: asset.logoColor }]}>{asset.logoText}</Text>
+                  </View>
+                  <View style={styles.assetInfo}>
+                    <Text style={styles.assetName}>{asset.symbol}</Text>
+                    <Text style={styles.assetSymbol}>{asset.name}</Text>
+                  </View>
+                  <View style={styles.assetMid}>
+                    <Text style={styles.assetBalance2}>0</Text>
+                    <Text style={styles.assetBalanceUsd}>$0.00</Text>
+                  </View>
+                  <View style={styles.assetRight}>
+                    <Text style={styles.assetValueText}>$0.00</Text>
+                    <Text style={styles.assetChangeText}>0.00%</Text>
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
+
+            {/* View all */}
+            <TouchableOpacity style={styles.viewAllBtn} activeOpacity={0.8}>
+              <Text style={styles.viewAllText}>View all tokens</Text>
+              <ChevronRight size={16} color={colors.primary} strokeWidth={2.5} />
+            </TouchableOpacity>
+          </View>
+
+          {/* NFTs section */}
+          <View style={styles.nftSectionCard}>
+            <View style={styles.nftSectionHeader}>
+              <Text style={styles.nftSectionTitle}>NFTs</Text>
+              <TouchableOpacity onPress={() => router.push('/nft-gallery' as any)}>
+                <Text style={styles.nftViewAll}>View all</Text>
+              </TouchableOpacity>
+            </View>
+
+            {nftsLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 20 }} />
+            ) : nfts.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing.sm }}>
+                {nfts.map(nft => (
+                  <TouchableOpacity
+                    key={nft.id}
+                    style={styles.nftThumb}
+                    onPress={() => router.push('/nft-gallery' as any)}
+                  >
+                    {nft.image_url ? (
+                      <Image source={{ uri: nft.image_url }} style={styles.nftThumbImg} />
+                    ) : (
+                      <View style={[styles.nftThumbImg, { backgroundColor: colors.surfaceLight }]} />
+                    )}
+                    <Text style={styles.nftThumbName} numberOfLines={1}>{nft.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.nftEmpty}>
+                <View style={styles.nftEmptyIcon}>
+                  <ImageIcon size={22} color={colors.primary} strokeWidth={1.5} />
+                </View>
+                <View>
+                  <Text style={styles.nftEmptyTitle}>You don't have any NFTs yet</Text>
+                  <Text style={styles.nftEmptySubtitle}>Your NFTs will appear here</Text>
+                </View>
               </View>
             )}
           </View>
+        </>
+      )}
 
-          <View style={styles.actionsGrid}>
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => router.push('/receive')}
-              activeOpacity={0.7}
-            >
-              <LinearGradient
-                colors={['rgba(139, 92, 246, 0.2)', 'rgba(139, 92, 246, 0.05)']}
-                style={styles.actionGradient}
-              >
-                <View style={styles.actionIconWrapper}>
-                  <ArrowDownToLine size={20} color={colors.primary} strokeWidth={2.5} />
-                </View>
-                <Text style={styles.actionLabel}>Receive</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => router.push('/send')}
-              activeOpacity={0.7}
-            >
-              <LinearGradient
-                colors={['rgba(139, 92, 246, 0.2)', 'rgba(139, 92, 246, 0.05)']}
-                style={styles.actionGradient}
-              >
-                <View style={styles.actionIconWrapper}>
-                  <ArrowUpFromLine size={20} color={colors.primary} strokeWidth={2.5} />
-                </View>
-                <Text style={styles.actionLabel}>Send</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => router.push('/buy' as any)}
-              activeOpacity={0.7}
-            >
-              <LinearGradient
-                colors={['rgba(139, 92, 246, 0.2)', 'rgba(139, 92, 246, 0.05)']}
-                style={styles.actionGradient}
-              >
-                <View style={styles.actionIconWrapper}>
-                  <Plus size={20} color={colors.primary} strokeWidth={2.5} />
-                </View>
-                <Text style={styles.actionLabel}>Buy</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => router.push('/swap')}
-              activeOpacity={0.7}
-            >
-              <LinearGradient
-                colors={['rgba(139, 92, 246, 0.2)', 'rgba(139, 92, 246, 0.05)']}
-                style={styles.actionGradient}
-              >
-                <View style={styles.actionIconWrapper}>
-                  <RefreshCw size={20} color={colors.primary} strokeWidth={2.5} />
-                </View>
-                <Text style={styles.actionLabel}>Swap</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.mainContent}>
-        <View style={styles.stickyHeaderContainer}>
-          <View style={styles.tabBarWrapper}>
-            <View style={styles.tabBar}>
+      {/* Discover tab */}
+      {activeTab === 'market' && (
+        <>
+          {/* Category chips */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll} contentContainerStyle={styles.categoryContent}>
+            {CATEGORIES.map(({ key, label, icon: Icon }) => (
               <TouchableOpacity
-                style={[styles.tab, activeTab === 'assets' && styles.tabActive]}
-                onPress={() => handleTabChange('assets')}
+                key={key}
+                style={[styles.categoryChip, category === key && styles.categoryChipActive]}
+                onPress={() => setCategory(key)}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.tabText, activeTab === 'assets' && styles.tabTextActive]}>
-                  My Assets
-                </Text>
-                {activeTab === 'assets' && <View style={styles.tabIndicator} />}
+                <Icon size={14} color={category === key ? colors.white : colors.textMuted} strokeWidth={2.5} />
+                <Text style={[styles.categoryText, category === key && styles.categoryTextActive]}>{label}</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'market' && styles.tabActive]}
-                onPress={() => handleTabChange('market')}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.tabText, activeTab === 'market' && styles.tabTextActive]}>
-                  Discover
-                </Text>
-                {activeTab === 'market' && <View style={styles.tabIndicator} />}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'watchlist' && styles.tabActive]}
-                onPress={() => handleTabChange('watchlist')}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.tabText, activeTab === 'watchlist' && styles.tabTextActive]}>
-                  Watchlist
-                </Text>
-                {activeTab === 'watchlist' && <View style={styles.tabIndicator} />}
-              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {loading ? (
+            <View style={styles.loaderContainer}>
+              <ActivityIndicator size="large" color={colors.primary} />
             </View>
-          </View>
-
-          <View style={styles.searchSection}>
-            <View style={styles.searchBar}>
-              <Search size={18} color={colors.textMuted} strokeWidth={2} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder={activeTab === 'market' ? 'Search tokens...' : 'Search...'}
-                placeholderTextColor={colors.textMuted}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-          </View>
-
-          {activeTab === 'market' && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.categoryScroll}
-              contentContainerStyle={styles.categoryContent}
-            >
-              {CATEGORIES.map(({ key, label, icon: Icon }) => (
-                <TouchableOpacity
-                  key={key}
-                  style={[styles.categoryChip, category === key && styles.categoryChipActive]}
-                  onPress={() => setCategory(key)}
-                  activeOpacity={0.7}
-                >
-                  <Icon
-                    size={16}
-                    color={category === key ? colors.white : colors.textMuted}
-                    strokeWidth={2.5}
-                  />
-                  <Text style={[styles.categoryText, category === key && styles.categoryTextActive]}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
-
-          {activeTab === 'assets' && activeAddress && totalBalance > 0 && assetSubTab === 'tokens' && (
-            <View style={styles.chartWrapper}>
-              <PortfolioChart walletAddress={activeAddress} currentValue={totalBalance} />
-            </View>
-          )}
-
-          {activeTab === 'assets' && (
-            <View style={styles.assetSubTabBar}>
-              <TouchableOpacity
-                style={[styles.assetSubTab, assetSubTab === 'tokens' && styles.assetSubTabActive]}
-                onPress={() => setAssetSubTab('tokens')}
-              >
-                <Coins size={14} color={assetSubTab === 'tokens' ? colors.primary : colors.textMuted} />
-                <Text style={[styles.assetSubTabText, assetSubTab === 'tokens' && styles.assetSubTabTextActive]}>
-                  Tokens
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.assetSubTab, assetSubTab === 'nfts' && styles.assetSubTabActive]}
-                onPress={() => { setAssetSubTab('nfts'); loadNFTs(); }}
-              >
-                <ImageIcon size={14} color={assetSubTab === 'nfts' ? colors.primary : colors.textMuted} />
-                <Text style={[styles.assetSubTabText, assetSubTab === 'nfts' && styles.assetSubTabTextActive]}>
-                  NFTs {nfts.length > 0 ? `(${nfts.length})` : ''}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.contentArea}>
-          {activeTab === 'market' ? (
-            loading ? (
-              <View style={styles.loaderContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Loading tokens...</Text>
-              </View>
-            ) : (
-              <FlatList
-                data={filteredTokens}
-                keyExtractor={(item) => item.address}
-              renderItem={({ item: token }) => {
+          ) : (
+            <View style={styles.assetsSectionCard}>
+              {filteredTokens.map((token, idx) => {
                 const changePositive = token.priceChange24h >= 0;
-                const tokenAge = liveMarketService.formatTokenAge(token.pairCreatedAt);
-                const showAsNew = tokenAge && (tokenAge.endsWith('s') || tokenAge.endsWith('m') || (tokenAge.endsWith('h') && parseInt(tokenAge) < 24));
-
                 return (
                   <TouchableOpacity
-                    style={styles.tokenCard}
+                    key={token.address}
+                    style={[styles.assetRow, idx < filteredTokens.length - 1 && styles.assetRowBorder]}
                     onPress={() => router.push(`/token-detail/${token.address}` as any)}
                     activeOpacity={0.8}
                   >
-                    <View style={styles.tokenLeft}>
-                      {token.image ? (
-                        <Image source={{ uri: token.image }} style={styles.tokenLogo} />
-                      ) : (
-                        <View style={styles.tokenLogoPlaceholder}>
-                          <Text style={styles.tokenLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
-                        </View>
-                      )}
-                      <View style={styles.tokenInfo}>
-                        <View style={styles.tokenNameRow}>
-                          <Text style={styles.tokenName} numberOfLines={1}>{token.name}</Text>
-                          {showAsNew && (
-                            <View style={styles.newBadge}>
-                              <Sparkles size={9} color={colors.primary} fill={colors.primary} />
-                              <Text style={styles.newBadgeText}>{tokenAge}</Text>
-                            </View>
-                          )}
-                          {token.boostCount && token.boostCount > 0 && (
-                            <View style={styles.verifiedBadge}>
-                              <Zap size={10} color={colors.warning} fill={colors.warning} />
-                            </View>
-                          )}
-                        </View>
-                        <View style={styles.tokenMetaRow}>
-                          <Text style={styles.tokenSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
-                          {token.marketCap && token.marketCap > 0 ? (
-                            <>
-                              <Text style={styles.metaDot}>•</Text>
-                              <Text style={styles.tokenMarketCap}>
-                                {liveMarketService.formatMarketCap(token.marketCap)} MC
-                              </Text>
-                            </>
-                          ) : token.liquidity > 0 && (
-                            <>
-                              <Text style={styles.metaDot}>•</Text>
-                              <Text style={styles.tokenLiquidity}>
-                                {liveMarketService.formatMarketCap(token.liquidity)} liq
-                              </Text>
-                            </>
-                          )}
-                          {token.volume24h > 0 && (
-                            <>
-                              <Text style={styles.metaDot}>•</Text>
-                              <Text style={styles.tokenVolume}>
-                                {liveMarketService.formatVolume(token.volume24h)} vol
-                              </Text>
-                            </>
-                          )}
-                        </View>
+                    {token.image ? (
+                      <Image source={{ uri: token.image }} style={styles.assetLogo} />
+                    ) : (
+                      <View style={styles.assetLogoPlaceholder}>
+                        <Text style={styles.assetLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
                       </View>
+                    )}
+                    <View style={styles.assetInfo}>
+                      <Text style={styles.assetName} numberOfLines={1}>{token.name}</Text>
+                      <Text style={styles.assetSymbol}>{token.symbol?.toUpperCase()}</Text>
                     </View>
-
-                    <View style={styles.tokenRight}>
-                      <Text style={styles.tokenPrice}>{liveMarketService.formatPrice(token.price)}</Text>
-                      {token.priceChange24h !== 0 && (
-                        <View style={[styles.priceChangeBadge, changePositive ? styles.changeBadgePositive : styles.changeBadgeNegative]}>
-                          {changePositive ? (
-                            <TrendingUp size={11} color={colors.success} strokeWidth={2.5} />
-                          ) : (
-                            <TrendingDown size={11} color={colors.error} strokeWidth={2.5} />
-                          )}
-                          <Text style={[styles.priceChangeText, changePositive ? styles.changeTextPositive : styles.changeTextNegative]}>
-                            {liveMarketService.formatChange(token.priceChange24h)}
-                          </Text>
-                        </View>
-                      )}
+                    <View style={styles.assetRight}>
+                      <Text style={styles.assetValueText}>{liveMarketService.formatPrice(token.price)}</Text>
+                      <Text style={[styles.assetChangeText, { color: changePositive ? colors.success : colors.error }]}>
+                        {liveMarketService.formatChange(token.priceChange24h)}
+                      </Text>
                     </View>
                   </TouchableOpacity>
                 );
-              }}
-              ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
-                  <Text style={styles.emptyText}>
-                    {error || 'No tokens found'}
-                  </Text>
-                  <Text style={styles.emptySubtext}>
-                    {error ? 'Pull down to retry' : 'Try adjusting your search or filters'}
-                  </Text>
-                  {error && (
-                    <TouchableOpacity
-                      style={styles.retryButton}
-                      onPress={loadMarketData}
-                      activeOpacity={0.7}
-                    >
-                      <RefreshCw size={16} color={colors.white} />
-                      <Text style={styles.retryButtonText}>Retry</Text>
-                    </TouchableOpacity>
-                  )}
+              })}
+              {filteredTokens.length === 0 && (
+                <View style={styles.inlineEmpty}>
+                  <Text style={styles.inlineEmptyText}>{error || 'No tokens found'}</Text>
                 </View>
-              }
-              contentContainerStyle={filteredTokens.length === 0 ? styles.emptyListContent : styles.listContent}
-              showsVerticalScrollIndicator={false}
-              refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-              }
-            />
-            )
-          ) : activeTab === 'assets' ? (
-            assetSubTab === 'tokens' ? (
-              assetsLoading ? (
-                <View style={styles.loaderContainer}>
-                  <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>Loading wallet assets...</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={filteredAssets}
-                  keyExtractor={(item) => item.address}
-                  renderItem={({ item: asset }) => (
-                    <TouchableOpacity
-                      style={styles.assetCard}
-                      onPress={() => router.push(`/token-detail/${asset.address}` as any)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.tokenLeft}>
-                        {asset.logoUrl ? (
-                          <Image source={{ uri: asset.logoUrl }} style={styles.tokenLogo} />
-                        ) : (
-                          <View style={styles.tokenLogoPlaceholder}>
-                            <Text style={styles.tokenLogoText}>{(asset.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
-                          </View>
-                        )}
-                        <View style={styles.tokenInfo}>
-                          <View style={styles.tokenNameRow}>
-                            <Text style={styles.tokenName} numberOfLines={1}>{asset.name}</Text>
-                            {asset.isNative && (
-                              <View style={styles.nativeBadge}>
-                                <Text style={styles.nativeBadgeText}>Native</Text>
-                              </View>
-                            )}
-                          </View>
-                          <Text style={styles.assetBalance}>
-                            {balanceHidden ? '****' : `${asset.uiBalance.toFixed(asset.isNative ? 4 : 2)} ${asset.symbol}`}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={styles.tokenRight}>
-                        <Text style={styles.assetValue}>
-                          {balanceHidden ? '****' : `$${asset.value.toFixed(2)}`}
-                        </Text>
-                        {asset.price > 0 && (
-                          <Text style={styles.assetPrice}>
-                            {liveMarketService.formatPrice(asset.price)}
-                          </Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                  ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                      <Coins size={48} color={colors.textMuted} strokeWidth={1.5} />
-                      <Text style={styles.emptyText}>
-                        {!activeAddress
-                          ? 'No wallet connected'
-                          : assetsError
-                            ? 'Failed to load assets'
-                            : 'No tokens found'}
-                      </Text>
-                      <Text style={styles.emptySubtext}>
-                        {!activeAddress
-                          ? 'Import or create a wallet to get started'
-                          : assetsError
-                            ? assetsError
-                            : 'Tokens you own will appear here once detected on-chain'}
-                      </Text>
-                      {activeAddress && (
-                        <TouchableOpacity style={styles.retryButton} onPress={loadWalletAssets} activeOpacity={0.7}>
-                          <RefreshCw size={16} color={colors.white} />
-                          <Text style={styles.retryButtonText}>Retry</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  }
-                  contentContainerStyle={filteredAssets.length === 0 ? styles.emptyListContent : styles.listContent}
-                  showsVerticalScrollIndicator={false}
-                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-                />
-              )
-            ) : (
-              /* NFT sub-tab */
-              nftsLoading ? (
-                <View style={styles.loaderContainer}>
-                  <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>Loading NFTs...</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={nfts}
-                  keyExtractor={(item) => item.id}
-                  numColumns={2}
-                  renderItem={({ item: nft }) => (
-                    <TouchableOpacity
-                      style={styles.nftCard}
-                      onPress={() => router.push('/nft-gallery' as any)}
-                      activeOpacity={0.85}
-                    >
-                      {nft.image_url ? (
-                        <Image
-                          source={{ uri: nft.image_url }}
-                          style={styles.nftImage}
-                        />
-                      ) : (
-                        <View style={[styles.nftImage, { backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' }]}>
-                          <Text style={{ color: colors.textMuted, fontSize: 12 }}>No Image</Text>
-                        </View>
-                      )}
-                      <View style={styles.nftInfo}>
-                        <Text style={styles.nftName} numberOfLines={1}>{nft.name || 'Unknown NFT'}</Text>
-                        {nft.rarity_rank != null && (
-                          <Text style={styles.nftRank}>#{nft.rarity_rank}</Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                  ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                      <ImageIcon size={48} color={colors.textMuted} strokeWidth={1.5} />
-                      <Text style={styles.emptyText}>
-                        {activeAddress ? 'No NFTs found' : 'No wallet connected'}
-                      </Text>
-                      <Text style={styles.emptySubtext}>
-                        {activeAddress
-                          ? 'NFTs owned by this wallet will appear here'
-                          : 'Import or create a wallet to get started'}
-                      </Text>
-                      {activeAddress && (
-                        <TouchableOpacity style={styles.retryButton} onPress={loadNFTs} activeOpacity={0.7}>
-                          <RefreshCw size={16} color={colors.white} />
-                          <Text style={styles.retryButtonText}>Refresh</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  }
-                  contentContainerStyle={nfts.length === 0 ? styles.emptyListContent : styles.nftListContent}
-                  columnWrapperStyle={nfts.length > 0 ? styles.nftRow : undefined}
-                  showsVerticalScrollIndicator={false}
-                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-                />
-              )
-            )
-          ) : (
-            <FlatList
-            data={watchlist}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => {
-              return (
-                <TouchableOpacity
-                  style={styles.tokenCard}
-                  onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.tokenLeft}>
-                    <View style={styles.tokenLogoPlaceholder}>
-                      <Text style={styles.tokenLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.tokenInfo}>
-                      <Text style={styles.tokenName} numberOfLines={1}>{item.token_name}</Text>
-                      <Text style={styles.tokenSymbol}>{item.token_symbol?.toUpperCase()}</Text>
-                    </View>
-                  </View>
+              )}
+            </View>
+          )}
+        </>
+      )}
 
-                  <TouchableOpacity
-                    style={styles.starButton}
-                    onPress={async (e) => {
-                      e.stopPropagation();
-                      await watchlistService.removeFromWatchlist(item.token_address);
-                      await loadWatchlist();
-                    }}
-                  >
-                    <Star size={22} color={colors.warning} fill={colors.warning} strokeWidth={2} />
-                  </TouchableOpacity>
+      {/* Watchlist tab */}
+      {activeTab === 'watchlist' && (
+        <View style={styles.assetsSectionCard}>
+          {watchlist.length === 0 ? (
+            <View style={styles.inlineEmpty}>
+              <Star size={32} color={colors.textMuted} strokeWidth={1.5} />
+              <Text style={styles.inlineEmptyText}>No tokens in watchlist</Text>
+              <Text style={styles.inlineEmptySub}>Star tokens from token details to track them here</Text>
+            </View>
+          ) : (
+            watchlist.map((item, idx) => (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.assetRow, idx < watchlist.length - 1 && styles.assetRowBorder]}
+                onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
+                activeOpacity={0.8}
+              >
+                <View style={styles.assetLogoPlaceholder}>
+                  <Text style={styles.assetLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
+                </View>
+                <View style={styles.assetInfo}>
+                  <Text style={styles.assetName}>{item.token_name}</Text>
+                  <Text style={styles.assetSymbol}>{item.token_symbol?.toUpperCase()}</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.starBtn}
+                  onPress={async (e) => {
+                    e.stopPropagation();
+                    await watchlistService.removeFromWatchlist(item.token_address);
+                    await loadWatchlist();
+                  }}
+                >
+                  <Star size={20} color={colors.warning} fill={colors.warning} strokeWidth={2} />
                 </TouchableOpacity>
-              );
-            }}
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Star size={48} color={colors.textMuted} strokeWidth={1.5} />
-                <Text style={styles.emptyText}>
-                  No tokens in watchlist
-                </Text>
-                <Text style={styles.emptySubtext}>
-                  Star tokens from token details to track them here
-                </Text>
-              </View>
-            }
-            contentContainerStyle={watchlist.length === 0 ? styles.emptyListContent : styles.listContent}
-            showsVerticalScrollIndicator={false}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-            }
-          />
+              </TouchableOpacity>
+            ))
           )}
         </View>
-      </View>
-    </View>
+      )}
+
+      <View style={{ height: 100 }} />
+    </ScrollView>
   );
 }
 
@@ -1337,5 +1158,416 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '600',
     marginTop: 2,
+  },
+
+  // Portfolio card
+  scrollContent: {
+    paddingBottom: 100,
+  },
+  portfolioCard: {
+    marginHorizontal: spacing.lg,
+    marginTop: 52,
+    borderRadius: borderRadius.xl,
+    padding: spacing.xl,
+    overflow: 'hidden',
+    position: 'relative',
+    minHeight: 160,
+  },
+  glow1: {
+    position: 'absolute',
+    top: -40,
+    left: -40,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: '#8B5CF6',
+    opacity: 0.2,
+  },
+  glow2: {
+    position: 'absolute',
+    top: 20,
+    right: -30,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#06b6d4',
+    opacity: 0.12,
+  },
+  portfolioTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  portfolioLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.5)',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  portfolioBalance: {
+    fontSize: 38,
+    fontWeight: '800',
+    color: colors.white,
+    letterSpacing: -1,
+    marginBottom: 2,
+  },
+  portfolioChange: {
+    fontSize: fontSize.xs,
+    color: 'rgba(255,255,255,0.5)',
+    fontWeight: '500',
+    marginBottom: spacing.md,
+  },
+  portfolioWalletRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  walletPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+  },
+  walletPillDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#10b981',
+  },
+  walletPillText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.8)',
+  },
+  copyBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniChartDecor: {
+    position: 'absolute',
+    bottom: 10,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 65,
+    gap: 2,
+  },
+  miniChartBar: {
+    width: 6,
+    borderRadius: 3,
+    backgroundColor: colors.primary,
+  },
+
+  // Actions row
+  actionsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    gap: spacing.sm,
+  },
+  actionBtn: {
+    flex: 1,
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  actionBtnIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primaryMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
+  },
+  actionBtnLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+
+  // Tabs
+  tabsWrap: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+    marginBottom: spacing.sm,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    position: 'relative',
+  },
+  tabItemActive: {},
+  tabItemText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+  tabItemTextActive: {
+    color: colors.primary,
+    fontWeight: '700',
+  },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: -1,
+    left: '20%',
+    right: '20%',
+    height: 2,
+    backgroundColor: colors.primary,
+    borderRadius: 2,
+  },
+
+  // Search row
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  filterBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+
+  // Assets section card
+  assetsSectionCard: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    marginBottom: spacing.lg,
+    overflow: 'hidden',
+  },
+  assetsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+  },
+  assetsSectionTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  assetsSectionSub: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  manageBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    backgroundColor: colors.primaryMuted,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+  },
+  manageBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+
+  // Asset rows
+  assetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  assetRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+  },
+  assetLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  assetLogoPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  assetLogoText: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  assetInfo: {
+    flex: 1,
+  },
+  assetName: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  assetSymbol: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  assetMid: {
+    alignItems: 'flex-end',
+  },
+  assetBalance2: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  assetBalanceUsd: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  assetRight: {
+    alignItems: 'flex-end',
+    minWidth: 70,
+  },
+  assetValueText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  assetChangeText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  viewAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceBorder,
+  },
+  viewAllText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+
+  // NFT section
+  nftSectionCard: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  nftSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  nftSectionTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  nftViewAll: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  nftEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  nftEmptyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primaryMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  nftEmptyTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  nftEmptySubtitle: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  nftThumb: {
+    width: 100,
+    marginRight: spacing.sm,
+  },
+  nftThumbImg: {
+    width: 100,
+    height: 100,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceLight,
+  },
+  nftThumbName: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
+  // Inline empty states
+  inlineEmpty: {
+    alignItems: 'center',
+    paddingVertical: spacing.xl,
+    gap: spacing.sm,
+  },
+  inlineEmptyText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  inlineEmptySub: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  starBtn: {
+    padding: spacing.sm,
   },
 });

@@ -332,58 +332,72 @@ export default function SettingsScreen() {
 
       <Modal visible={activeModal === 'profile'} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t.community.editProfile}</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <X size={24} color={colors.textPrimary} />
+          <View style={styles.profileModalContent}>
+            {/* Header */}
+            <View style={styles.profileModalHeader}>
+              <Text style={styles.profileModalTitle}>Edit Profile</Text>
+              <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.profileModalClose}>
+                <X size={22} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
-            <View style={styles.editAvatarContainer}>
-              <View style={styles.editAvatar}>
+
+            {/* Avatar */}
+            <TouchableOpacity style={styles.profileAvatarWrap} onPress={handlePickImage} activeOpacity={0.85}>
+              <View style={styles.profileAvatarRing}>
                 {editAvatarUrl ? (
-                  <Image source={{ uri: editAvatarUrl }} style={styles.editAvatarImage} />
+                  <Image source={{ uri: editAvatarUrl }} style={styles.profileAvatarLarge} />
                 ) : (
-                  <User size={40} color={colors.textMuted} />
+                  <View style={styles.profileAvatarEmpty}>
+                    <User size={44} color={colors.textMuted} />
+                  </View>
                 )}
               </View>
-              <TouchableOpacity style={styles.cameraButton} onPress={handlePickImage}>
-                <Camera size={18} color={colors.white} />
-              </TouchableOpacity>
+              <View style={styles.editPencilBtn}>
+                <Camera size={16} color={colors.white} />
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.avatarHint}>Tap on the image to change it</Text>
+
+            {/* Username */}
+            <Text style={styles.profileFieldLabel}>Username</Text>
+            <View style={styles.profileInputWrap}>
+              <User size={18} color={colors.primary} strokeWidth={2} />
+              <TextInput
+                style={styles.profileFieldInput}
+                placeholder="Choose a username"
+                placeholderTextColor={colors.textMuted}
+                value={editUsername}
+                onChangeText={setEditUsername}
+                maxLength={30}
+              />
             </View>
-            <Text style={styles.inputLabel}>Avatar URL</Text>
-            <Text style={styles.inputHint}>Use a direct image URL or pick from gallery using the camera button above</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="https://example.com/avatar.jpg"
-              placeholderTextColor={colors.textMuted}
-              value={editAvatarUrl}
-              onChangeText={setEditAvatarUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <Text style={styles.inputLabel}>Username</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Choose a username"
-              placeholderTextColor={colors.textMuted}
-              value={editUsername}
-              onChangeText={setEditUsername}
-              maxLength={30}
-            />
-            <Text style={styles.inputLabel}>Bio</Text>
-            <TextInput
-              style={[styles.textInput, styles.bioInput]}
-              placeholder="Tell us about yourself"
-              placeholderTextColor={colors.textMuted}
-              value={editBio}
-              onChangeText={setEditBio}
-              multiline
-              maxLength={160}
-            />
-            <Text style={styles.charCount}>{editBio.length}/160</Text>
-            <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile} disabled={isUploading}>
-              <Text style={styles.saveButtonText}>{isUploading ? 'Uploading...' : t.common.save}</Text>
+
+            {/* Bio */}
+            <Text style={styles.profileFieldLabel}>Bio</Text>
+            <View style={styles.profileBioWrap}>
+              <TextInput
+                style={styles.profileBioInput}
+                placeholder="Tell us about yourself"
+                placeholderTextColor={colors.textMuted}
+                value={editBio}
+                onChangeText={setEditBio}
+                multiline
+                maxLength={160}
+                textAlignVertical="top"
+              />
+              <Text style={styles.profileCharCount}>{editBio.length}/160</Text>
+            </View>
+
+            {/* Save button */}
+            <TouchableOpacity
+              style={styles.profileSaveBtn}
+              onPress={handleSaveProfile}
+              disabled={isUploading}
+              activeOpacity={0.9}
+            >
+              <Text style={styles.profileSaveBtnText}>
+                {isUploading ? 'Saving...' : 'Save Changes'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1204,5 +1218,135 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.primary,
+  },
+
+  // Redesigned Edit Profile modal
+  profileModalContent: {
+    backgroundColor: '#13131D',
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+    padding: spacing.xxl,
+    paddingBottom: 40,
+    maxHeight: '88%',
+  },
+  profileModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xxl,
+  },
+  profileModalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  profileModalClose: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileAvatarWrap: {
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+    position: 'relative',
+  },
+  profileAvatarRing: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 2.5,
+    borderColor: colors.primary,
+    overflow: 'hidden',
+  },
+  profileAvatarLarge: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  profileAvatarEmpty: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editPencilBtn: {
+    position: 'absolute',
+    bottom: 4,
+    right: 0,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#13131D',
+  },
+  avatarHint: {
+    textAlign: 'center',
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.xxl,
+  },
+  profileFieldLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  profileInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: '#1A1A28',
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    marginBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+  },
+  profileFieldInput: {
+    flex: 1,
+    fontSize: 16,
+    color: colors.textPrimary,
+    fontWeight: '500',
+  },
+  profileBioWrap: {
+    backgroundColor: '#1A1A28',
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.xxl,
+    minHeight: 120,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+  },
+  profileBioInput: {
+    fontSize: 15,
+    color: colors.textPrimary,
+    minHeight: 88,
+    lineHeight: 22,
+  },
+  profileCharCount: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'right',
+    paddingBottom: spacing.sm,
+  },
+  profileSaveBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.lg,
+    paddingVertical: 18,
+    alignItems: 'center',
+  },
+  profileSaveBtnText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.white,
   },
 });

@@ -9,10 +9,10 @@ import {
   Modal,
   Image,
   Platform,
+  SafeAreaView,
 } from 'react-native';
 import { useState, useEffect } from 'react';
-import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartphone } from 'lucide-react-native';
+import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartphone, Shield, CheckCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService';
@@ -28,18 +28,9 @@ const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
 type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'error';
 
-const STATUS_MSG: Record<SwapStatus, string> = {
-  idle: '',
-  quoting: 'Getting quote...',
-  signing: 'Confirm in wallet...',
-  sending: 'Sending transaction...',
-  success: 'Swap confirmed!',
-  error: '',
-};
-
 export default function SwapScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet, tokens: walletTokens, totalBalance } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens } = useWallet();
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -56,14 +47,16 @@ export default function SwapScreen() {
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
 
-  // Get wallet balance for the from-token
   const fromTokenBalance = fromToken
     ? parseFloat(walletTokens.find(t => t.contract_address === fromToken.address)?.balance || '0')
     : 0;
 
-  useEffect(() => {
-    loadTokens();
-  }, []);
+  const shortAddr = activeWallet
+    ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
+    : null;
+  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Phantom';
+
+  useEffect(() => { loadTokens(); }, []);
 
   const loadTokens = async () => {
     setLoading(true);
@@ -78,7 +71,6 @@ export default function SwapScreen() {
       };
       setFromToken(sol);
 
-      // DAWEN may be a pump.fun token not in the verified list — create fallback entry
       const dawen = allTokens.find(t => t.address === DAWEN_MINT) ?? {
         address: DAWEN_MINT, chainId: 101, decimals: 6,
         name: 'DAWEN', symbol: 'DAWEN', logoURI: undefined,
@@ -91,7 +83,6 @@ export default function SwapScreen() {
     }
   };
 
-  // Debounce quote fetch
   useEffect(() => {
     const amount = parseFloat(fromAmount);
     if (!fromToken || !toToken || !fromAmount || isNaN(amount) || amount <= 0) {
@@ -114,12 +105,7 @@ export default function SwapScreen() {
         setStatus('error');
         return;
       }
-      const q = await jupiterSwapService.getQuote(
-        fromToken.address,
-        toToken.address,
-        amountInSmallest,
-        50
-      );
+      const q = await jupiterSwapService.getQuote(fromToken.address, toToken.address, amountInSmallest, 50);
       if (q) {
         setQuote(q);
         setStatus('idle');
@@ -127,11 +113,9 @@ export default function SwapScreen() {
       } else {
         setQuote(null);
         const isDawen = toToken.address === DAWEN_MINT || fromToken.address === DAWEN_MINT;
-        if (isDawen) {
-          setErrorMsg('No Jupiter route available for DAWEN/DTEST yet. Try another token or check liquidity.');
-        } else {
-          setErrorMsg('No route available. Insufficient liquidity for this pair.');
-        }
+        setErrorMsg(isDawen
+          ? 'No Jupiter route available for DAWEN yet. Try another token or check liquidity.'
+          : 'No route available. Insufficient liquidity for this pair.');
         setStatus('error');
       }
     } catch (e: any) {
@@ -167,10 +151,6 @@ export default function SwapScreen() {
     setStatus('idle');
   };
 
-  /**
-   * Sign with external wallet (Phantom/Backpack/Solflare).
-   * The wallet popup appears INSIDE the app — no external redirect.
-   */
   const signWithExternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
     if (!connectedWallet) throw new Error('No external wallet connected');
     const txBuf = Buffer.from(serializedTx, 'base64');
@@ -178,47 +158,33 @@ export default function SwapScreen() {
     return ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, transaction);
   };
 
-  /**
-   * Sign with internal (imported/created) wallet keypair.
-   * Auto-unlocks the wallet if locked.
-   */
   const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
     if (!selectedAccount) throw new Error('No account selected');
     const walletManager = SecureWalletManager.getInstance();
     const mnemonic = await walletManager.getMnemonicUnlocked();
-
     const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex ?? 0);
     const txBuf = Buffer.from(serializedTx, 'base64');
     const transaction = VersionedTransaction.deserialize(txBuf);
-
     transaction.sign([{
       publicKey: new PublicKey(selectedAccount.address),
       secretKey: keypair.secretKey,
     }]);
-
     return transaction;
   };
 
   const handleExecuteSwap = async () => {
     if (!quote || !activeAddress || !fromToken || !toToken) return;
-
     const amount = parseFloat(fromAmount);
     if (isNaN(amount) || amount <= 0) {
       setErrorMsg('Enter a valid amount');
       setStatus('error');
       return;
     }
-
     setErrorMsg(null);
     setTxSignature(null);
-
     try {
       setStatus('signing');
-
-      // Build transaction via Jupiter (never opens Jupiter website)
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
-
-      // Sign inside the app with the connected wallet provider
       let signedTx: VersionedTransaction;
       if (connectedWallet) {
         signedTx = await signWithExternalWallet(swapResult.swapTransaction);
@@ -227,20 +193,11 @@ export default function SwapScreen() {
       } else {
         throw new Error('No wallet available');
       }
-
       setStatus('sending');
-
-      // Send and confirm on-chain
-      const signature = await jupiterSwapService.executeSwap(
-        swapResult.swapTransaction,
-        async () => signedTx
-      );
-
+      const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
       setTxSignature(signature);
       setStatus('success');
-
       if (refreshWallet) await refreshWallet();
-
       setTimeout(() => {
         setFromAmount('');
         setQuote(null);
@@ -269,232 +226,279 @@ export default function SwapScreen() {
 
   const outputAmount = quote && toToken
     ? jupiterSwapService.formatAmount(parseInt(quote.outAmount), toToken.decimals)
-    : '0';
+    : '';
 
   const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
   const isProcessing = status === 'signing' || status === 'sending';
   const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error';
 
-  const getSwapButtonText = (): string => {
+  const fromAmountUsd = fromToken && fromAmount
+    ? `≈ $${(parseFloat(fromAmount) * 0).toFixed(2)}`
+    : '';
+
+  const rateText = quote && fromToken && toToken
+    ? `1 ${fromToken.symbol} ≈ ${(parseFloat(outputAmount) / parseFloat(fromAmount || '1')).toFixed(4)} ${toToken.symbol}`
+    : '—';
+
+  const getButtonLabel = () => {
     if (!hasWallet) return 'Connect Wallet';
     if (!fromToken || !toToken) return 'Select Token';
     if (!fromAmount || parseFloat(fromAmount) <= 0) return 'Enter Amount';
     if (status === 'quoting') return 'Getting Quote...';
     if (status === 'signing') return 'Confirm in Wallet';
-    if (status === 'sending') return 'Transaction Pending...';
-    if (status === 'success') return 'Swap Successful';
-    if (status === 'error') return 'Swap Failed';
-    if (quote) return 'Confirm Swap';
+    if (status === 'sending') return 'Sending Transaction...';
+    if (status === 'success') return 'Swap Successful!';
+    if (status === 'error') return 'Retry Swap';
+    if (quote) return 'CONFIRM SWAP';
     return 'Enter Amount';
   };
 
-  // Mobile without wallet: show instruction
+  // No-wallet state on mobile
   if (isMobile && !hasWallet) {
     return (
-      <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+      <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <ArrowLeft size={24} color={colors.textPrimary} strokeWidth={2} />
+          <TouchableOpacity style={styles.backCircle} onPress={() => router.back()} activeOpacity={0.8}>
+            <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2.5} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Swap</Text>
           <View style={styles.headerRight} />
         </View>
-        <View style={styles.mobileWalletMessage}>
-          <Smartphone size={48} color={colors.primary} />
-          <Text style={styles.mobileWalletTitle}>Open in Wallet Browser</Text>
-          <Text style={styles.mobileWalletText}>
-            To swap tokens, open this app inside Phantom, Backpack, or Solflare's built-in browser. Transactions are signed securely inside the app — no external redirects.
+        <View style={styles.noWalletContainer}>
+          <Smartphone size={52} color={colors.primary} />
+          <Text style={styles.noWalletTitle}>Open in Wallet Browser</Text>
+          <Text style={styles.noWalletText}>
+            To swap tokens, open this app inside Phantom, Backpack, or Solflare's built-in browser.
           </Text>
         </View>
-      </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  // Success state
+  if (status === 'success') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backCircle} onPress={() => router.back()} activeOpacity={0.8}>
+            <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2.5} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Swap</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={styles.successContainer}>
+          <CheckCircle size={72} color={colors.success} strokeWidth={1.5} />
+          <Text style={styles.successTitle}>Swap Confirmed!</Text>
+          {txSignature && (
+            <Text style={styles.txHash} numberOfLines={1} ellipsizeMode="middle">{txSignature}</Text>
+          )}
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+    <SafeAreaView style={styles.safe}>
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ArrowLeft size={24} color={colors.textPrimary} strokeWidth={2} />
+        <TouchableOpacity style={styles.backCircle} onPress={() => router.back()} activeOpacity={0.8}>
+          <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2.5} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Swap</Text>
-        <View style={styles.headerRight} />
+        {hasWallet && shortAddr ? (
+          <View style={styles.walletPill}>
+            <View style={styles.walletDot} />
+            <Text style={styles.walletPillText}>{walletLabel}: {shortAddr}</Text>
+          </View>
+        ) : (
+          <View style={styles.headerRight} />
+        )}
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} style={styles.content}>
-        {/* Wallet badge */}
-        {hasWallet && (
-          <View style={styles.walletBadge}>
-            <View style={styles.walletDot} />
-            <Text style={styles.walletBadgeText}>
-              {activeAddress!.slice(0, 4)}...{activeAddress!.slice(-4)}
-            </Text>
-          </View>
-        )}
-
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Main swap card */}
         <View style={styles.swapCard}>
-          <View style={styles.inputSection}>
-            <View style={styles.inputLabelRow}>
-              <Text style={styles.inputLabel}>From</Text>
+          {/* You Pay */}
+          <View style={styles.paySection}>
+            <View style={styles.paySectionTop}>
+              <Text style={styles.sectionLabel}>You Pay</Text>
               {hasWallet && fromToken && (
-                <View style={styles.balanceRow}>
-                  <Text style={styles.balanceText}>
-                    Balance: {fromTokenBalance.toFixed(4)} {fromToken.symbol}
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.maxButton}
-                    onPress={() => {
-                      if (fromTokenBalance > 0) {
-                        // Leave small buffer for SOL gas
-                        const maxAmt = fromToken.address === SOL_MINT
-                          ? Math.max(0, fromTokenBalance - 0.01)
-                          : fromTokenBalance;
-                        setFromAmount(maxAmt.toFixed(6));
-                        setStatus('idle');
-                        setErrorMsg(null);
-                      }
-                    }}
-                    disabled={isProcessing}
-                  >
-                    <Text style={styles.maxButtonText}>MAX</Text>
-                  </TouchableOpacity>
-                </View>
+                <Text style={styles.balanceText}>Balance: {fromTokenBalance.toFixed(4)} {fromToken.symbol}</Text>
               )}
             </View>
-            <View style={styles.inputRow}>
-              <TextInput
-                style={styles.amountInput}
-                value={fromAmount}
-                onChangeText={v => { setFromAmount(v); setStatus('idle'); setErrorMsg(null); }}
-                placeholder="0.00"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="decimal-pad"
-                editable={!isProcessing}
-              />
+
+            <View style={styles.tokenRow}>
               <TouchableOpacity
                 style={styles.tokenSelector}
-                onPress={() => setSelectingToken('from')}
-                activeOpacity={0.7}
-                disabled={isProcessing}
+                onPress={() => !isProcessing && setSelectingToken('from')}
+                activeOpacity={0.8}
               >
                 {fromToken?.logoURI
                   ? <Image source={{ uri: fromToken.logoURI }} style={styles.tokenLogo} />
-                  : <View style={styles.tokenLogoPlaceholder} />}
-                <Text style={styles.tokenSymbol}>{fromToken?.symbol || 'Select'}</Text>
-                <ChevronDown size={18} color={colors.textSecondary} strokeWidth={2} />
+                  : <View style={styles.tokenLogoPlaceholder}><Text style={styles.tokenLogoText}>{(fromToken?.symbol ?? 'S').substring(0, 1)}</Text></View>}
+                <Text style={styles.tokenSymbolText}>{fromToken?.symbol || 'Select'}</Text>
+                <ChevronDown size={16} color={colors.textSecondary} strokeWidth={2.5} />
               </TouchableOpacity>
+
+              <View style={styles.amountWrap}>
+                {hasWallet && fromToken && fromTokenBalance > 0 && (
+                  <TouchableOpacity
+                    style={styles.maxBtn}
+                    onPress={() => {
+                      const maxAmt = fromToken.address === SOL_MINT
+                        ? Math.max(0, fromTokenBalance - 0.01)
+                        : fromTokenBalance;
+                      setFromAmount(maxAmt.toFixed(6));
+                    }}
+                    disabled={isProcessing}
+                  >
+                    <Text style={styles.maxBtnText}>MAX</Text>
+                  </TouchableOpacity>
+                )}
+                <TextInput
+                  style={styles.amountInput}
+                  value={fromAmount}
+                  onChangeText={v => { setFromAmount(v); setStatus('idle'); setErrorMsg(null); }}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                  editable={!isProcessing}
+                  textAlign="right"
+                />
+              </View>
             </View>
+
+            {fromAmountUsd ? (
+              <Text style={styles.usdText}>{fromAmountUsd}</Text>
+            ) : null}
           </View>
 
-          <TouchableOpacity style={styles.swapButton} onPress={handleFlipTokens} activeOpacity={0.7} disabled={isProcessing}>
-            <ArrowDownUp size={20} color={colors.primary} strokeWidth={2.5} />
-          </TouchableOpacity>
+          {/* Swap direction button */}
+          <View style={styles.swapArrowRow}>
+            <View style={styles.dividerLine} />
+            <TouchableOpacity style={styles.swapArrowBtn} onPress={handleFlipTokens} activeOpacity={0.8} disabled={isProcessing}>
+              <ArrowDownUp size={20} color={colors.primary} strokeWidth={2.5} />
+            </TouchableOpacity>
+            <View style={styles.dividerLine} />
+          </View>
 
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>To (estimated)</Text>
-            <View style={styles.inputRow}>
-              {status === 'quoting'
-                ? <ActivityIndicator size="small" color={colors.primary} style={styles.quoteLoader} />
-                : <Text style={styles.outputAmount}>{outputAmount}</Text>}
+          {/* You Receive */}
+          <View style={styles.receiveSection}>
+            <View style={styles.paySectionTop}>
+              <Text style={styles.sectionLabel}>You Receive <Text style={styles.estimatedLabel}>(Estimated)</Text></Text>
+            </View>
+
+            <View style={styles.tokenRow}>
               <TouchableOpacity
                 style={styles.tokenSelector}
-                onPress={() => setSelectingToken('to')}
-                activeOpacity={0.7}
-                disabled={isProcessing}
+                onPress={() => !isProcessing && setSelectingToken('to')}
+                activeOpacity={0.8}
               >
                 {toToken?.logoURI
                   ? <Image source={{ uri: toToken.logoURI }} style={styles.tokenLogo} />
-                  : <View style={styles.tokenLogoPlaceholder} />}
-                <Text style={styles.tokenSymbol}>{toToken?.symbol || 'Select'}</Text>
-                <ChevronDown size={18} color={colors.textSecondary} strokeWidth={2} />
+                  : <View style={styles.tokenLogoPlaceholder}><Text style={styles.tokenLogoText}>{(toToken?.symbol ?? 'D').substring(0, 1)}</Text></View>}
+                <Text style={styles.tokenSymbolText}>{toToken?.symbol || 'Select'}</Text>
+                <ChevronDown size={16} color={colors.textSecondary} strokeWidth={2.5} />
               </TouchableOpacity>
+
+              <View style={styles.amountWrap}>
+                {status === 'quoting' ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={[styles.outputText, outputAmount ? styles.outputTextActive : null]}>
+                    {outputAmount || '0.00'}
+                  </Text>
+                )}
+              </View>
             </View>
+
+            {quote && (
+              <Text style={[styles.usdText, styles.changeText]}>
+                {priceImpact > 0 ? `-${priceImpact.toFixed(2)}%` : '0.00%'}
+              </Text>
+            )}
           </View>
         </View>
 
-        {/* Quote Details */}
+        {/* Info rows */}
         {quote && (
-          <View style={styles.detailsCard}>
-            <Text style={styles.detailsTitle}>Swap Details</Text>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Price Impact</Text>
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Rate</Text>
+              <Text style={styles.infoValue}>{rateText}</Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Price Impact</Text>
               <Text style={[
-                styles.detailValue,
-                priceImpact > 1 && styles.detailValueWarning,
-                priceImpact > 5 && styles.detailValueDanger,
+                styles.infoValue,
+                priceImpact > 1 && styles.infoValueWarn,
+                priceImpact > 5 && styles.infoValueDanger,
               ]}>
                 {priceImpact.toFixed(2)}%
               </Text>
             </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Slippage Tolerance</Text>
-              <Text style={styles.detailValue}>0.5%</Text>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Network Fee</Text>
+              <Text style={styles.infoValue}>~0.000005 SOL</Text>
             </View>
             {priceImpact > 1 && (
-              <View style={styles.warningBanner}>
-                <AlertCircle size={16} color={colors.warning} strokeWidth={2} />
-                <Text style={styles.warningText}>High price impact. Consider reducing amount.</Text>
+              <View style={styles.warnBanner}>
+                <AlertCircle size={14} color={colors.warning} strokeWidth={2} />
+                <Text style={styles.warnText}>High price impact. Consider a smaller amount.</Text>
               </View>
             )}
           </View>
         )}
 
-        {/* Status */}
-        {(isProcessing || status === 'success' || status === 'error') && (
-          <View style={[
-            styles.statusCard,
-            status === 'success' && styles.statusSuccess,
-            status === 'error' && styles.statusError,
-          ]}>
-            {isProcessing && <ActivityIndicator size="small" color={colors.primary} />}
-            <Text style={[
-              styles.statusText,
-              status === 'success' && styles.statusTextSuccess,
-              status === 'error' && styles.statusTextError,
-            ]}>
-              {status === 'error' ? (errorMsg || 'Transaction failed') : STATUS_MSG[status]}
-            </Text>
+        {/* Error */}
+        {status === 'error' && errorMsg && (
+          <View style={styles.errorCard}>
+            <AlertCircle size={16} color={colors.error} strokeWidth={2} />
+            <Text style={styles.errorText}>{errorMsg}</Text>
           </View>
         )}
 
-        {txSignature && (
-          <View style={styles.txCard}>
-            <Text style={styles.txLabel}>Transaction:</Text>
-            <Text style={styles.txHash} numberOfLines={1} ellipsizeMode="middle">{txSignature}</Text>
-          </View>
-        )}
-
-        {/* Connect wallet prompt */}
-        {!hasWallet && (
-          <View style={styles.noWalletCard}>
-            <Text style={styles.noWalletText}>Connect a wallet to swap tokens</Text>
-          </View>
-        )}
-
+        {/* Confirm button */}
         <TouchableOpacity
-          style={[styles.executeButton, !canSwap && styles.executeButtonDisabled, status === 'error' && styles.executeButtonError]}
+          style={[
+            styles.confirmBtn,
+            (!canSwap && status !== 'error') && styles.confirmBtnDisabled,
+          ]}
           onPress={handleExecuteSwap}
-          disabled={!canSwap}
-          activeOpacity={0.8}
+          disabled={!canSwap && status !== 'idle'}
+          activeOpacity={0.85}
         >
-          {(isProcessing || status === 'quoting') && (
-            <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />
-          )}
-          <Text style={styles.executeButtonText}>{getSwapButtonText()}</Text>
+          {isProcessing && <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />}
+          <Text style={styles.confirmBtnText}>{getButtonLabel()}</Text>
         </TouchableOpacity>
+
+        {/* Jupiter footer */}
+        <View style={styles.jupiterRow}>
+          <Shield size={14} color={colors.textMuted} strokeWidth={2} />
+          <Text style={styles.jupiterText}>Powered by Jupiter</Text>
+        </View>
       </ScrollView>
 
       {/* Token Selection Modal */}
       <Modal visible={selectingToken !== null} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Token</Text>
-              <TouchableOpacity onPress={() => setSelectingToken(null)}>
+              <TouchableOpacity onPress={() => { setSelectingToken(null); setSearchQuery(''); }}>
                 <Text style={styles.modalClose}>Close</Text>
               </TouchableOpacity>
             </View>
             <TextInput
-              style={styles.searchInput}
+              style={styles.modalSearch}
               placeholder="Search by name or symbol"
               placeholderTextColor={colors.textMuted}
               value={searchQuery}
@@ -516,7 +520,7 @@ export default function SwapScreen() {
                       </View>}
                   <View style={styles.tokenItemInfo}>
                     <Text style={styles.tokenItemName}>{token.name}</Text>
-                    <Text style={styles.tokenItemSymbol}>{token.symbol}</Text>
+                    <Text style={styles.tokenItemSym}>{token.symbol}</Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -524,187 +528,259 @@ export default function SwapScreen() {
           </View>
         </View>
       </Modal>
-    </LinearGradient>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  safe: {
+    flex: 1,
+    backgroundColor: '#0A0A0F',
+  },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.xxl,
-    paddingTop: 60,
-    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: Platform.OS === 'android' ? 44 : spacing.lg,
+    paddingBottom: spacing.md,
   },
-  backButton: {
+  backCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
     backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   headerTitle: {
     fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  headerRight: { width: 40 },
-  content: {
-    flex: 1,
-    paddingHorizontal: spacing.xxl,
-  },
-  // Mobile wallet message
-  mobileWalletMessage: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: spacing.xxl,
-    gap: spacing.lg,
-  },
-  mobileWalletTitle: {
-    fontSize: fontSize.xl,
     fontWeight: '800',
     color: colors.textPrimary,
-    textAlign: 'center',
+    letterSpacing: -0.5,
   },
-  mobileWalletText: {
-    fontSize: fontSize.md,
+  headerRight: { width: 40 },
+  walletPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  walletDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.success,
+  },
+  walletPillText: {
+    fontSize: 12,
+    fontWeight: '600',
     color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
   },
+
+  // Scroll
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: 60,
+  },
+
+  // Main card
   swapCard: {
     backgroundColor: colors.surface,
     borderRadius: borderRadius.xl,
-    padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    marginBottom: spacing.lg,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
   },
-  inputSection: { marginBottom: spacing.md },
-  inputLabelRow: {
+  paySection: {
+    padding: spacing.xl,
+    paddingBottom: spacing.lg,
+  },
+  receiveSection: {
+    padding: spacing.xl,
+    paddingTop: spacing.lg,
+  },
+  paySectionTop: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
   },
-  inputLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
+  sectionLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
     color: colors.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
-  balanceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
+  estimatedLabel: {
+    fontWeight: '500',
+    color: colors.textMuted,
+    textTransform: 'none',
+    letterSpacing: 0,
   },
   balanceText: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     fontWeight: '500',
   },
-  maxButton: {
+
+  // Token row
+  tokenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  tokenSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceElevated,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  tokenLogo: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
+  tokenLogoPlaceholder: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: colors.primaryMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tokenLogoText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  tokenSymbolText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  amountWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  maxBtn: {
     paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
+    paddingVertical: 3,
+    backgroundColor: colors.primaryMuted,
     borderRadius: borderRadius.sm,
     borderWidth: 1,
-    borderColor: colors.primary,
+    borderColor: 'rgba(139,92,246,0.3)',
   },
-  maxButtonText: {
+  maxBtnText: {
     fontSize: 10,
     fontWeight: '800',
     color: colors.primary,
     letterSpacing: 0.5,
   },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
   amountInput: {
     flex: 1,
-    fontSize: fontSize.xxl,
+    fontSize: 32,
     fontWeight: '700',
     color: colors.textPrimary,
     padding: 0,
+    minWidth: 80,
+    textAlign: 'right',
   },
-  outputAmount: {
-    flex: 1,
-    fontSize: fontSize.xxl,
+  usdText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: spacing.xs,
+    textAlign: 'right',
+  },
+  outputText: {
+    fontSize: 32,
     fontWeight: '700',
-    color: colors.textSecondary,
+    color: colors.textMuted,
+    textAlign: 'right',
   },
-  quoteLoader: { flex: 1 },
-  tokenSelector: {
+  outputTextActive: {
+    color: colors.primary,
+  },
+  changeText: {
+    color: colors.error,
+  },
+
+  // Swap arrow
+  swapArrowRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.surfaceLight,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.xl,
+    gap: spacing.md,
   },
-  tokenLogo: { width: 28, height: 28, borderRadius: 14 },
-  tokenLogoPlaceholder: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  dividerLine: {
+    flex: 1,
+    height: 1,
     backgroundColor: colors.surfaceBorder,
   },
-  tokenSymbol: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  swapButton: {
+  swapArrowBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
     backgroundColor: colors.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
-    alignSelf: 'center',
-    marginVertical: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
   },
-  detailsCard: {
+
+  // Info card
+  infoCard: {
     backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
+    borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    marginBottom: spacing.lg,
-  },
-  detailsTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.textPrimary,
+    padding: spacing.lg,
     marginBottom: spacing.md,
   },
-  detailRow: {
+  infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    paddingVertical: 6,
   },
-  detailLabel: {
+  infoDivider: {
+    height: 1,
+    backgroundColor: colors.surfaceBorder,
+  },
+  infoLabel: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textMuted,
   },
-  detailValue: {
+  infoValue: {
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  detailValueWarning: { color: colors.warning },
-  detailValueDanger: { color: colors.error },
-  warningBanner: {
+  infoValueWarn: { color: colors.warning },
+  infoValueDanger: { color: colors.error },
+  warnBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
@@ -713,127 +789,138 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     marginTop: spacing.sm,
   },
-  warningText: {
+  warnText: {
     flex: 1,
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: colors.warning,
   },
-  statusCard: {
+
+  // Error
+  errorCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: colors.errorMuted,
     borderRadius: borderRadius.md,
     padding: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  statusSuccess: { backgroundColor: colors.successMuted },
-  statusError: { backgroundColor: colors.errorMuted },
-  statusText: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    flex: 1,
-  },
-  statusTextSuccess: { color: colors.success },
-  statusTextError: { color: colors.error },
-  txCard: {
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  txLabel: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  txHash: {
-    fontSize: fontSize.xs,
-    color: colors.primary,
-    fontWeight: '700',
-    fontFamily: 'SpaceMono-Regular',
-  },
-  noWalletCard: {
-    backgroundColor: colors.primaryMuted,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    alignItems: 'center',
-    marginBottom: spacing.lg,
-  },
-  noWalletText: {
-    fontSize: fontSize.sm,
-    color: colors.primaryLight,
-    fontWeight: '600',
-  },
-  walletBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: 'rgba(20, 241, 149, 0.1)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    alignSelf: 'flex-start',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: 'rgba(20, 241, 149, 0.3)',
+    borderColor: 'rgba(239,68,68,0.2)',
   },
-  walletDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.success,
-  },
-  walletBadgeText: {
-    fontSize: fontSize.xs,
-    color: colors.success,
+  errorText: {
+    flex: 1,
+    fontSize: fontSize.sm,
     fontWeight: '600',
+    color: colors.error,
   },
-  executeButton: {
+
+  // Confirm button
+  confirmBtn: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.primary,
-    paddingVertical: spacing.lg,
-    borderRadius: borderRadius.lg,
-    marginBottom: spacing.xxxl,
+    paddingVertical: 18,
+    borderRadius: borderRadius.xl,
+    marginBottom: spacing.lg,
     ...elevation.md,
   },
-  executeButtonDisabled: {
+  confirmBtnDisabled: {
     backgroundColor: colors.surfaceLight,
     opacity: 0.5,
   },
-  executeButtonError: {
-    backgroundColor: colors.error,
-    opacity: 0.8,
-  },
-  executeButtonText: {
-    fontSize: fontSize.lg,
+  confirmBtnText: {
+    fontSize: fontSize.md,
     fontWeight: '800',
     color: colors.white,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
+
+  // Jupiter footer
+  jupiterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.xl,
+  },
+  jupiterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+
+  // No wallet / success
+  noWalletContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xxl,
+    gap: spacing.lg,
+  },
+  noWalletTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  noWalletText: {
+    fontSize: fontSize.md,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  successContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.lg,
+    paddingHorizontal: spacing.xxl,
+  },
+  successTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  txHash: {
+    fontSize: fontSize.xs,
+    color: colors.primary,
+    fontFamily: 'SpaceMono-Regular',
+    textAlign: 'center',
+    paddingHorizontal: spacing.xxl,
+  },
+
+  // Token selection modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
+  modalSheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: borderRadius.xxl,
     borderTopRightRadius: borderRadius.xxl,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.xxxl,
+    paddingBottom: 40,
     maxHeight: '80%',
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceLight,
+    alignSelf: 'center',
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: spacing.xxl,
-    marginBottom: spacing.lg,
+    paddingVertical: spacing.md,
   },
   modalTitle: {
     fontSize: fontSize.lg,
@@ -845,7 +932,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.primary,
   },
-  searchInput: {
+  modalSearch: {
     backgroundColor: colors.surfaceLight,
     borderRadius: borderRadius.lg,
     paddingHorizontal: spacing.lg,
@@ -854,7 +941,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.textPrimary,
     marginHorizontal: spacing.xxl,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
   },
@@ -888,7 +975,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginBottom: 2,
   },
-  tokenItemSymbol: {
+  tokenItemSym: {
     fontSize: fontSize.sm,
     fontWeight: '500',
     color: colors.textMuted,
