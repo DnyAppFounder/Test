@@ -14,8 +14,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ArrowLeft,
-  TrendingUp,
-  TrendingDown,
   Copy,
   Star,
   Zap,
@@ -32,7 +30,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
-import { TradingViewChart } from '@/components/TradingViewChart';
+import { TradingViewChart, TokenInfo } from '@/components/TradingViewChart';
 import { TradingInterface } from '@/components/TradingInterface';
 import { TokenActivityFeed } from '@/components/TokenActivityFeed';
 import { TokenDiscussionComponent } from '@/components/TokenDiscussion';
@@ -176,10 +174,19 @@ export default function TokenDetailScreen() {
   }
 
   const displayPrice = livePrice || token.price;
-  const changePositive = token.priceChange24h >= 0;
   const shortAddr = token.address
     ? `${token.address.slice(0, 6)}...${token.address.slice(-4)}`
     : '';
+
+  const tokenInfoForChart: TokenInfo = {
+    name: token.name,
+    symbol: token.symbol ?? '',
+    image: token.image,
+    price: displayPrice,
+    priceChange24h: token.priceChange24h,
+    marketCap: token.marketCap,
+    pairAddress: token.pairAddress,
+  };
 
   return (
     <View style={styles.container}>
@@ -225,59 +232,15 @@ export default function TokenDetailScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {/* Token header: logo + name + price */}
-        <View style={styles.tokenHeader}>
-          <View style={styles.tokenHeaderLeft}>
-            {token.image ? (
-              <Image source={{ uri: token.image }} style={styles.tokenLogo} />
-            ) : (
-              <View style={styles.tokenLogoFallback}>
-                <Text style={styles.tokenLogoFallbackText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
-              </View>
-            )}
-            <View style={styles.tokenTitleCol}>
-              <View style={styles.tokenNameRow}>
-                <Text style={styles.tokenName} numberOfLines={1}>{token.name}</Text>
-                {token.boostCount != null && token.boostCount > 0 && (
-                  <View style={styles.boostBadge}>
-                    <Zap size={10} color={colors.warning} fill={colors.warning} />
-                    <Text style={styles.boostText}>x{token.boostCount}</Text>
-                  </View>
-                )}
-              </View>
-              <TouchableOpacity style={styles.addrRow} onPress={copyAddress} activeOpacity={0.7}>
-                <Text style={styles.addrText}>{shortAddr}</Text>
-                {copiedAddr
-                  ? <CheckCircle2 size={11} color={colors.success} strokeWidth={2} />
-                  : <Copy size={11} color={colors.textMuted} strokeWidth={2} />
-                }
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.tokenHeaderRight}>
-            <Text style={styles.priceText}>{liveMarketService.formatPrice(displayPrice)}</Text>
-            <View style={[styles.changePill, changePositive ? styles.changePillUp : styles.changePillDown]}>
-              {changePositive
-                ? <TrendingUp size={11} color={colors.success} strokeWidth={2.5} />
-                : <TrendingDown size={11} color={colors.error} strokeWidth={2.5} />
-              }
-              <Text style={[styles.changeText, changePositive ? styles.changeUp : styles.changeDown]}>
-                {liveMarketService.formatChange(token.priceChange24h)}
-              </Text>
-            </View>
-          </View>
+        {/* Chart — includes unified header (logo, name, pair, mcap/price, change, timeframes, chart type) */}
+        <View style={styles.chartWrap}>
+          <ErrorBoundary fallbackLabel="Chart unavailable">
+            <TradingViewChart
+              tokenInfo={tokenInfoForChart}
+              tokenMint={token.address}
+            />
+          </ErrorBoundary>
         </View>
-
-        {/* Chart */}
-        <ErrorBoundary fallbackLabel="Chart unavailable">
-          <TradingViewChart
-            symbol={token.symbol ?? ''}
-            currentPrice={displayPrice}
-            pairAddress={token.pairAddress}
-            tokenMint={token.address}
-          />
-        </ErrorBoundary>
 
         {/* Trading panel */}
         <View style={styles.tradingWrap}>
@@ -594,6 +557,10 @@ const styles = StyleSheet.create({
   changeText: { fontSize: fontSize.xs, fontWeight: '700' },
   changeUp: { color: colors.success },
   changeDown: { color: colors.error },
+  chartWrap: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
   // Trading
   tradingWrap: {
     paddingHorizontal: spacing.lg,
