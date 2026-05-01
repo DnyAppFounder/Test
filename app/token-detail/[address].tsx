@@ -12,10 +12,26 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, TrendingUp, TrendingDown, Copy, Star, Zap, Droplet, ChartBar as BarChart3, DollarSign, RefreshCw, CircleCheck as CheckCircle2 } from 'lucide-react-native';
+import {
+  ArrowLeft,
+  TrendingUp,
+  TrendingDown,
+  Copy,
+  Star,
+  Zap,
+  Droplet,
+  ChartBar as BarChart3,
+  DollarSign,
+  RefreshCw,
+  CircleCheck as CheckCircle2,
+  MessageSquare,
+  Activity,
+  ArrowUpDown,
+  Users,
+} from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
-import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { TradingViewChart } from '@/components/TradingViewChart';
 import { TradingInterface } from '@/components/TradingInterface';
 import { TokenActivityFeed } from '@/components/TokenActivityFeed';
@@ -24,6 +40,15 @@ import { watchlistService } from '@/services/watchlistService';
 import { useWallet } from '@/contexts/WalletContext';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+
+type BottomTab = 'chat' | 'activity' | 'transactions' | 'holders';
+
+const BOTTOM_TABS: { key: BottomTab; label: string; icon: any }[] = [
+  { key: 'chat', label: 'Chat', icon: MessageSquare },
+  { key: 'activity', label: 'Activity', icon: Activity },
+  { key: 'transactions', label: 'Trades', icon: ArrowUpDown },
+  { key: 'holders', label: 'Holders', icon: Users },
+];
 
 export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
@@ -38,6 +63,7 @@ export default function TokenDetailScreen() {
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [checkingWatchlist, setCheckingWatchlist] = useState(true);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [activeBottomTab, setActiveBottomTab] = useState<BottomTab>('chat');
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -117,7 +143,6 @@ export default function TokenDetailScreen() {
     if (success) setIsWatchlisted(w => !w);
   };
 
-  // Balances from wallet context
   const SOL_MINT = 'So11111111111111111111111111111111111111112';
   const solToken = tokens.find(t => t.contract_address === SOL_MINT);
   const thisToken = tokens.find(t => t.contract_address === address);
@@ -126,18 +151,18 @@ export default function TokenDetailScreen() {
 
   if (loading) {
     return (
-      <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+      <View style={styles.container}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Loading token...</Text>
         </View>
-      </LinearGradient>
+      </View>
     );
   }
 
   if (!token) {
     return (
-      <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+      <View style={styles.container}>
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
             <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
@@ -146,23 +171,33 @@ export default function TokenDetailScreen() {
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Token not found</Text>
         </View>
-      </LinearGradient>
+      </View>
     );
   }
 
   const displayPrice = livePrice || token.price;
   const changePositive = token.priceChange24h >= 0;
   const shortAddr = token.address
-    ? `${token.address.slice(0, 4)}...${token.address.slice(-4)}`
+    ? `${token.address.slice(0, 6)}...${token.address.slice(-4)}`
     : '';
 
   return (
-    <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
-      {/* Top bar: back + refresh + watchlist */}
+    <View style={styles.container}>
+      {/* Top bar */}
       <View style={styles.topBar}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
+        <View style={styles.topBarCenter}>
+          {token.image ? (
+            <Image source={{ uri: token.image }} style={styles.topBarLogo} />
+          ) : (
+            <View style={styles.topBarLogoFallback}>
+              <Text style={styles.topBarLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+            </View>
+          )}
+          <Text style={styles.topBarSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
+        </View>
         <View style={styles.topBarRight}>
           <TouchableOpacity
             style={styles.iconBtn}
@@ -170,13 +205,13 @@ export default function TokenDetailScreen() {
             activeOpacity={0.7}
           >
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <RefreshCw size={18} color={autoRefreshEnabled ? colors.success : colors.textMuted} strokeWidth={2.5} />
+              <RefreshCw size={16} color={autoRefreshEnabled ? colors.success : colors.textMuted} strokeWidth={2.5} />
             </Animated.View>
           </TouchableOpacity>
           {!checkingWatchlist && (
             <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
               <Star
-                size={20}
+                size={18}
                 color={isWatchlisted ? colors.warning : colors.textMuted}
                 fill={isWatchlisted ? colors.warning : 'transparent'}
                 strokeWidth={2}
@@ -190,8 +225,8 @@ export default function TokenDetailScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {/* Token header card: logo + name/symbol | price + change */}
-        <View style={styles.tokenHeaderCard}>
+        {/* Token header: logo + name + price */}
+        <View style={styles.tokenHeader}>
           <View style={styles.tokenHeaderLeft}>
             {token.image ? (
               <Image source={{ uri: token.image }} style={styles.tokenLogo} />
@@ -205,17 +240,16 @@ export default function TokenDetailScreen() {
                 <Text style={styles.tokenName} numberOfLines={1}>{token.name}</Text>
                 {token.boostCount != null && token.boostCount > 0 && (
                   <View style={styles.boostBadge}>
-                    <Zap size={11} color={colors.warning} fill={colors.warning} />
+                    <Zap size={10} color={colors.warning} fill={colors.warning} />
                     <Text style={styles.boostText}>x{token.boostCount}</Text>
                   </View>
                 )}
               </View>
-              <Text style={styles.tokenSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
               <TouchableOpacity style={styles.addrRow} onPress={copyAddress} activeOpacity={0.7}>
                 <Text style={styles.addrText}>{shortAddr}</Text>
                 {copiedAddr
-                  ? <CheckCircle2 size={12} color={colors.success} strokeWidth={2} />
-                  : <Copy size={12} color={colors.textMuted} strokeWidth={2} />
+                  ? <CheckCircle2 size={11} color={colors.success} strokeWidth={2} />
+                  : <Copy size={11} color={colors.textMuted} strokeWidth={2} />
                 }
               </TouchableOpacity>
             </View>
@@ -225,8 +259,8 @@ export default function TokenDetailScreen() {
             <Text style={styles.priceText}>{liveMarketService.formatPrice(displayPrice)}</Text>
             <View style={[styles.changePill, changePositive ? styles.changePillUp : styles.changePillDown]}>
               {changePositive
-                ? <TrendingUp size={12} color={colors.success} strokeWidth={2.5} />
-                : <TrendingDown size={12} color={colors.error} strokeWidth={2.5} />
+                ? <TrendingUp size={11} color={colors.success} strokeWidth={2.5} />
+                : <TrendingDown size={11} color={colors.error} strokeWidth={2.5} />
               }
               <Text style={[styles.changeText, changePositive ? styles.changeUp : styles.changeDown]}>
                 {liveMarketService.formatChange(token.priceChange24h)}
@@ -236,19 +270,17 @@ export default function TokenDetailScreen() {
         </View>
 
         {/* Chart */}
-        <View style={styles.chartSection}>
-          <ErrorBoundary fallbackLabel="Chart unavailable">
-            <TradingViewChart
-              symbol={token.symbol ?? ''}
-              currentPrice={displayPrice}
-              pairAddress={token.pairAddress}
-              tokenMint={token.address}
-            />
-          </ErrorBoundary>
-        </View>
+        <ErrorBoundary fallbackLabel="Chart unavailable">
+          <TradingViewChart
+            symbol={token.symbol ?? ''}
+            currentPrice={displayPrice}
+            pairAddress={token.pairAddress}
+            tokenMint={token.address}
+          />
+        </ErrorBoundary>
 
         {/* Trading panel */}
-        <View style={styles.tradingSection}>
+        <View style={styles.tradingWrap}>
           <ErrorBoundary fallbackLabel="Trading unavailable">
             <TradingInterface
               tokenMint={token.address}
@@ -266,41 +298,39 @@ export default function TokenDetailScreen() {
         {/* Stats row */}
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <View style={styles.statIconWrap}>
-              <BarChart3 size={14} color={colors.primary} strokeWidth={2} />
-            </View>
-            <Text style={styles.statLabel}>24H VOLUME</Text>
+            <BarChart3 size={13} color={colors.primary} strokeWidth={2} />
+            <Text style={styles.statLabel}>24H VOL</Text>
             <Text style={styles.statValue}>{liveMarketService.formatVolume(token.volume24h)}</Text>
           </View>
+          <View style={styles.statDivider} />
           <View style={styles.statCard}>
-            <View style={styles.statIconWrap}>
-              <Droplet size={14} color={colors.primary} strokeWidth={2} />
-            </View>
+            <Droplet size={13} color={colors.primary} strokeWidth={2} />
             <Text style={styles.statLabel}>LIQUIDITY</Text>
             <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.liquidity)}</Text>
           </View>
           {token.marketCap != null && token.marketCap > 0 && (
-            <View style={styles.statCard}>
-              <View style={styles.statIconWrap}>
-                <DollarSign size={14} color={colors.primary} strokeWidth={2} />
+            <>
+              <View style={styles.statDivider} />
+              <View style={styles.statCard}>
+                <DollarSign size={13} color={colors.primary} strokeWidth={2} />
+                <Text style={styles.statLabel}>MKT CAP</Text>
+                <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.marketCap)}</Text>
               </View>
-              <Text style={styles.statLabel}>MARKET CAP</Text>
-              <Text style={styles.statValue}>{liveMarketService.formatMarketCap(token.marketCap)}</Text>
-            </View>
+            </>
           )}
         </View>
 
         {/* Contract / DEX info */}
-        <View style={styles.infoSection}>
+        <View style={styles.infoCard}>
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Contract Address</Text>
+            <Text style={styles.infoLabel}>Contract</Text>
             <TouchableOpacity style={styles.infoValueRow} onPress={copyAddress} activeOpacity={0.7}>
               <Text style={styles.infoValueMono} numberOfLines={1} ellipsizeMode="middle">
                 {token.address}
               </Text>
               {copiedAddr
-                ? <CheckCircle2 size={14} color={colors.success} strokeWidth={2} />
-                : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+                ? <CheckCircle2 size={13} color={colors.success} strokeWidth={2} />
+                : <Copy size={13} color={colors.textMuted} strokeWidth={2} />
               }
             </TouchableOpacity>
           </View>
@@ -314,59 +344,118 @@ export default function TokenDetailScreen() {
 
           {token.pairAddress && (
             <View style={[styles.infoRow, styles.infoRowBorder]}>
-              <Text style={styles.infoLabel}>Pair Address</Text>
+              <Text style={styles.infoLabel}>Pair</Text>
               <TouchableOpacity style={styles.infoValueRow} onPress={copyPair} activeOpacity={0.7}>
                 <Text style={styles.infoValueMono} numberOfLines={1} ellipsizeMode="middle">
                   {token.pairAddress}
                 </Text>
                 {copiedPair
-                  ? <CheckCircle2 size={14} color={colors.success} strokeWidth={2} />
-                  : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+                  ? <CheckCircle2 size={13} color={colors.success} strokeWidth={2} />
+                  : <Copy size={13} color={colors.textMuted} strokeWidth={2} />
                 }
               </TouchableOpacity>
             </View>
           )}
         </View>
 
-        {/* Activity & Discussion */}
-        <View style={styles.feedSection}>
-          <TokenActivityFeed tokenAddress={token.address} />
+        {/* Bottom tab bar */}
+        <View style={styles.bottomTabBar}>
+          {BOTTOM_TABS.map(tab => {
+            const Icon = tab.icon;
+            const active = activeBottomTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                style={styles.bottomTab}
+                onPress={() => setActiveBottomTab(tab.key)}
+                activeOpacity={0.7}
+              >
+                <Icon size={15} color={active ? colors.primary : colors.textMuted} strokeWidth={2} />
+                <Text style={[styles.bottomTabText, active && styles.bottomTabTextActive]}>
+                  {tab.label}
+                </Text>
+                {active && <View style={styles.bottomTabUnderline} />}
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        <View style={styles.feedSection}>
-          <TokenDiscussionComponent
-            tokenAddress={token.address}
-            userWallet={activeAddress || undefined}
-          />
+        {/* Tab content */}
+        <View style={styles.tabContent}>
+          {activeBottomTab === 'chat' && (
+            <TokenDiscussionComponent
+              tokenAddress={token.address}
+              userWallet={activeAddress || undefined}
+            />
+          )}
+          {(activeBottomTab === 'activity' || activeBottomTab === 'transactions') && (
+            <TokenActivityFeed tokenAddress={token.address} />
+          )}
+          {activeBottomTab === 'holders' && (
+            <View style={styles.comingSoon}>
+              <Users size={32} color={colors.textMuted} strokeWidth={1.5} />
+              <Text style={styles.comingSoonText}>Top holders coming soon</Text>
+            </View>
+          )}
         </View>
 
-        <View style={styles.bottomPad} />
+        <View style={{ height: 32 }} />
       </ScrollView>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0A0A0F',
   },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    paddingTop: 56,
+    paddingTop: 54,
     paddingBottom: spacing.md,
+    backgroundColor: '#0A0A0F',
   },
   backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.surface,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#12121A',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  topBarCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  topBarLogo: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+  },
+  topBarLogoFallback: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  topBarLogoText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  topBarSymbol: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
   topBarRight: {
     flexDirection: 'row',
@@ -374,20 +463,21 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   iconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.surface,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#12121A',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     gap: spacing.lg,
+    backgroundColor: '#0A0A0F',
   },
   loadingText: {
     fontSize: fontSize.md,
@@ -404,13 +494,13 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '700',
   },
-  // Token header card
-  tokenHeaderCard: {
+  // Token header
+  tokenHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.md,
     gap: spacing.md,
   },
   tokenHeaderLeft: {
@@ -420,23 +510,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tokenLogo: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.surface,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#12121A',
   },
   tokenLogoFallback: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.surface,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#12121A',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   tokenLogoFallbackText: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: '800',
     color: colors.primary,
   },
@@ -456,41 +546,34 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 1,
   },
-  tokenSymbol: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textMuted,
-  },
-  addrRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  addrText: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontFamily: 'SpaceMono-Regular',
-    fontWeight: '600',
-  },
   boostBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
+    gap: 2,
+    paddingHorizontal: 5,
     paddingVertical: 2,
     backgroundColor: colors.warningMuted,
     borderRadius: 4,
   },
   boostText: {
-    fontSize: fontSize.xs,
+    fontSize: 10,
     fontWeight: '800',
     color: colors.warning,
   },
+  addrRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addrText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
+  },
   tokenHeaderRight: {
     alignItems: 'flex-end',
-    gap: 6,
-    paddingTop: 4,
+    gap: 5,
+    paddingTop: 2,
   },
   priceText: {
     fontSize: fontSize.xl,
@@ -501,61 +584,44 @@ const styles = StyleSheet.create({
   changePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
+    gap: 3,
+    paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: borderRadius.full,
   },
-  changePillUp: {
-    backgroundColor: colors.successMuted,
-  },
-  changePillDown: {
-    backgroundColor: colors.errorMuted,
-  },
-  changeText: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-  },
-  changeUp: {
-    color: colors.success,
-  },
-  changeDown: {
-    color: colors.error,
-  },
-  // Chart
-  chartSection: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-  },
+  changePillUp: { backgroundColor: colors.successMuted },
+  changePillDown: { backgroundColor: colors.errorMuted },
+  changeText: { fontSize: fontSize.xs, fontWeight: '700' },
+  changeUp: { color: colors.success },
+  changeDown: { color: colors.error },
   // Trading
-  tradingSection: {
+  tradingWrap: {
     paddingHorizontal: spacing.lg,
+    marginTop: spacing.xs,
     marginBottom: spacing.md,
   },
-  // Stats row
+  // Stats
   statsRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    alignItems: 'center',
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: '#12121A',
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
   },
   statCard: {
     flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    gap: 4,
-  },
-  statIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.primaryMuted,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 2,
+    gap: 3,
+  },
+  statDivider: {
+    width: 1,
+    height: 36,
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
   statLabel: {
     fontSize: 9,
@@ -568,38 +634,38 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  // Contract info
-  infoSection: {
+  // Info card
+  infoCard: {
     marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
+    marginBottom: spacing.md,
+    backgroundColor: '#12121A',
+    borderRadius: borderRadius.md,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(255,255,255,0.06)',
     overflow: 'hidden',
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     gap: spacing.md,
   },
   infoRowBorder: {
     borderTopWidth: 1,
-    borderTopColor: colors.surfaceBorder,
+    borderTopColor: 'rgba(255,255,255,0.05)',
   },
   infoLabel: {
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: colors.textMuted,
-    flexShrink: 0,
-    minWidth: 80,
+    minWidth: 64,
   },
   infoValueRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     flex: 1,
     justifyContent: 'flex-end',
   },
@@ -616,19 +682,60 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  // Feeds
-  feedSection: {
+  // Bottom tabs
+  bottomTabBar: {
+    flexDirection: 'row',
     marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.md,
+    backgroundColor: '#12121A',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(255,255,255,0.06)',
+    marginBottom: spacing.xs,
+    overflow: 'hidden',
+  },
+  bottomTab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    gap: 3,
+    position: 'relative',
+  },
+  bottomTabText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+  bottomTabTextActive: {
+    color: colors.primary,
+  },
+  bottomTabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: '15%',
+    right: '15%',
+    height: 2,
+    backgroundColor: colors.primary,
+    borderRadius: 1,
+  },
+  // Tab content
+  tabContent: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: '#12121A',
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
     overflow: 'hidden',
     minHeight: 200,
-    maxHeight: 400,
   },
-  bottomPad: {
-    height: spacing.xxxl,
+  comingSoon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    gap: spacing.md,
+  },
+  comingSoonText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    fontWeight: '500',
   },
 });

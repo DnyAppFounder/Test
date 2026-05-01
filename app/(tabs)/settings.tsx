@@ -110,13 +110,23 @@ export default function SettingsScreen() {
   };
 
   const handleLogout = async () => {
-    // Clear all wallet state in context first (disconnects external wallet, clears balances)
-    await fullLogout();
-    // Clear stored wallet data
-    const walletManager = SecureWalletManager.getInstance();
-    await walletManager.deleteWallet().catch(() => {});
-    await AsyncStorage.removeItem('onboarding_completed');
-    await AsyncStorage.removeItem('wallet_config');
+    try {
+      // Clear all wallet state in context (disconnects external wallet, clears balances/tokens)
+      await fullLogout();
+    } catch (e) {
+      console.warn('[Logout] fullLogout error:', e);
+    }
+    try {
+      const walletManager = SecureWalletManager.getInstance();
+      await walletManager.deleteWallet();
+    } catch (e) {
+      console.warn('[Logout] deleteWallet error:', e);
+    }
+    try {
+      await AsyncStorage.multiRemove(['onboarding_completed', 'wallet_config', 'secure_wallet_data']);
+    } catch (e) {
+      console.warn('[Logout] AsyncStorage clear error:', e);
+    }
     router.replace('/onboarding');
   };
 

@@ -259,7 +259,7 @@ export default function CommunityScreen() {
             onLike={handleLike}
             onComment={openCommentsModal}
             onRepost={handleRepost}
-            onPromote={openPromoteModal}
+            onPromote={() => {}}
             onDelete={item.author_id === profile?.id ? handleDeletePost : undefined}
           />
         )}
@@ -294,7 +294,6 @@ export default function CommunityScreen() {
         </View>
       );
     }
-    router.push(`/profile/${profile.id}`);
     return null;
   };
 
@@ -517,8 +516,8 @@ export default function CommunityScreen() {
             key={tab.key}
             style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
             onPress={() => {
-              if (tab.key === 'profile' && profile) {
-                router.push(`/profile/${profile.id}`);
+              if (tab.key === 'profile') {
+                if (profile) router.push(`/profile/${profile.id}` as any);
                 return;
               }
               setActiveTab(tab.key);
@@ -560,7 +559,7 @@ export default function CommunityScreen() {
                 }
               </View>
               <Text style={styles.createAuthorName}>
-                {profile?.username || walletAddress.slice(0, 8) + '...'}
+                {profile?.username || (activeAddress ? activeAddress.slice(0, 8) + '...' : 'Anonymous')}
               </Text>
             </View>
 

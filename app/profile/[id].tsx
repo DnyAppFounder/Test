@@ -13,12 +13,12 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, MoveHorizontal as MoreHorizontal, Share2, X, Check, Copy, BadgeCheck, User, Camera } from 'lucide-react-native';
+import { ArrowLeft, MoveHorizontal as MoreHorizontal, Share2, X, Check, Copy, BadgeCheck, User, Camera, Zap, Clock, CircleAlert } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
-import { SocialService, UserProfile, Post } from '@/services/socialService';
+import { SocialService, UserProfile, Post, PROMOTE_TIERS } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard from '@/components/PostCard';
 
@@ -50,6 +50,12 @@ export default function ProfileScreen() {
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
   const [editBannerUrl, setEditBannerUrl] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [promotePostId, setPromotePostId] = useState<string | null>(null);
+  const [promoteStep, setPromoteStep] = useState<'select' | 'confirm' | 'processing' | 'done'>('select');
+  const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
+  const [promotingPost, setPromotingPost] = useState(false);
 
   const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar } = useProfile();
   const walletAddr = (selectedAccount?.address || activeAddress || '');
@@ -105,6 +111,18 @@ export default function ProfileScreen() {
     setShowEditModal(true);
   };
 
+  const handlePickBanner = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [3, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setEditBannerUrl(result.assets[0].uri);
+    }
+  };
+
   const handlePickAvatar = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -126,16 +144,42 @@ export default function ProfileScreen() {
         const uploaded = await uploadGlobalAvatar(avatarUrl);
         if (uploaded) avatarUrl = uploaded;
       }
+      let bannerUrl: string | undefined = editBannerUrl.trim() || undefined;
+      if (bannerUrl && (bannerUrl.startsWith('file://') || bannerUrl.startsWith('blob:') || bannerUrl.startsWith('data:'))) {
+        const uploaded = await SocialService.uploadAvatar(profile.wallet_address, bannerUrl, profile.id + '_banner');
+        if (uploaded) bannerUrl = uploaded;
+      }
       await updateGlobalProfile({
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
         avatar_url: avatarUrl,
       });
+      if (bannerUrl) {
+        await SocialService.updateProfile(profile.id, { banner_url: bannerUrl } as any);
+      }
       await loadProfile();
     } finally {
       setSaving(false);
       setShowEditModal(false);
     }
+  };
+
+  const openPromoteModal = (postId: string) => {
+    setPromotePostId(postId);
+    setPromoteStep('select');
+    setSelectedTierKey(null);
+    setShowPromoteModal(true);
+  };
+
+  const handleConfirmPromotion = async () => {
+    if (!promotePostId || !selectedTierKey) return;
+    setPromoteStep('processing');
+    setPromotingPost(true);
+    await new Promise(r => setTimeout(r, 1200));
+    await SocialService.promotePost(promotePostId, selectedTierKey);
+    setPromoteStep('done');
+    setPromotingPost(false);
+    await loadProfile();
   };
 
   const copyAddress = async () => {
@@ -337,7 +381,11 @@ export default function ProfileScreen() {
                   onLike={handleLike}
                   onComment={() => {}}
                   onRepost={handleRepost}
-                  onPromote={() => {}}
+                  onPromote={isOwnProfile ? openPromoteModal : () => {}}
+                  onDelete={isOwnProfile ? async (pid) => {
+                    await SocialService.deletePost(pid, profile!.id);
+                    setPosts(prev => prev.filter(p => p.id !== pid));
+                  } : undefined}
                 />
               ))}
             </View>
@@ -366,6 +414,21 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
 
+              {/* Banner picker */}
+              <Text style={styles.editLabel}>Cover Photo</Text>
+              <TouchableOpacity style={styles.bannerPickerWrap} onPress={handlePickBanner} activeOpacity={0.85}>
+                {editBannerUrl ? (
+                  <Image source={{ uri: editBannerUrl }} style={styles.bannerPickerImg} resizeMode="cover" />
+                ) : (
+                  <View style={styles.bannerPickerEmpty}>
+                    <Camera size={22} color={colors.textMuted} />
+                    <Text style={styles.bannerPickerText}>Tap to set cover photo</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              {/* Avatar picker */}
+              <Text style={[styles.editLabel, { marginTop: spacing.lg }]}>Profile Photo</Text>
               <TouchableOpacity style={styles.avatarPickerWrap} onPress={handlePickAvatar} activeOpacity={0.85}>
                 <View style={styles.avatarPickerRing}>
                   {editAvatarUrl ? (
@@ -417,6 +480,84 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Promote Post Modal */}
+      <Modal visible={showPromoteModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            {promoteStep === 'select' && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Promote Post</Text>
+                  <TouchableOpacity onPress={() => setShowPromoteModal(false)}>
+                    <X size={22} color={colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.editLabel, { marginBottom: spacing.md }]}>
+                  Boost your post to the top of the feed.
+                </Text>
+                {PROMOTE_TIERS.map(tier => (
+                  <TouchableOpacity key={tier.key} style={styles.tierCard} onPress={() => {
+                    setSelectedTierKey(tier.key);
+                    setPromoteStep('confirm');
+                  }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flex: 1 }}>
+                      <View style={styles.tierIcon}><Clock size={16} color={colors.primary} /></View>
+                      <View>
+                        <Text style={styles.tierLabel}>{tier.label}</Text>
+                        <Text style={styles.tierSub}>{tier.hours}h visibility boost</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.tierPrice}>${tier.price}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+            {promoteStep === 'confirm' && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Confirm</Text>
+                  <TouchableOpacity onPress={() => setPromoteStep('select')}>
+                    <X size={22} color={colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.confirmCard}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.md }}>
+                    <Text style={styles.editLabel}>Tier</Text>
+                    <Text style={styles.editLabel}>{PROMOTE_TIERS.find(t => t.key === selectedTierKey)?.label}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={styles.editLabel}>Price</Text>
+                    <Text style={styles.editLabel}>${PROMOTE_TIERS.find(t => t.key === selectedTierKey)?.price} USD</Text>
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.saveBtn} onPress={handleConfirmPromotion} disabled={promotingPost}>
+                  <Zap size={16} color={colors.white} />
+                  <Text style={styles.saveBtnText}>Promote Now</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            {promoteStep === 'processing' && (
+              <View style={{ alignItems: 'center', paddingVertical: 48 }}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={[styles.editLabel, { marginTop: spacing.lg }]}>Activating promotion...</Text>
+              </View>
+            )}
+            {promoteStep === 'done' && (
+              <View style={{ alignItems: 'center', paddingVertical: 48 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.successMuted, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.lg }}>
+                  <Check size={32} color={colors.success} />
+                </View>
+                <Text style={styles.modalTitle}>Promotion Active!</Text>
+                <TouchableOpacity style={[styles.saveBtn, { marginTop: spacing.xl }]} onPress={() => setShowPromoteModal(false)}>
+                  <Text style={styles.saveBtnText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
         </View>
       </Modal>
     </View>
@@ -776,5 +917,71 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
+  },
+  // Banner picker
+  bannerPickerWrap: {
+    width: '100%',
+    height: 100,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  bannerPickerImg: {
+    width: '100%',
+    height: '100%',
+  },
+  bannerPickerEmpty: {
+    flex: 1,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  bannerPickerText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+  },
+  // Promote modal tier cards
+  tierCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A1A28',
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  tierIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primaryMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tierLabel: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  tierSub: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  tierPrice: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  confirmCard: {
+    backgroundColor: '#1A1A28',
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
 });
