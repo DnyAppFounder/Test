@@ -301,7 +301,7 @@ export default function CommunityScreen() {
       {/* Conversation list */}
       <View style={styles.msgList}>
         {filteredConvos.map((conv, idx) => (
-          <TouchableOpacity key={conv.id} style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]} activeOpacity={0.75}>
+          <TouchableOpacity key={conv.id} style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]} activeOpacity={0.75} onPress={() => router.push(`/chat/${conv.id}`)}>
             <View style={styles.convAvatarWrap}>
               <Image source={{ uri: conv.avatar }} style={styles.convAvatar} />
             </View>
@@ -437,7 +437,7 @@ export default function CommunityScreen() {
             <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
           </View>
           {activeTab === 'feed' && (
-            <TouchableOpacity style={styles.composeBtn} onPress={() => setShowCreateModal(true)} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.composeBtn} onPress={() => router.push('/create-post')} activeOpacity={0.85}>
               <Send size={20} color={colors.white} strokeWidth={2.5} />
             </TouchableOpacity>
           )}
