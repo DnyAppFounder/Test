@@ -1,7 +1,6 @@
 import { Connection } from '@solana/web3.js';
 
 function getSupabaseRpcProxyUrl(): string {
-  // Try all possible env access patterns (Expo web vs native)
   const supabaseUrl =
     (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_URL) ||
     '';
@@ -9,6 +8,10 @@ function getSupabaseRpcProxyUrl(): string {
     return `${supabaseUrl}/functions/v1/solana-rpc`;
   }
   return '';
+}
+
+function getSupabaseAnonKey(): string {
+  return (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY) || '';
 }
 
 function getDirectRpcUrl(): string {
@@ -62,9 +65,18 @@ export class SolanaConnectionService {
 
     console.log('[RPC]', method, '->', url.substring(0, 60));
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (url === this.proxyUrl) {
+      const anonKey = getSupabaseAnonKey();
+      if (anonKey) {
+        headers['Authorization'] = `Bearer ${anonKey}`;
+        headers['apikey'] = anonKey;
+      }
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body,
     });
 
