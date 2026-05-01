@@ -12,7 +12,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartphone, Shield, CheckCircle } from 'lucide-react-native';
+import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartphone, Shield, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService';
