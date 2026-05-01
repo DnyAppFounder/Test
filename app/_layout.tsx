@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { WalletProvider } from '@/contexts/WalletContext';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { ProfileProvider } from '@/contexts/ProfileContext';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 
@@ -48,6 +49,7 @@ export default function RootLayout() {
     <View style={styles.root} onLayout={onLayoutRootView}>
       <LanguageProvider>
         <WalletProvider>
+          <ProfileProvider>
           <Stack
             screenOptions={{
               headerShown: false,
@@ -62,6 +64,7 @@ export default function RootLayout() {
             <Stack.Screen name="+not-found" />
           </Stack>
           <StatusBar style="light" />
+          </ProfileProvider>
         </WalletProvider>
       </LanguageProvider>
     </View>

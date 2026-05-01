@@ -21,7 +21,8 @@ import { useRouter } from 'expo-router';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useWallet, UnifiedWallet } from '@/contexts/WalletContext';
 import { Language, languageNames } from '@/constants/i18n';
-import { SocialService, UserProfile } from '@/services/socialService';
+import { SocialService, UserProfile, NotificationSettings } from '@/services/socialService';
+import { useProfile } from '@/contexts/ProfileContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
@@ -31,7 +32,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { t, language, setLanguage } = useLanguage();
   const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, setActiveWallet, connectedWallet, disconnectExternalWallet } = useWallet();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { profile, updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
@@ -40,59 +41,58 @@ export default function SettingsScreen() {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [copied, setCopied] = useState(false);
   const [addingAccount, setAddingAccount] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings | null>(null);
+  const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   const walletAddress = selectedAccount?.address || 'anonymous';
 
-  const loadProfile = useCallback(async () => {
-    const p = await SocialService.getOrCreateProfile(walletAddress);
-    setProfile(p);
-    if (p) {
-      setEditUsername(p.username || '');
-      setEditBio(p.bio || '');
-      setEditAvatarUrl(p.avatar_url || '');
+  const loadNotifSettings = useCallback(async () => {
+    if (!profile) return;
+    setNotifLoading(true);
+    try {
+      const s = await SocialService.getOrCreateNotificationSettings(profile.id);
+      setNotifSettings(s);
+    } finally {
+      setNotifLoading(false);
     }
-  }, [walletAddress]);
+  }, [profile]);
 
   useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
+    if (activeModal === 'notifications') {
+      loadNotifSettings();
+    }
+  }, [activeModal, loadNotifSettings]);
+
+  const handleToggleNotif = async (key: keyof Omit<NotificationSettings, 'id' | 'user_id'>) => {
+    if (!notifSettings) return;
+    const newVal = !notifSettings[key];
+    const updated = { ...notifSettings, [key]: newVal };
+    setNotifSettings(updated);
+    await SocialService.updateNotificationSettings(notifSettings.id, { [key]: newVal });
+  };
 
   const [isUploading, setIsUploading] = useState(false);
 
   const handleSaveProfile = async () => {
     if (!profile) return;
-
-    let avatarUrl = editAvatarUrl.trim() || undefined;
-
-    // If the avatar URL is a local file/blob URI, upload it to Supabase Storage
-    if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
-      setIsUploading(true);
-      try {
-        const publicUrl = await SocialService.uploadAvatar(
-          profile.wallet_address,
-          avatarUrl,
-          profile.id
-        );
-        if (publicUrl) {
-          avatarUrl = publicUrl;
-        }
-      } catch (err) {
-        console.error('[Settings] Avatar upload failed:', err);
-      } finally {
-        setIsUploading(false);
+    setIsUploading(true);
+    try {
+      let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
+      if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
+        const uploaded = await uploadGlobalAvatar(avatarUrl);
+        if (uploaded) avatarUrl = uploaded;
       }
-    } else {
-      // It's already a URL, just save it directly
-      await SocialService.updateProfile(profile.id, {
+      await updateGlobalProfile({
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
         avatar_url: avatarUrl,
       });
+    } catch (err) {
+      console.error('[Settings] handleSaveProfile error:', err);
+    } finally {
+      setIsUploading(false);
     }
-
-    await loadProfile();
     setActiveModal(null);
   };
 
@@ -262,7 +262,12 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
-        <TouchableOpacity style={styles.profileCard} onPress={() => setActiveModal('profile')}>
+        <TouchableOpacity style={styles.profileCard} onPress={() => {
+          setEditUsername(profile?.username || '');
+          setEditBio(profile?.bio || '');
+          setEditAvatarUrl(profile?.avatar_url || '');
+          setActiveModal('profile');
+        }}>
           <View style={styles.profileAvatar}>
             {profile?.avatar_url ? (
               <Image source={{ uri: profile.avatar_url }} style={styles.profileAvatarImage} />
@@ -547,23 +552,31 @@ export default function SettingsScreen() {
                 <X size={24} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
-            <View style={styles.notifSection}>
-              <BellRing size={48} color={colors.primary} style={{ alignSelf: 'center', marginBottom: spacing.lg }} />
-              <TouchableOpacity
-                style={styles.notifToggleRow}
-                onPress={() => setNotificationsEnabled(!notificationsEnabled)}
-              >
-                <Text style={styles.notifToggleLabel}>Push Notifications</Text>
-                <View style={[styles.toggleTrack, notificationsEnabled && styles.toggleTrackActive]}>
-                  <View style={[styles.toggleThumb, notificationsEnabled && styles.toggleThumbActive]} />
-                </View>
-              </TouchableOpacity>
-              <Text style={styles.notifHint}>
-                {notificationsEnabled
-                  ? 'You will receive notifications for likes, comments, and follows.'
-                  : 'Notifications are currently disabled.'}
-              </Text>
-            </View>
+            {notifLoading || !notifSettings ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xxl }} />
+            ) : (
+              <View style={styles.notifSection}>
+                {([
+                  { key: 'likes', label: 'Likes' },
+                  { key: 'comments', label: 'Comments' },
+                  { key: 'follows', label: 'New Followers' },
+                  { key: 'reposts', label: 'Reposts' },
+                  { key: 'mentions', label: 'Mentions' },
+                  { key: 'messages', label: 'Messages' },
+                ] as { key: keyof Omit<NotificationSettings, 'id' | 'user_id'>; label: string }[]).map(({ key, label }) => (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.notifToggleRow}
+                    onPress={() => handleToggleNotif(key)}
+                  >
+                    <Text style={styles.notifToggleLabel}>{label}</Text>
+                    <View style={[styles.toggleTrack, notifSettings[key] && styles.toggleTrackActive]}>
+                      <View style={[styles.toggleThumb, notifSettings[key] && styles.toggleThumbActive]} />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
         </View>
       </Modal>

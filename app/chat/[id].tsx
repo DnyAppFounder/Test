@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,104 +10,134 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send, Plus, Check } from 'lucide-react-native';
+import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send, Plus, Check, User } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
-
-const AVATAR = 'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?w=100';
-
-type Message = {
-  id: string;
-  text: string;
-  time: string;
-  mine: boolean;
-  read?: boolean;
-};
-
-const INITIAL_MESSAGES: Message[] = [
-  { id: '1', text: 'Hey DawenMaster! 👋\nHow\'s it going?', time: '9:30 AM', mine: false },
-  { id: '2', text: 'Hey CryptoKing! 👋\nAll good, just working on something big 💜', time: '9:31 AM', mine: true, read: true },
-  { id: '3', text: 'Can\'t wait to see it! 🚀\n$DAWEN is about to explode 🔥', time: '9:32 AM', mine: false },
-  { id: '4', text: 'I know! The community is growing fast every single day.', time: '9:32 AM', mine: true, read: true },
-  { id: '5', text: 'Phase 4 is going to be insane.\nYou ready? 😎', time: '9:34 AM', mine: false },
-  { id: '6', text: 'Always. Built different. DAWEN family 💜', time: '9:35 AM', mine: true, read: true },
-  { id: '7', text: '🚀 Let\'s take this to the next level together.', time: '9:36 AM', mine: false },
-  { id: '8', text: 'Let\'s go! 🔥', time: '9:37 AM', mine: true, read: false },
-];
+import { useProfile } from '@/contexts/ProfileContext';
+import { SocialService, Message, UserProfile } from '@/services/socialService';
 
 export default function ChatScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
+  const { id: otherId } = useLocalSearchParams<{ id: string }>();
+  const { profile } = useProfile();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
   const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
 
-  const send = () => {
+  const loadData = useCallback(async () => {
+    if (!profile || !otherId) return;
+    setLoading(true);
+    try {
+      const [msgs, other] = await Promise.all([
+        SocialService.getConversationMessages(profile.id, otherId),
+        SocialService.getOrCreateProfile(otherId),
+      ]);
+      setMessages(msgs);
+      setOtherUser(other);
+      await SocialService.markMessagesRead(otherId, profile.id);
+    } catch (e) {
+      console.error('[Chat] loadData error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [profile, otherId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const send = async () => {
     const text = input.trim();
-    if (!text) return;
-    const now = new Date();
-    const time = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    setMessages(prev => [...prev, { id: Date.now().toString(), text, time, mine: true, read: false }]);
+    if (!text || !profile || !otherId || sending) return;
+    setSending(true);
+    const optimistic: Message = {
+      id: `opt-${Date.now()}`,
+      sender_id: profile.id,
+      receiver_id: otherId,
+      content: text,
+      read: false,
+      created_at: new Date().toISOString(),
+      sender: profile,
+    };
+    setMessages(prev => [...prev, optimistic]);
     setInput('');
-    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+    try {
+      const sent = await SocialService.sendMessage(profile.id, otherId, text);
+      if (sent) {
+        setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...sent, sender: profile } : m));
+      }
+    } catch (e) {
+      console.error('[Chat] send error:', e);
+      setMessages(prev => prev.filter(m => m.id !== optimistic.id));
+    } finally {
+      setSending(false);
+    }
   };
 
-  const renderDateSeparator = () => (
-    <View style={styles.dateSep}>
-      <Text style={styles.dateSepText}>May 20, 2024</Text>
-    </View>
-  );
+  const formatTime = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  };
 
   const renderMessage = ({ item, index }: { item: Message; index: number }) => {
-    const showDate = index === 0;
-    const prevMsg = index > 0 ? messages[index - 1] : null;
-    const showAvatar = !item.mine && (!prevMsg || prevMsg.mine);
+    const mine = item.sender_id === profile?.id;
+    const prevItem = index > 0 ? messages[index - 1] : null;
+    const showAvatar = !mine && (!prevItem || prevItem.sender_id !== item.sender_id);
 
     return (
-      <>
-        {showDate && renderDateSeparator()}
-        <View style={[styles.msgRow, item.mine ? styles.msgRowRight : styles.msgRowLeft]}>
-          {!item.mine && (
-            <View style={styles.avatarCol}>
-              {showAvatar ? (
-                <Image source={{ uri: AVATAR }} style={styles.msgAvatar} />
-              ) : (
-                <View style={styles.avatarPlaceholder} />
-              )}
-            </View>
-          )}
-          <View style={[styles.bubbleWrap, item.mine ? styles.bubbleWrapRight : styles.bubbleWrapLeft]}>
-            {item.mine ? (
-              <LinearGradient
-                colors={['#8B5CF6', '#6D28D9']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[styles.bubble, styles.bubbleMine]}
-              >
-                <Text style={styles.bubbleTextMine}>{item.text}</Text>
-                <View style={styles.bubbleMeta}>
-                  <Text style={styles.bubbleTimeMine}>{item.time}</Text>
-                  {item.read !== undefined && (
-                    <View style={styles.readRow}>
-                      <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />
-                      <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} style={{ marginLeft: -5 }} />
-                    </View>
-                  )}
-                </View>
-              </LinearGradient>
-            ) : (
-              <View style={[styles.bubble, styles.bubbleOther]}>
-                <Text style={styles.bubbleTextOther}>{item.text}</Text>
-                <Text style={styles.bubbleTimeOther}>{item.time}</Text>
+      <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft]}>
+        {!mine && (
+          <View style={styles.avatarCol}>
+            {showAvatar ? (
+              <View style={styles.msgAvatar}>
+                {otherUser?.avatar_url ? (
+                  <Image source={{ uri: otherUser.avatar_url }} style={styles.msgAvatarImg} />
+                ) : (
+                  <User size={16} color={colors.textMuted} />
+                )}
               </View>
+            ) : (
+              <View style={styles.avatarPlaceholder} />
             )}
           </View>
+        )}
+        <View style={[styles.bubbleWrap, mine ? styles.bubbleWrapRight : styles.bubbleWrapLeft]}>
+          {mine ? (
+            <LinearGradient
+              colors={['#8B5CF6', '#6D28D9']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.bubble, styles.bubbleMine]}
+            >
+              <Text style={styles.bubbleTextMine}>{item.content}</Text>
+              <View style={styles.bubbleMeta}>
+                <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
+                <View style={styles.readRow}>
+                  <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />
+                  <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} style={{ marginLeft: -5 }} />
+                </View>
+              </View>
+            </LinearGradient>
+          ) : (
+            <View style={[styles.bubble, styles.bubbleOther]}>
+              <Text style={styles.bubbleTextOther}>{item.content}</Text>
+              <Text style={styles.bubbleTimeOther}>{formatTime(item.created_at)}</Text>
+            </View>
+          )}
         </View>
-      </>
+      </View>
     );
   };
+
+  const otherName = otherUser?.username
+    || (otherUser?.wallet_address ? `${otherUser.wallet_address.slice(0, 6)}...` : 'User');
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -119,18 +149,16 @@ export default function ChatScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.topBarUser} activeOpacity={0.8}>
-            <Image source={{ uri: AVATAR }} style={styles.topAvatar} />
+            <View style={styles.topAvatar}>
+              {otherUser?.avatar_url ? (
+                <Image source={{ uri: otherUser.avatar_url }} style={styles.topAvatarImg} />
+              ) : (
+                <User size={20} color={colors.textMuted} />
+              )}
+            </View>
             <View style={styles.topUserInfo}>
-              <View style={styles.topNameRow}>
-                <Text style={styles.topUsername}>CryptoKing</Text>
-                <View style={styles.verifiedBadge}>
-                  <Check size={9} color={colors.white} strokeWidth={3} />
-                </View>
-              </View>
-              <View style={styles.onlineRow}>
-                <View style={styles.onlineDot} />
-                <Text style={styles.onlineText}>Online</Text>
-              </View>
+              <Text style={styles.topUsername}>{otherName}</Text>
+              <Text style={styles.onlineText}>View profile</Text>
             </View>
           </TouchableOpacity>
 
@@ -147,24 +175,33 @@ export default function ChatScreen() {
           </View>
         </View>
 
-        {/* Divider */}
         <View style={styles.divider} />
 
-        {/* Messages */}
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={0}
         >
-          <FlatList
-            ref={listRef}
-            data={messages}
-            keyExtractor={item => item.id}
-            renderItem={renderMessage}
-            contentContainerStyle={styles.msgList}
-            showsVerticalScrollIndicator={false}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-          />
+          {loading ? (
+            <View style={styles.loadingCenter}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : messages.length === 0 ? (
+            <View style={styles.emptyCenter}>
+              <Text style={styles.emptyText}>No messages yet.</Text>
+              <Text style={styles.emptySubText}>Send the first message!</Text>
+            </View>
+          ) : (
+            <FlatList
+              ref={listRef}
+              data={messages}
+              keyExtractor={item => item.id}
+              renderItem={renderMessage}
+              contentContainerStyle={styles.msgList}
+              showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+            />
+          )}
 
           {/* Input bar */}
           <View style={styles.inputBar}>
@@ -192,8 +229,13 @@ export default function ChatScreen() {
               style={[styles.sendBtn, input.trim() ? styles.sendBtnActive : styles.sendBtnInactive]}
               onPress={send}
               activeOpacity={0.8}
+              disabled={sending}
             >
-              <Send size={18} color={colors.white} strokeWidth={2.5} />
+              {sending ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Send size={18} color={colors.white} strokeWidth={2.5} />
+              )}
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -213,7 +255,6 @@ const styles = StyleSheet.create({
   },
   flex: { flex: 1 },
 
-  // Top bar
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -241,43 +282,28 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 2,
     borderColor: colors.primary,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  topAvatarImg: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   topUserInfo: {
     gap: 2,
-  },
-  topNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
   },
   topUsername: {
     fontSize: 17,
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  verifiedBadge: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  onlineRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  onlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#10b981',
-  },
   onlineText: {
     fontSize: 12,
-    color: '#10b981',
-    fontWeight: '600',
+    color: colors.textMuted,
+    fontWeight: '500',
   },
   topActions: {
     flexDirection: 'row',
@@ -295,27 +321,32 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(139,92,246,0.12)',
   },
 
-  // Messages
+  loadingCenter: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyCenter: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  emptySubText: {
+    fontSize: 14,
+    color: colors.textMuted,
+  },
+
   msgList: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
     paddingBottom: spacing.lg,
     gap: 6,
-  },
-  dateSep: {
-    alignItems: 'center',
-    marginBottom: spacing.lg,
-    marginTop: spacing.sm,
-  },
-  dateSepText: {
-    fontSize: 12,
-    color: colors.textMuted,
-    fontWeight: '600',
-    backgroundColor: '#1A1A28',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 5,
-    borderRadius: borderRadius.full,
-    overflow: 'hidden',
   },
   msgRow: {
     flexDirection: 'row',
@@ -335,6 +366,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   msgAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  msgAvatarImg: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -392,7 +432,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  // Input
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',

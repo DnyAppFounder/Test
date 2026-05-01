@@ -14,7 +14,6 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
   Send,
   X,
@@ -25,7 +24,6 @@ import {
   CircleAlert,
   Wallet,
   Bell,
-  Mail,
   Clock,
   Plus,
   Search,
@@ -35,12 +33,12 @@ import {
   AtSign,
   Repeat2,
   SlidersHorizontal,
-  BadgeCheck,
+  Trash2,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
-import { useLanguage } from '@/contexts/LanguageContext';
-import { SocialService, Post, PostComment, PROMOTE_TIERS, UserProfile } from '@/services/socialService';
+import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation } from '@/services/socialService';
+import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
 
@@ -50,10 +48,9 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress } = useWallet();
-  const { t } = useLanguage();
+  const { profile, refreshProfile } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -73,40 +70,59 @@ export default function CommunityScreen() {
   const [newCommentContent, setNewCommentContent] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
 
+  // Messages state
   const [msgSearch, setMsgSearch] = useState('');
-  const [notifFilter, setNotifFilter] = useState<'all' | 'likes' | 'replies' | 'mentions' | 'follows'>('all');
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [convsLoading, setConvsLoading] = useState(false);
 
-  const walletAddress = activeAddress || 'anonymous';
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    const [feedData, profileData] = await Promise.all([
-      SocialService.getFeed(undefined),
-      SocialService.getOrCreateProfile(walletAddress),
-    ]);
-    setPosts(feedData);
-    setProfile(profileData);
-    setLoading(false);
-  }, [walletAddress]);
+  // Notifications state
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<'all' | 'like' | 'comment' | 'mention' | 'follow' | 'repost'>('all');
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
   const loadFeed = useCallback(async () => {
     const feedData = await SocialService.getFeed(profile?.id);
     setPosts(feedData);
   }, [profile?.id]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  const loadNotifications = useCallback(async () => {
+    if (!profile?.id) return;
+    setNotifLoading(true);
+    const data = await SocialService.getNotifications(profile.id);
+    setNotifications(data);
+    const unread = data.filter(n => !n.read).length;
+    setUnreadNotifCount(unread);
+    setNotifLoading(false);
+  }, [profile?.id]);
+
+  const loadConversations = useCallback(async () => {
+    if (!profile?.id) return;
+    setConvsLoading(true);
+    const data = await SocialService.getConversations(profile.id);
+    setConversations(data);
+    setConvsLoading(false);
+  }, [profile?.id]);
+
+  const loadInitialFeed = useCallback(async () => {
+    setLoading(true);
+    const feedData = await SocialService.getFeed(profile?.id);
+    setPosts(feedData);
+    setLoading(false);
+  }, [profile?.id]);
+
+  useEffect(() => { loadInitialFeed(); }, [loadInitialFeed]);
 
   useEffect(() => {
-    if (profile?.id) SocialService.getFeed(profile.id).then(setPosts);
-  }, [profile?.id]);
+    if (activeTab === 'notifications') loadNotifications();
+    if (activeTab === 'messages') loadConversations();
+  }, [activeTab, loadNotifications, loadConversations]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    if (profile?.id) {
-      setPosts(await SocialService.getFeed(profile.id));
-    } else {
-      await loadData();
-    }
+    await loadFeed();
+    if (activeTab === 'notifications') await loadNotifications();
+    if (activeTab === 'messages') await loadConversations();
     setRefreshing(false);
   };
 
@@ -144,6 +160,12 @@ export default function CommunityScreen() {
       } : p
     ));
     await SocialService.toggleRepost(postId, profile.id);
+  };
+
+  const handleDeletePost = async (postId: string) => {
+    if (!profile) return;
+    await SocialService.deletePost(postId, profile.id);
+    setPosts(prev => prev.filter(p => p.id !== postId));
   };
 
   const openPromoteModal = (postId: string) => {
@@ -199,6 +221,13 @@ export default function CommunityScreen() {
     setNewCommentContent('');
   };
 
+  const handleMarkNotifsRead = async () => {
+    if (!profile?.id) return;
+    await SocialService.markNotificationsRead(profile.id);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    setUnreadNotifCount(0);
+  };
+
   const selectedPost = posts.find(p => p.id === selectedPostId);
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
@@ -207,7 +236,7 @@ export default function CommunityScreen() {
     { key: 'feed', label: 'Feed' },
     { key: 'profile', label: 'Profile' },
     { key: 'messages', label: 'Messages' },
-    { key: 'notifications', label: 'Notifications' },
+    { key: 'notifications', label: 'Alerts' },
   ];
 
   const renderFeedTab = () => {
@@ -231,6 +260,7 @@ export default function CommunityScreen() {
             onComment={openCommentsModal}
             onRepost={handleRepost}
             onPromote={openPromoteModal}
+            onDelete={item.author_id === profile?.id ? handleDeletePost : undefined}
           />
         )}
         ListEmptyComponent={
@@ -240,7 +270,7 @@ export default function CommunityScreen() {
             </View>
             <Text style={styles.emptyTitle}>No posts yet</Text>
             <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
-            <TouchableOpacity style={styles.emptyBtn} onPress={() => setShowCreateModal(true)}>
+            <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/create-post')}>
               <Text style={styles.emptyBtnText}>Create First Post</Text>
             </TouchableOpacity>
           </View>
@@ -264,28 +294,21 @@ export default function CommunityScreen() {
         </View>
       );
     }
-    // Navigate to the profile page
     router.push(`/profile/${profile.id}`);
     return null;
   };
 
-  const CONVERSATIONS = [
-    { id: '1', username: 'CryptoKing', verified: true, lastMsg: "Let's catch the next pump 🔥", time: '2m', unread: true, avatar: 'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?w=100' },
-    { id: '2', username: 'MoonWalker', verified: false, lastMsg: 'We are early, so early...', time: '15m', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
-    { id: '3', username: 'DawenArmy', verified: false, lastMsg: 'gm DAWEN family 💜', time: '1h', unread: true, avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?w=100' },
-    { id: '4', username: 'LadyTrader', verified: false, lastMsg: 'Nice call on $DAWEN', time: '2h', unread: true, avatar: 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?w=100' },
-    { id: '5', username: 'DeFiXplorer', verified: false, lastMsg: 'Alpha looks strong', time: '3h', unread: true, avatar: 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?w=100' },
-    { id: '6', username: 'BullishBro', verified: false, lastMsg: "Let's go! Phase 4 soon 🚀", time: '4h', unread: true, avatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?w=100' },
-    { id: '7', username: 'TraderJoe', verified: false, lastMsg: 'Send you a chart', time: '6h', unread: true, avatar: 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg?w=100' },
-  ];
-
-  const filteredConvos = CONVERSATIONS.filter(c =>
-    c.username.toLowerCase().includes(msgSearch.toLowerCase()) ||
-    c.lastMsg.toLowerCase().includes(msgSearch.toLowerCase())
-  );
+  const filteredConvos = conversations.filter(c => {
+    const name = c.otherUser.username || c.otherUser.wallet_address || '';
+    const msg = c.lastMessage.content || '';
+    const q = msgSearch.toLowerCase();
+    return name.toLowerCase().includes(q) || msg.toLowerCase().includes(q);
+  });
 
   const renderMessagesTab = () => (
-    <ScrollView style={styles.msgContainer} contentContainerStyle={styles.msgContent} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.msgContainer} contentContainerStyle={styles.msgContent} showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+    >
       {/* Search */}
       <View style={styles.msgSearchWrap}>
         <Search size={17} color={colors.textMuted} strokeWidth={2} />
@@ -298,109 +321,148 @@ export default function CommunityScreen() {
         />
       </View>
 
-      {/* Conversation list */}
-      <View style={styles.msgList}>
-        {filteredConvos.map((conv, idx) => (
-          <TouchableOpacity key={conv.id} style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]} activeOpacity={0.75} onPress={() => router.push(`/chat/${conv.id}`)}>
-            <View style={styles.convAvatarWrap}>
-              <Image source={{ uri: conv.avatar }} style={styles.convAvatar} />
-            </View>
-            <View style={styles.convBody}>
-              <View style={styles.convNameRow}>
-                <Text style={styles.convUsername}>{conv.username}</Text>
-                {conv.verified && (
-                  <View style={styles.verifiedBadge}>
-                    <Check size={9} color={colors.white} strokeWidth={3} />
+      {convsLoading ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
+      ) : filteredConvos.length === 0 ? (
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrap}>
+            <MessageSquare size={44} color={colors.primary} strokeWidth={1.5} />
+          </View>
+          <Text style={styles.emptyTitle}>No messages yet</Text>
+          <Text style={styles.emptySubtitle}>Start a conversation by visiting someone's profile</Text>
+        </View>
+      ) : (
+        /* Conversation list */
+        <View style={styles.msgList}>
+          {filteredConvos.map((conv, idx) => {
+            const otherUser = conv.otherUser;
+            const displayName = otherUser.username || `${otherUser.wallet_address?.slice(0, 6)}...`;
+            const msgTime = timeAgo(conv.lastMessage.created_at);
+            return (
+              <TouchableOpacity
+                key={otherUser.id}
+                style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]}
+                activeOpacity={0.75}
+                onPress={() => router.push(`/chat/${otherUser.id}` as any)}
+              >
+                <View style={styles.convAvatarWrap}>
+                  {otherUser.avatar_url
+                    ? <Image source={{ uri: otherUser.avatar_url }} style={styles.convAvatar} />
+                    : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>
+                  }
+                </View>
+                <View style={styles.convBody}>
+                  <View style={styles.convNameRow}>
+                    <Text style={styles.convUsername}>{displayName}</Text>
+                    {otherUser.is_verified && (
+                      <View style={styles.verifiedBadge}>
+                        <Check size={9} color={colors.white} strokeWidth={3} />
+                      </View>
+                    )}
                   </View>
-                )}
-              </View>
-              <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMsg}</Text>
-            </View>
-            <View style={styles.convMeta}>
-              <Text style={styles.convTime}>{conv.time}</Text>
-              {conv.unread && <View style={styles.unreadDot} />}
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
+                  <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMessage.content}</Text>
+                </View>
+                <View style={styles.convMeta}>
+                  <Text style={styles.convTime}>{msgTime}</Text>
+                  {conv.unreadCount > 0 && <View style={styles.unreadDot} />}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
     </ScrollView>
   );
 
   const NOTIF_TABS = [
     { key: 'all', label: 'All' },
-    { key: 'likes', label: 'Likes' },
-    { key: 'replies', label: 'Replies' },
-    { key: 'mentions', label: 'Mentions' },
-    { key: 'follows', label: 'Follows' },
+    { key: 'like', label: 'Likes' },
+    { key: 'comment', label: 'Comments' },
+    { key: 'follow', label: 'Follows' },
+    { key: 'repost', label: 'Reposts' },
   ] as const;
 
-  const NOTIFICATIONS = [
-    { id: '1', type: 'like', username: 'CryptoKing', action: 'liked your post', time: '2m', preview: 'Just aped into $DAWEN 🔥 The chart looks insane.', unread: true, avatar: 'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?w=100' },
-    { id: '2', type: 'reply', username: 'MoonWalker', action: 'replied to your post', time: '15m', preview: 'We are early, so early...', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
-    { id: '3', type: 'follow', username: 'LadyTrader', action: 'followed you', time: '1h', preview: null, unread: true, avatar: 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?w=100' },
-    { id: '4', type: 'mention', username: 'DeFiXplorer', action: 'mentioned you in a post', time: '2h', preview: 'Check this out @dawenmaster 🚀', unread: true, avatar: 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?w=100' },
-    { id: '5', type: 'repost', username: 'BullishBro', action: 'reposted your post', time: '3h', preview: 'New partnerships incoming. Big things ahead...', unread: true, avatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?w=100' },
-    { id: '6', type: 'like', username: 'DawenArmy', action: 'liked your post', time: '4h', preview: 'gm DAWEN family 💜', unread: true, avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?w=100' },
-    { id: '7', type: 'follow', username: 'TraderJoe', action: 'followed you', time: '6h', preview: null, unread: true, avatar: 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg?w=100' },
-    { id: '8', type: 'reply', username: 'MoonWalker', action: 'replied to your comment', time: '8h', preview: 'Absolutely! The future is bright ✨', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
-  ];
-
-  const filteredNotifs = NOTIFICATIONS.filter(n => {
+  const filteredNotifs = notifications.filter(n => {
     if (notifFilter === 'all') return true;
-    if (notifFilter === 'likes') return n.type === 'like';
-    if (notifFilter === 'replies') return n.type === 'reply';
-    if (notifFilter === 'mentions') return n.type === 'mention';
-    if (notifFilter === 'follows') return n.type === 'follow';
-    return true;
+    return n.type === notifFilter;
   });
 
   const NotifIcon = ({ type }: { type: string }) => {
     if (type === 'like') return <Heart size={18} color="#ef4444" fill="#ef4444" />;
-    if (type === 'reply') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'comment') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'follow') return <UserPlus size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'mention') return <AtSign size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'repost') return <Repeat2 size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'message') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
     return <Bell size={18} color={colors.primary} />;
   };
 
   const renderNotificationsTab = () => (
-    <ScrollView style={styles.notifContainer} contentContainerStyle={styles.notifContent} showsVerticalScrollIndicator={false}>
-      {/* Filter tabs */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.notifFilterScroll} contentContainerStyle={styles.notifFilterRow}>
-        {NOTIF_TABS.map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.notifFilterTab, notifFilter === tab.key && styles.notifFilterTabActive]}
-            onPress={() => setNotifFilter(tab.key)}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.notifFilterText, notifFilter === tab.key && styles.notifFilterTextActive]}>
-              {tab.label}
-            </Text>
+    <ScrollView style={styles.notifContainer} contentContainerStyle={styles.notifContent} showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+    >
+      {/* Filter tabs + mark all read */}
+      <View style={styles.notifHeader}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.notifFilterScroll} contentContainerStyle={styles.notifFilterRow}>
+          {NOTIF_TABS.map(tab => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.notifFilterTab, notifFilter === tab.key && styles.notifFilterTabActive]}
+              onPress={() => setNotifFilter(tab.key)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.notifFilterText, notifFilter === tab.key && styles.notifFilterTextActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {unreadNotifCount > 0 && (
+          <TouchableOpacity onPress={handleMarkNotifsRead} style={styles.markReadBtn}>
+            <Text style={styles.markReadText}>Mark all read</Text>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        )}
+      </View>
 
-      {/* Notification items */}
-      <View style={styles.notifList}>
-        {filteredNotifs.map((notif, idx) => (
-          <TouchableOpacity key={notif.id} style={[styles.notifRow, idx < filteredNotifs.length - 1 && styles.notifRowBorder]} activeOpacity={0.75}>
+      {notifLoading ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
+      ) : filteredNotifs.length === 0 ? (
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrap}>
+            <Bell size={44} color={colors.primary} strokeWidth={1.5} />
+          </View>
+          <Text style={styles.emptyTitle}>No notifications yet</Text>
+          <Text style={styles.emptySubtitle}>Activity from others will appear here</Text>
+        </View>
+      ) : (
+        /* Notification items */
+        <View style={styles.notifList}>
+          {filteredNotifs.map((notif, idx) => {
+            const actorName = notif.actor?.username
+              || (notif.actor?.wallet_address ? `${notif.actor.wallet_address.slice(0, 6)}...` : 'Someone');
+            return (
+          <TouchableOpacity key={notif.id} style={[styles.notifRow, idx < filteredNotifs.length - 1 && styles.notifRowBorder,
+            !notif.read && styles.notifRowUnread]} activeOpacity={0.75}>
             <View style={styles.notifIconWrap}>
               <NotifIcon type={notif.type} />
             </View>
-            <Image source={{ uri: notif.avatar }} style={styles.notifAvatar} />
+            {notif.actor?.avatar_url
+              ? <Image source={{ uri: notif.actor.avatar_url }} style={styles.notifAvatar} />
+              : <View style={[styles.notifAvatar, styles.notifAvatarFallback]}><User size={18} color={colors.textMuted} /></View>
+            }
             <View style={styles.notifBody}>
               <Text style={styles.notifText} numberOfLines={2}>
-                <Text style={styles.notifUsername}>{notif.username} </Text>
-                <Text style={styles.notifAction}>{notif.action}</Text>
+                <Text style={styles.notifUsername}>{actorName} </Text>
+                <Text style={styles.notifAction}>{notif.message}</Text>
               </Text>
-              <Text style={styles.notifTime}>{notif.time}</Text>
-              {notif.preview && <Text style={styles.notifPreview} numberOfLines={1}>{notif.preview}</Text>}
+              <Text style={styles.notifTime}>{timeAgo(notif.created_at)}</Text>
             </View>
-            {notif.unread && <View style={styles.unreadDot} />}
+            {!notif.read && <View style={styles.unreadDot} />}
           </TouchableOpacity>
-        ))}
-      </View>
+            );
+          })}
+        </View>
+      )}
     </ScrollView>
   );
 
@@ -425,10 +487,14 @@ export default function CommunityScreen() {
         </View>
       ) : activeTab === 'notifications' ? (
         <View style={styles.msgHeader}>
-          <Text style={styles.msgHeaderTitle}>Notifications</Text>
-          <TouchableOpacity style={styles.notifFilterBtn} activeOpacity={0.85}>
-            <SlidersHorizontal size={18} color={colors.primary} strokeWidth={2} />
-          </TouchableOpacity>
+          <View style={styles.msgHeaderRow}>
+            <Text style={styles.msgHeaderTitle}>Notifications</Text>
+            {unreadNotifCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>{unreadNotifCount}</Text>
+              </View>
+            )}
+          </View>
         </View>
       ) : (
         <View style={styles.header}>
@@ -1461,5 +1527,52 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
     marginTop: 3,
+  },
+  notifRowUnread: {
+    backgroundColor: 'rgba(139,92,246,0.05)',
+  },
+  notifAvatarFallback: {
+    backgroundColor: colors.surfaceElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  notifHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  markReadBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  markReadText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  msgHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  unreadBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.full,
+    minWidth: 22,
+    height: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.white,
+  },
+  convAvatarFallback: {
+    backgroundColor: colors.surfaceElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
