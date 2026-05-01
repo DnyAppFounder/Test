@@ -1,0 +1,73 @@
+DAWEN = Solana Web3 ecosystem
+
+Core:
+- Trading (real data only)
+- Social (DAWEN Pulse)
+- Gaming (skill-based, on-chain)
+- Dawen City (Habbo-style inside Gaming)
+
+RULES
+
+Blockchain:
+- Solana only
+- Non-custodial
+- Wallet = user identity
+- activeWallet = single source
+
+RPC:
+- use process.env.SOLANA_RPC_URL
+- never default Solana RPC
+- no hardcoded keys
+
+Trading:
+- real price, mcap, liquidity, volume
+- no fake data
+
+Chart:
+- one chart only
+- no refresh / no flashing
+- update last point only
+- default = MCAP
+
+Data:
+- selectedToken.mint = source
+- chart = price = mcap = holders
+
+Social:
+- posts, likes, comments, replies, reposts
+- follow + messages
+- profile (username, avatar, bio)
+- data updates everywhere
+
+Gaming:
+- skill-based only (no gambling)
+- real crypto rewards (Solana)
+
+Dawen City:
+- inside Gaming
+- avatars, rooms, real-time interaction
+- NFT items possible
+
+Token:
+- assets = activeWallet.publicKey
+- holders = selectedToken.mint
+
+Data rules:
+- no duplicates
+- no mixed sources
+- always synced
+
+Storage:
+- Supabase storage
+- public URLs only
+- no blob
+
+Security:
+- public read
+- write = owner only
+- do not break features
+
+Important:
+- do not break working features
+- no fake data
+- behave like real trading app
