@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Alert } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck, Trash2 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
@@ -30,6 +31,8 @@ export function timeAgo(date: string) {
 export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote = undefined, onDelete }: PostCardProps) {
   const isOwnPost = currentProfile != null && post.author_id === currentProfile.id;
   const router = useRouter();
+  const [avatarError, setAvatarError] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   const handleProfilePress = () => {
     if (post.author?.id) router.push(`/profile/${post.author.id}`);
@@ -60,8 +63,12 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       <View style={styles.header}>
         <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.8}>
           <View style={styles.avatar}>
-            {post.author?.avatar_url ? (
-              <Image source={{ uri: post.author.avatar_url }} style={styles.avatarImg} />
+            {post.author?.avatar_url && !avatarError ? (
+              <Image
+                source={{ uri: post.author.avatar_url }}
+                style={styles.avatarImg}
+                onError={() => setAvatarError(true)}
+              />
             ) : (
               <User size={20} color={colors.textMuted} />
             )}
@@ -92,9 +99,37 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       {/* Content */}
       <Text style={styles.content}>{post.content}</Text>
 
-      {/* Image */}
-      {post.image_url && (
-        <Image source={{ uri: post.image_url }} style={styles.image} resizeMode="cover" />
+      {/* Image — prefer media_url, fallback to image_url */}
+      {(post.media_url || post.image_url) && !imageError && (
+        <Image
+          source={{ uri: (post.media_url || post.image_url)! }}
+          style={styles.image}
+          resizeMode="cover"
+          onError={() => setImageError(true)}
+        />
+      )}
+
+      {/* Token card */}
+      {post.token_symbol && (
+        <View style={styles.tokenCard}>
+          <View style={styles.tokenCardRow}>
+            <Text style={styles.tokenCardSymbol}>${post.token_symbol}</Text>
+            {post.token_price != null && (
+              <Text style={styles.tokenCardPrice}>
+                {post.token_price < 0.01
+                  ? `$${post.token_price.toFixed(6)}`
+                  : post.token_price < 1
+                  ? `$${post.token_price.toFixed(4)}`
+                  : `$${post.token_price.toFixed(2)}`}
+              </Text>
+            )}
+            {post.token_change_24h != null && (
+              <Text style={[styles.tokenCardChange, { color: post.token_change_24h >= 0 ? '#10b981' : '#ef4444' }]}>
+                {post.token_change_24h >= 0 ? '+' : ''}{post.token_change_24h.toFixed(2)}%
+              </Text>
+            )}
+          </View>
+        </View>
       )}
 
       {/* Actions */}
@@ -207,6 +242,35 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     marginBottom: spacing.md,
     backgroundColor: '#1A1A28',
+  },
+  tokenCard: {
+    backgroundColor: '#0E0E1A',
+    borderRadius: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+  },
+  tokenCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  tokenCardSymbol: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.primary,
+    flex: 1,
+  },
+  tokenCardPrice: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  tokenCardChange: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   actions: {
     flexDirection: 'row',

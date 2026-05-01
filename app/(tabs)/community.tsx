@@ -70,6 +70,7 @@ export default function CommunityScreen() {
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [newCommentContent, setNewCommentContent] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [replyingToComment, setReplyingToComment] = useState<PostComment | null>(null);
 
   // Messages state
   const [msgSearch, setMsgSearch] = useState('');
@@ -150,7 +151,9 @@ export default function CommunityScreen() {
     setPosting(true);
     try {
       const imageUrl = newPostImageUrl.trim() || undefined;
-      await SocialService.createPost(profile.id, newPostContent.trim(), imageUrl);
+      await SocialService.createPost(profile.id, newPostContent.trim(), {
+        mediaUrl: imageUrl,
+      });
       setNewPostContent('');
       setNewPostImageUrl('');
       setShowCreateModal(false);
@@ -225,7 +228,7 @@ export default function CommunityScreen() {
     setShowCommentsModal(true);
     setCommentsLoading(true);
     try {
-      setComments(await SocialService.getComments(postId));
+      setComments(await SocialService.getComments(postId, profile?.id));
     } catch (e) {
       console.warn('[Community] getComments error:', e);
       setComments([]);
@@ -238,9 +241,15 @@ export default function CommunityScreen() {
     if (!newCommentContent.trim() || !profile || !selectedPostId) return;
     setSubmittingComment(true);
     try {
-      await SocialService.addComment(selectedPostId, profile.id, newCommentContent.trim());
+      await SocialService.addComment(
+        selectedPostId,
+        profile.id,
+        newCommentContent.trim(),
+        replyingToComment?.id
+      );
       setNewCommentContent('');
-      const updated = await SocialService.getComments(selectedPostId);
+      setReplyingToComment(null);
+      const updated = await SocialService.getComments(selectedPostId, profile.id);
       setComments(updated);
       await loadFeed();
     } catch (e) {
@@ -250,11 +259,34 @@ export default function CommunityScreen() {
     }
   };
 
+  const handleCommentLike = async (commentId: string) => {
+    if (!profile) return;
+    setComments(prev => prev.map(c => {
+      if (c.id === commentId) {
+        return {
+          ...c,
+          liked_by_user: !c.liked_by_user,
+          likes_count: c.liked_by_user ? Math.max(0, (c.likes_count || 0) - 1) : (c.likes_count || 0) + 1,
+        };
+      }
+      return {
+        ...c,
+        replies: (c.replies || []).map(r =>
+          r.id === commentId
+            ? { ...r, liked_by_user: !r.liked_by_user, likes_count: r.liked_by_user ? Math.max(0, (r.likes_count || 0) - 1) : (r.likes_count || 0) + 1 }
+            : r
+        ),
+      };
+    }));
+    await SocialService.toggleCommentLike(commentId, profile.id);
+  };
+
   const closeCommentsModal = () => {
     setShowCommentsModal(false);
     setSelectedPostId(null);
     setComments([]);
     setNewCommentContent('');
+    setReplyingToComment(null);
   };
 
   const handleMarkNotifsRead = async () => {
@@ -695,37 +727,93 @@ export default function CommunityScreen() {
                 <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
               ) : comments.length === 0 ? (
                 <View style={styles.noComments}>
-                  <Text style={styles.noCommentsText}>No comments yet</Text>
+                  <Text style={styles.noCommentsText}>No comments yet. Be the first!</Text>
                 </View>
               ) : (
                 <View style={{ paddingBottom: spacing.lg }}>
                   {comments.map(item => (
-                    <View key={item.id} style={styles.commentItem}>
-                      <View style={styles.avatarXS}>
-                        {item.author?.avatar_url
-                          ? <Image source={{ uri: item.author.avatar_url }} style={styles.avatarXSImg} />
-                          : <User size={12} color={colors.textMuted} />
-                        }
-                      </View>
-                      <View style={styles.commentBody}>
-                        <View style={styles.commentMeta}>
-                          <Text style={styles.commentAuthor}>
-                            {item.author?.username || `${item.author?.wallet_address?.slice(0, 6)}...`}
-                          </Text>
-                          <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
+                    <View key={item.id}>
+                      {/* Top-level comment */}
+                      <View style={styles.commentItem}>
+                        <TouchableOpacity onPress={() => item.author?.id && router.push(`/profile/${item.author.id}` as any)} activeOpacity={0.8}>
+                          <View style={styles.avatarXS}>
+                            {item.author?.avatar_url
+                              ? <Image source={{ uri: item.author.avatar_url }} style={styles.avatarXSImg} />
+                              : <User size={12} color={colors.textMuted} />
+                            }
+                          </View>
+                        </TouchableOpacity>
+                        <View style={styles.commentBody}>
+                          <View style={styles.commentMeta}>
+                            <Text style={styles.commentAuthor}>
+                              {item.author?.username || `${item.author?.wallet_address?.slice(0, 6)}...`}
+                            </Text>
+                            <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
+                          </View>
+                          <Text style={styles.commentText}>{item.content}</Text>
+                          <View style={styles.commentActions}>
+                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => handleCommentLike(item.id)} activeOpacity={0.7}>
+                              <Heart size={13} color={item.liked_by_user ? '#ef4444' : colors.textMuted} fill={item.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                              {(item.likes_count || 0) > 0 && <Text style={[styles.commentActionText, item.liked_by_user && { color: '#ef4444' }]}>{item.likes_count}</Text>}
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => setReplyingToComment(item)} activeOpacity={0.7}>
+                              <MessageCircle size={13} color={colors.textMuted} strokeWidth={2} />
+                              <Text style={styles.commentActionText}>Reply</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
-                        <Text style={styles.commentText}>{item.content}</Text>
                       </View>
+                      {/* Replies */}
+                      {(item.replies || []).map(reply => (
+                        <View key={reply.id} style={styles.replyItem}>
+                          <TouchableOpacity onPress={() => reply.author?.id && router.push(`/profile/${reply.author.id}` as any)} activeOpacity={0.8}>
+                            <View style={styles.avatarXXS}>
+                              {reply.author?.avatar_url
+                                ? <Image source={{ uri: reply.author.avatar_url }} style={styles.avatarXXSImg} />
+                                : <User size={10} color={colors.textMuted} />
+                              }
+                            </View>
+                          </TouchableOpacity>
+                          <View style={styles.commentBody}>
+                            <View style={styles.commentMeta}>
+                              <Text style={styles.commentAuthor}>
+                                {reply.author?.username || `${reply.author?.wallet_address?.slice(0, 6)}...`}
+                              </Text>
+                              <Text style={styles.commentTime}>{timeAgo(reply.created_at)}</Text>
+                            </View>
+                            <Text style={styles.commentText}>{reply.content}</Text>
+                            <View style={styles.commentActions}>
+                              <TouchableOpacity style={styles.commentActionBtn} onPress={() => handleCommentLike(reply.id)} activeOpacity={0.7}>
+                                <Heart size={13} color={reply.liked_by_user ? '#ef4444' : colors.textMuted} fill={reply.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                                {(reply.likes_count || 0) > 0 && <Text style={[styles.commentActionText, reply.liked_by_user && { color: '#ef4444' }]}>{reply.likes_count}</Text>}
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        </View>
+                      ))}
                     </View>
                   ))}
                 </View>
               )}
             </ScrollView>
 
+            {replyingToComment && (
+              <View style={styles.replyBanner}>
+                <Text style={styles.replyBannerText}>
+                  Replying to{' '}
+                  <Text style={styles.replyBannerName}>
+                    {replyingToComment.author?.username || 'user'}
+                  </Text>
+                </Text>
+                <TouchableOpacity onPress={() => setReplyingToComment(null)}>
+                  <X size={14} color={colors.textMuted} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
+            )}
             <View style={styles.commentInputRow}>
               <TextInput
                 style={styles.commentInput}
-                placeholder="Add a comment..."
+                placeholder={replyingToComment ? `Reply to ${replyingToComment.author?.username || 'user'}...` : 'Add a comment...'}
                 placeholderTextColor={colors.textMuted}
                 value={newCommentContent}
                 onChangeText={setNewCommentContent}
@@ -1166,6 +1254,60 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     lineHeight: 20,
+  },
+  replyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(139,92,246,0.15)',
+  },
+  replyBannerText: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  replyBannerName: {
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  commentActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    marginTop: 6,
+  },
+  commentActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  commentActionText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  replyItem: {
+    flexDirection: 'row',
+    marginBottom: spacing.md,
+    gap: spacing.md,
+    paddingLeft: 36,
+  },
+  avatarXXS: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarXXSImg: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
   },
   commentInputRow: {
     flexDirection: 'row',

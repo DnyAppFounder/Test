@@ -119,12 +119,12 @@ export default function SettingsScreen() {
     }
     // 2. Clear extra AsyncStorage keys (belt+suspenders)
     try {
-      await AsyncStorage.multiRemove([
-        'onboarding_completed',
-        'wallet_config',
-        'secure_wallet_data',
-        'wallet_data_fallback',
-        'external_wallet_connected',
+      await Promise.all([
+        AsyncStorage.removeItem('onboarding_completed'),
+        AsyncStorage.removeItem('wallet_config'),
+        AsyncStorage.removeItem('secure_wallet_data'),
+        AsyncStorage.removeItem('wallet_data_fallback'),
+        AsyncStorage.removeItem('external_wallet_connected'),
       ]);
     } catch (e) {
       console.warn('[Logout] AsyncStorage clear error:', e);

@@ -16,6 +16,7 @@ export interface Post {
   author_id: string;
   content: string;
   image_url: string | null;
+  media_url: string | null;
   likes_count: number;
   comments_count: number;
   reposts_count: number;
@@ -23,11 +24,24 @@ export interface Post {
   promoted_until: string | null;
   promoted_tier: string | null;
   created_at: string;
+  // Token attachment
+  token_address: string | null;
+  token_symbol: string | null;
+  token_price: number | null;
+  token_change_24h: number | null;
+  // Post settings
+  visibility: 'public' | 'followers';
+  who_can_reply: 'everyone' | 'followers' | 'mentioned';
+  allow_quotes: boolean;
+  language: string;
+  quote_post_id: string | null;
+  // Computed
   author?: UserProfile;
   liked_by_user?: boolean;
   reposted_by_user?: boolean;
   reposted_by?: UserProfile;
   is_repost?: boolean;
+  quote_post?: Post | null;
 }
 
 export interface Notification {
@@ -76,7 +90,12 @@ export interface PostComment {
   author_id: string;
   content: string;
   created_at: string;
+  parent_comment_id: string | null;
+  likes_count: number;
+  replies_count: number;
   author?: UserProfile;
+  liked_by_user?: boolean;
+  replies?: PostComment[];
 }
 
 export const PROMOTE_TIERS = [
@@ -305,17 +324,69 @@ export class SocialService {
     }));
   }
 
-  static async createPost(authorId: string, content: string, imageUrl?: string): Promise<Post | null> {
+  static async createPost(
+    authorId: string,
+    content: string,
+    options?: {
+      imageUri?: string;
+      mediaUrl?: string;
+      tokenAddress?: string;
+      tokenSymbol?: string;
+      tokenPrice?: number;
+      tokenChange24h?: number;
+      visibility?: 'public' | 'followers';
+      whoCanReply?: 'everyone' | 'followers' | 'mentioned';
+      allowQuotes?: boolean;
+      language?: string;
+      quotePostId?: string;
+    }
+  ): Promise<Post | null> {
+    let mediaUrl = options?.mediaUrl || null;
+
+    // Upload image if a local URI was provided
+    if (options?.imageUri && !options.mediaUrl) {
+      const uploaded = await this.uploadPostMedia(authorId, options.imageUri);
+      if (uploaded) mediaUrl = uploaded;
+    }
+
     const { data } = await supabase
       .from('posts')
       .insert({
         author_id: authorId,
         content,
-        image_url: imageUrl || null,
+        image_url: mediaUrl,
+        media_url: mediaUrl,
+        token_address: options?.tokenAddress || null,
+        token_symbol: options?.tokenSymbol || null,
+        token_price: options?.tokenPrice ?? null,
+        token_change_24h: options?.tokenChange24h ?? null,
+        visibility: options?.visibility ?? 'public',
+        who_can_reply: options?.whoCanReply ?? 'everyone',
+        allow_quotes: options?.allowQuotes ?? true,
+        language: options?.language ?? 'en',
+        quote_post_id: options?.quotePostId ?? null,
       })
       .select()
       .maybeSingle();
     return data;
+  }
+
+  static async uploadPostMedia(userId: string, imageUri: string): Promise<string | null> {
+    try {
+      const ext = imageUri.split('.').pop()?.split('?')[0] || 'jpg';
+      const fileName = `${userId}/post_${Date.now()}.${ext}`;
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+      const { data, error } = await supabase.storage
+        .from('post-media')
+        .upload(fileName, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+      if (error) { console.error('[PostMedia] Upload error:', error); return null; }
+      const { data: urlData } = supabase.storage.from('post-media').getPublicUrl(data.path);
+      return urlData.publicUrl;
+    } catch (e) {
+      console.error('[PostMedia] Upload failed:', e);
+      return null;
+    }
   }
 
   static async toggleLike(postId: string, userId: string): Promise<boolean> {
@@ -399,16 +470,27 @@ export class SocialService {
     return true;
   }
 
-  static async getComments(postId: string): Promise<PostComment[]> {
+  static async getComments(postId: string, currentUserId?: string): Promise<PostComment[]> {
     const { data: comments } = await supabase
       .from('post_comments')
       .select('*')
       .eq('post_id', postId)
+      .is('parent_comment_id', null)
       .order('created_at', { ascending: true });
 
     if (!comments || comments.length === 0) return [];
 
-    const authorIds = [...new Set(comments.map((c: PostComment) => c.author_id))];
+    const commentIds = comments.map((c: any) => c.id);
+
+    // Load replies for all top-level comments
+    const { data: replies } = await supabase
+      .from('post_comments')
+      .select('*')
+      .in('parent_comment_id', commentIds)
+      .order('created_at', { ascending: true });
+
+    const allComments = [...comments, ...(replies || [])];
+    const authorIds = [...new Set(allComments.map((c: any) => c.author_id))];
     const { data: authors } = await supabase
       .from('user_profiles')
       .select('*')
@@ -416,35 +498,126 @@ export class SocialService {
 
     const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
 
-    return comments.map((c: PostComment) => ({
+    // Load liked comment ids for current user
+    let likedSet = new Set<string>();
+    if (currentUserId && allComments.length > 0) {
+      const allIds = allComments.map((c: any) => c.id);
+      const { data: liked } = await supabase
+        .from('comment_likes')
+        .select('comment_id')
+        .eq('user_id', currentUserId)
+        .in('comment_id', allIds);
+      likedSet = new Set((liked || []).map((l: any) => l.comment_id));
+    }
+
+    const replyMap = new Map<string, PostComment[]>();
+    for (const reply of (replies || [])) {
+      const parentId = reply.parent_comment_id;
+      if (!replyMap.has(parentId)) replyMap.set(parentId, []);
+      replyMap.get(parentId)!.push({
+        ...reply,
+        author: authorMap.get(reply.author_id),
+        liked_by_user: likedSet.has(reply.id),
+        replies: [],
+      });
+    }
+
+    return comments.map((c: any) => ({
       ...c,
       author: authorMap.get(c.author_id),
+      liked_by_user: likedSet.has(c.id),
+      replies: replyMap.get(c.id) || [],
     }));
   }
 
-  static async addComment(postId: string, authorId: string, content: string): Promise<PostComment | null> {
+  static async addComment(
+    postId: string,
+    authorId: string,
+    content: string,
+    parentCommentId?: string
+  ): Promise<PostComment | null> {
     const { data } = await supabase
       .from('post_comments')
-      .insert({ post_id: postId, author_id: authorId, content })
+      .insert({
+        post_id: postId,
+        author_id: authorId,
+        content,
+        parent_comment_id: parentCommentId || null,
+      })
       .select()
       .maybeSingle();
 
     if (data) {
-      const { data: post } = await supabase
-        .from('posts')
-        .select('comments_count, author_id')
-        .eq('id', postId)
-        .maybeSingle();
-      if (post) {
-        await supabase
+      if (parentCommentId) {
+        // Increment replies_count on parent comment
+        const { data: parent } = await supabase
+          .from('post_comments')
+          .select('replies_count, author_id')
+          .eq('id', parentCommentId)
+          .maybeSingle();
+        if (parent) {
+          await supabase
+            .from('post_comments')
+            .update({ replies_count: (parent.replies_count || 0) + 1 })
+            .eq('id', parentCommentId);
+          await this.createNotification(parent.author_id, authorId, 'comment', postId, 'replied to your comment');
+        }
+      } else {
+        const { data: post } = await supabase
           .from('posts')
-          .update({ comments_count: (post.comments_count || 0) + 1 })
-          .eq('id', postId);
-        await this.createNotification(post.author_id, authorId, 'comment', postId, 'commented on your post');
+          .select('comments_count, author_id')
+          .eq('id', postId)
+          .maybeSingle();
+        if (post) {
+          await supabase
+            .from('posts')
+            .update({ comments_count: (post.comments_count || 0) + 1 })
+            .eq('id', postId);
+          await this.createNotification(post.author_id, authorId, 'comment', postId, 'commented on your post');
+        }
       }
     }
 
     return data;
+  }
+
+  static async toggleCommentLike(commentId: string, userId: string): Promise<boolean> {
+    const { data: existing } = await supabase
+      .from('comment_likes')
+      .select('id')
+      .eq('comment_id', commentId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from('comment_likes').delete().eq('id', existing.id);
+      const { data: comment } = await supabase
+        .from('post_comments')
+        .select('likes_count')
+        .eq('id', commentId)
+        .maybeSingle();
+      if (comment) {
+        await supabase
+          .from('post_comments')
+          .update({ likes_count: Math.max(0, (comment.likes_count || 0) - 1) })
+          .eq('id', commentId);
+      }
+      return false;
+    }
+
+    await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: userId });
+    const { data: comment } = await supabase
+      .from('post_comments')
+      .select('likes_count, author_id')
+      .eq('id', commentId)
+      .maybeSingle();
+    if (comment) {
+      await supabase
+        .from('post_comments')
+        .update({ likes_count: (comment.likes_count || 0) + 1 })
+        .eq('id', commentId);
+    }
+    return true;
   }
 
   static async promotePost(postId: string, tierKey: string): Promise<boolean> {
