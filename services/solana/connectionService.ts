@@ -1,9 +1,10 @@
 import { Connection } from '@solana/web3.js';
 
 function getSupabaseRpcProxyUrl(): string {
-  const supabaseUrl = typeof process !== 'undefined'
-    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
-    : undefined;
+  // Try all possible env access patterns (Expo web vs native)
+  const supabaseUrl =
+    (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_URL) ||
+    '';
   if (supabaseUrl) {
     return `${supabaseUrl}/functions/v1/solana-rpc`;
   }

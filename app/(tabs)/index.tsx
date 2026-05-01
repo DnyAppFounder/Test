@@ -10,7 +10,9 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import {
@@ -229,26 +231,31 @@ export default function WalletHome() {
     ? searchResults
     : liveTokens;
 
+  const [copiedAddr, setCopiedAddr] = useState(false);
+
+  const handleCopyAddress = async () => {
+    if (activeWallet?.address) {
+      await Clipboard.setStringAsync(activeWallet.address);
+      setCopiedAddr(true);
+      setTimeout(() => setCopiedAddr(false), 2000);
+    }
+  };
+
   const filteredAssets = walletAssets.filter((asset) => {
-    if (asset.uiBalance <= 0) return false;
+    // Always show native SOL regardless of balance; filter others by search only
     if (!searchQuery) return true;
     return asset.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
            asset.symbol.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
-  // Static tokens shown in My Assets when wallet has no on-chain tokens
-  const STATIC_ASSETS = [
-    { symbol: 'SOL', name: 'Solana', balance: 0, balanceUsd: 0, change: 0, logoColor: '#9945FF', logoText: 'S' },
-    { symbol: 'DAWEN', name: 'Dawen', balance: 0, balanceUsd: 0, change: 0, logoColor: colors.primary, logoText: 'D' },
-    { symbol: 'USDC', name: 'USD Coin', balance: 0, balanceUsd: 0, change: 0, logoColor: '#2775CA', logoText: '$' },
-    { symbol: 'JUP', name: 'Jupiter', balance: 0, balanceUsd: 0, change: 0, logoColor: '#14F195', logoText: 'J' },
-  ];
-  const displayAssets = filteredAssets.length > 0 ? filteredAssets : null;
+  // Only show static placeholder when no wallet connected AND not loading
+  const hasWallet = !!activeAddress;
+  const showStaticFallback = !hasWallet && !assetsLoading;
 
   const shortAddr = activeWallet
     ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
     : '---';
-  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Phantom';
+  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : (activeWallet ? 'Wallet' : 'No Wallet');
 
   return (
     <ScrollView
@@ -284,8 +291,8 @@ export default function WalletHome() {
             <View style={styles.walletPillDot} />
             <Text style={styles.walletPillText}>{walletLabel}: {shortAddr}</Text>
           </View>
-          <TouchableOpacity style={styles.copyBtn}>
-            <Copy size={14} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+          <TouchableOpacity style={styles.copyBtn} onPress={handleCopyAddress} activeOpacity={0.7}>
+            <Copy size={14} color={copiedAddr ? '#10b981' : 'rgba(255,255,255,0.5)'} strokeWidth={2} />
           </TouchableOpacity>
         </View>
 
@@ -351,7 +358,11 @@ export default function WalletHome() {
             autoCorrect={false}
           />
         </View>
-        <TouchableOpacity style={styles.filterBtn}>
+        <TouchableOpacity
+          style={styles.filterBtn}
+          onPress={() => Alert.alert('Filter', 'Token filter options coming soon.')}
+          activeOpacity={0.7}
+        >
           <SlidersHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
         </TouchableOpacity>
       </View>
@@ -365,75 +376,86 @@ export default function WalletHome() {
               <View>
                 <Text style={styles.assetsSectionTitle}>My Assets</Text>
                 <Text style={styles.assetsSectionSub}>
-                  {displayAssets ? displayAssets.length : STATIC_ASSETS.length} tokens • {formatBalance(totalBalance)}
+                  {filteredAssets.length} tokens • {formatBalance(totalBalance)}
                 </Text>
               </View>
-              <TouchableOpacity style={styles.manageBtn}>
+              <TouchableOpacity
+                style={styles.manageBtn}
+                onPress={() => router.push('/nft-gallery' as any)}
+                activeOpacity={0.8}
+              >
                 <Text style={styles.manageBtnText}>Manage</Text>
               </TouchableOpacity>
             </View>
 
             {assetsLoading ? (
               <ActivityIndicator color={colors.primary} style={{ marginVertical: 24 }} />
-            ) : displayAssets ? (
-              displayAssets.map((asset, idx) => (
+            ) : assetsError && filteredAssets.length === 0 ? (
+              <View style={styles.inlineEmpty}>
+                <Text style={styles.inlineEmptyText}>Could not load assets</Text>
+                <Text style={styles.inlineEmptySub}>{assetsError}</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={loadWalletAssets} activeOpacity={0.8}>
+                  <Text style={styles.retryBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : !hasWallet ? (
+              <View style={styles.inlineEmpty}>
+                <Text style={styles.inlineEmptyText}>Connect a wallet to see your assets</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={() => router.push('/onboarding' as any)} activeOpacity={0.8}>
+                  <Text style={styles.retryBtnText}>Connect Wallet</Text>
+                </TouchableOpacity>
+              </View>
+            ) : filteredAssets.length === 0 ? (
+              <View style={styles.inlineEmpty}>
+                <Text style={styles.inlineEmptyText}>No assets found</Text>
+                <Text style={styles.inlineEmptySub}>Buy tokens to get started</Text>
+              </View>
+            ) : (
+              filteredAssets.map((asset, idx) => (
                 <TouchableOpacity
                   key={asset.address}
-                  style={[styles.assetRow, idx < displayAssets.length - 1 && styles.assetRowBorder]}
+                  style={[styles.assetRow, idx < filteredAssets.length - 1 && styles.assetRowBorder]}
                   onPress={() => router.push(`/token-detail/${asset.address}` as any)}
                   activeOpacity={0.8}
                 >
                   {asset.logoUrl ? (
-                    <Image source={{ uri: asset.logoUrl }} style={styles.assetLogo} />
+                    <Image
+                      source={{ uri: asset.logoUrl }}
+                      style={styles.assetLogo}
+                      defaultSource={require('../../assets/images/icon.png')}
+                    />
                   ) : (
                     <View style={[styles.assetLogoPlaceholder, { backgroundColor: colors.primary + '33' }]}>
-                      <Text style={styles.assetLogoText}>{(asset.symbol ?? '??').substring(0, 2)}</Text>
+                      <Text style={styles.assetLogoText}>{(asset.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
                     </View>
                   )}
                   <View style={styles.assetInfo}>
                     <Text style={styles.assetName}>{asset.name}</Text>
-                    <Text style={styles.assetSymbol}>{asset.symbol}</Text>
+                    <Text style={styles.assetSymbol}>{asset.symbol?.toUpperCase()}</Text>
                   </View>
                   <View style={styles.assetMid}>
-                    <Text style={styles.assetBalance2}>{balanceHidden ? '****' : asset.uiBalance.toFixed(asset.isNative ? 4 : 2)}</Text>
-                    <Text style={styles.assetBalanceUsd}>${asset.value.toFixed(2)}</Text>
+                    <Text style={styles.assetBalance2}>
+                      {balanceHidden ? '****' : asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: asset.isNative ? 4 : 2 })}
+                    </Text>
+                    <Text style={styles.assetBalanceUsd}>{balanceHidden ? '****' : `$${asset.value.toFixed(2)}`}</Text>
                   </View>
                   <View style={styles.assetRight}>
-                    <Text style={styles.assetValueText}>${asset.value.toFixed(2)}</Text>
-                    <Text style={styles.assetChangeText}>0.00%</Text>
-                  </View>
-                </TouchableOpacity>
-              ))
-            ) : (
-              STATIC_ASSETS.map((asset, idx) => (
-                <TouchableOpacity
-                  key={asset.symbol}
-                  style={[styles.assetRow, idx < STATIC_ASSETS.length - 1 && styles.assetRowBorder]}
-                  onPress={() => router.push('/buy' as any)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.assetLogoPlaceholder, { backgroundColor: asset.logoColor + '33' }]}>
-                    <Text style={[styles.assetLogoText, { color: asset.logoColor }]}>{asset.logoText}</Text>
-                  </View>
-                  <View style={styles.assetInfo}>
-                    <Text style={styles.assetName}>{asset.symbol}</Text>
-                    <Text style={styles.assetSymbol}>{asset.name}</Text>
-                  </View>
-                  <View style={styles.assetMid}>
-                    <Text style={styles.assetBalance2}>0</Text>
-                    <Text style={styles.assetBalanceUsd}>$0.00</Text>
-                  </View>
-                  <View style={styles.assetRight}>
-                    <Text style={styles.assetValueText}>$0.00</Text>
-                    <Text style={styles.assetChangeText}>0.00%</Text>
+                    <Text style={styles.assetValueText}>{asset.price > 0 ? `$${asset.price < 0.01 ? asset.price.toFixed(6) : asset.price.toFixed(2)}` : '—'}</Text>
+                    <Text style={[styles.assetChangeText, { color: asset.priceChange24h >= 0 ? colors.success : colors.error }]}>
+                      {asset.priceChange24h >= 0 ? '+' : ''}{asset.priceChange24h.toFixed(2)}%
+                    </Text>
                   </View>
                 </TouchableOpacity>
               ))
             )}
 
             {/* View all */}
-            <TouchableOpacity style={styles.viewAllBtn} activeOpacity={0.8}>
-              <Text style={styles.viewAllText}>View all tokens</Text>
+            <TouchableOpacity
+              style={styles.viewAllBtn}
+              activeOpacity={0.8}
+              onPress={() => router.push('/nft-gallery' as any)}
+            >
+              <Text style={styles.viewAllText}>View all assets</Text>
               <ChevronRight size={16} color={colors.primary} strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
@@ -1569,5 +1591,19 @@ const styles = StyleSheet.create({
   },
   starBtn: {
     padding: spacing.sm,
+  },
+  retryBtn: {
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.primaryMuted,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+  },
+  retryBtnText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.primary,
   },
 });

@@ -86,7 +86,8 @@ class WalletAssetLoaderService {
         };
       });
 
-      const allAssets = [nativeAsset, ...tokenAssets].filter((asset) => asset.uiBalance > 0);
+      // Always include native SOL even if balance is 0; filter out zero-balance SPL tokens
+      const allAssets = [nativeAsset, ...tokenAssets.filter((asset) => asset.uiBalance > 0)];
       allAssets.sort((a, b) => b.value - a.value);
 
       // Resolve missing logos in background (don't block display)
