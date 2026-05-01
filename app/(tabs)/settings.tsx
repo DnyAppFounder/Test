@@ -31,7 +31,7 @@ type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' |
 export default function SettingsScreen() {
   const router = useRouter();
   const { t, language, setLanguage } = useLanguage();
-  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, setActiveWallet, connectedWallet, disconnectExternalWallet } = useWallet();
+  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, setActiveWallet, connectedWallet, disconnectExternalWallet, fullLogout } = useWallet();
   const { profile, updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
   const [editUsername, setEditUsername] = useState('');
@@ -110,8 +110,11 @@ export default function SettingsScreen() {
   };
 
   const handleLogout = async () => {
+    // Clear all wallet state in context first (disconnects external wallet, clears balances)
+    await fullLogout();
+    // Clear stored wallet data
     const walletManager = SecureWalletManager.getInstance();
-    await walletManager.deleteWallet();
+    await walletManager.deleteWallet().catch(() => {});
     await AsyncStorage.removeItem('onboarding_completed');
     await AsyncStorage.removeItem('wallet_config');
     router.replace('/onboarding');

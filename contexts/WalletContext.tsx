@@ -56,6 +56,9 @@ interface WalletContextType {
   loadAccounts: () => Promise<void>;
   forceReloadAccounts: () => Promise<void>;
 
+  // Full logout — clears ALL wallet state
+  fullLogout: () => Promise<void>;
+
   // The address currently in use
   activeAddress: string | null;
 }
@@ -183,6 +186,22 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       await ExternalWalletAdapter.disconnectExtension(connectedWallet.id);
       setConnectedWallet(null);
     }
+  }, [connectedWallet]);
+
+  const fullLogout = useCallback(async () => {
+    // Disconnect any external wallet
+    if (connectedWallet) {
+      await ExternalWalletAdapter.disconnectExtension(connectedWallet.id).catch(() => {});
+    }
+    // Clear all state atomically
+    setConnectedWallet(null);
+    setAccounts([]);
+    setSelectedAccountState(null);
+    setTokens([]);
+    setBlockchains([]);
+    setTotalBalance(0);
+    setPortfolioError(null);
+    setIsPortfolioLoading(false);
   }, [connectedWallet]);
 
   const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number }) => {
@@ -347,6 +366,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         refreshPortfolio,
         loadAccounts,
         forceReloadAccounts,
+        fullLogout,
         activeAddress,
       }}
     >
