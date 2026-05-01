@@ -30,6 +30,46 @@ export interface Post {
   is_repost?: boolean;
 }
 
+export interface Notification {
+  id: string;
+  user_id: string;
+  actor_id: string | null;
+  type: 'like' | 'comment' | 'follow' | 'mention' | 'repost' | 'message';
+  post_id: string | null;
+  message: string;
+  read: boolean;
+  created_at: string;
+  actor?: UserProfile;
+}
+
+export interface NotificationSettings {
+  id: string;
+  user_id: string;
+  likes: boolean;
+  comments: boolean;
+  follows: boolean;
+  messages: boolean;
+  mentions: boolean;
+  reposts: boolean;
+}
+
+export interface Message {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  content: string;
+  read: boolean;
+  created_at: string;
+  sender?: UserProfile;
+  receiver?: UserProfile;
+}
+
+export interface Conversation {
+  otherUser: UserProfile;
+  lastMessage: Message;
+  unreadCount: number;
+}
+
 export interface PostComment {
   id: string;
   post_id: string;
@@ -305,7 +345,7 @@ export class SocialService {
     await supabase.from('post_likes').insert({ post_id: postId, user_id: userId });
     const { data: post } = await supabase
       .from('posts')
-      .select('likes_count')
+      .select('likes_count, author_id')
       .eq('id', postId)
       .maybeSingle();
     if (post) {
@@ -313,6 +353,8 @@ export class SocialService {
         .from('posts')
         .update({ likes_count: (post.likes_count || 0) + 1 })
         .eq('id', postId);
+      // Notify post author
+      await this.createNotification(post.author_id, userId, 'like', postId, 'liked your post');
     }
     return true;
   }
@@ -344,7 +386,7 @@ export class SocialService {
     await supabase.from('reposts').insert({ post_id: postId, user_id: userId });
     const { data: post } = await supabase
       .from('posts')
-      .select('reposts_count')
+      .select('reposts_count, author_id')
       .eq('id', postId)
       .maybeSingle();
     if (post) {
@@ -352,6 +394,7 @@ export class SocialService {
         .from('posts')
         .update({ reposts_count: (post.reposts_count || 0) + 1 })
         .eq('id', postId);
+      await this.createNotification(post.author_id, userId, 'repost', postId, 'reposted your post');
     }
     return true;
   }
@@ -389,7 +432,7 @@ export class SocialService {
     if (data) {
       const { data: post } = await supabase
         .from('posts')
-        .select('comments_count')
+        .select('comments_count, author_id')
         .eq('id', postId)
         .maybeSingle();
       if (post) {
@@ -397,6 +440,7 @@ export class SocialService {
           .from('posts')
           .update({ comments_count: (post.comments_count || 0) + 1 })
           .eq('id', postId);
+        await this.createNotification(post.author_id, authorId, 'comment', postId, 'commented on your post');
       }
     }
 
@@ -462,6 +506,220 @@ export class SocialService {
     }
 
     await supabase.from('follows').insert({ follower_id: followerId, following_id: followingId });
+
+    // Create follow notification
+    await this.createNotification(followingId, followerId, 'follow', null,
+      `started following you`);
+
     return true;
+  }
+
+  static async deletePost(postId: string, authorId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('posts')
+      .delete()
+      .eq('id', postId)
+      .eq('author_id', authorId);
+    return !error;
+  }
+
+  // ─── Notifications ────────────────────────────────────────────────────────
+
+  static async createNotification(
+    userId: string,
+    actorId: string,
+    type: Notification['type'],
+    postId: string | null,
+    message: string
+  ): Promise<void> {
+    if (userId === actorId) return; // don't notify self
+    // Check if this user has this notification type enabled
+    const settings = await this.getNotificationSettings(userId);
+    if (settings) {
+      if (type === 'like' && !settings.likes) return;
+      if (type === 'comment' && !settings.comments) return;
+      if (type === 'follow' && !settings.follows) return;
+      if (type === 'message' && !settings.messages) return;
+      if (type === 'mention' && !settings.mentions) return;
+      if (type === 'repost' && !settings.reposts) return;
+    }
+
+    await supabase.from('notifications').insert({
+      user_id: userId,
+      actor_id: actorId,
+      type,
+      post_id: postId,
+      message,
+    });
+  }
+
+  static async getNotifications(userId: string): Promise<Notification[]> {
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (!data || data.length === 0) return [];
+
+    const actorIds = [...new Set(data.filter((n: any) => n.actor_id).map((n: any) => n.actor_id))];
+    let actorMap = new Map<string, UserProfile>();
+    if (actorIds.length > 0) {
+      const { data: actors } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .in('id', actorIds);
+      actorMap = new Map((actors || []).map((a: UserProfile) => [a.id, a]));
+    }
+
+    return data.map((n: any) => ({
+      ...n,
+      actor: n.actor_id ? actorMap.get(n.actor_id) : undefined,
+    }));
+  }
+
+  static async markNotificationsRead(userId: string): Promise<void> {
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('user_id', userId)
+      .eq('read', false);
+  }
+
+  static async getUnreadNotificationCount(userId: string): Promise<number> {
+    const { count } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('read', false);
+    return count || 0;
+  }
+
+  static async getNotificationSettings(userId: string): Promise<NotificationSettings | null> {
+    const { data } = await supabase
+      .from('notification_settings')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data;
+  }
+
+  static async getOrCreateNotificationSettings(userId: string): Promise<NotificationSettings> {
+    const existing = await this.getNotificationSettings(userId);
+    if (existing) return existing;
+
+    const { data } = await supabase
+      .from('notification_settings')
+      .insert({ user_id: userId })
+      .select()
+      .maybeSingle();
+
+    return data || { id: '', user_id: userId, likes: true, comments: true, follows: true, messages: true, mentions: true, reposts: true };
+  }
+
+  static async updateNotificationSettings(
+    userId: string,
+    updates: Partial<Omit<NotificationSettings, 'id' | 'user_id'>>
+  ): Promise<NotificationSettings | null> {
+    const { data } = await supabase
+      .from('notification_settings')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .select()
+      .maybeSingle();
+    return data;
+  }
+
+  // ─── Messages ─────────────────────────────────────────────────────────────
+
+  static async sendMessage(senderId: string, receiverId: string, content: string): Promise<Message | null> {
+    const { data } = await supabase
+      .from('messages')
+      .insert({ sender_id: senderId, receiver_id: receiverId, content })
+      .select()
+      .maybeSingle();
+
+    if (data) {
+      await this.createNotification(receiverId, senderId, 'message', null, 'sent you a message');
+    }
+
+    return data;
+  }
+
+  static async getConversationMessages(userId1: string, userId2: string): Promise<Message[]> {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`and(sender_id.eq.${userId1},receiver_id.eq.${userId2}),and(sender_id.eq.${userId2},receiver_id.eq.${userId1})`)
+      .order('created_at', { ascending: true });
+
+    if (!data) return [];
+
+    const participantIds = [userId1, userId2];
+    const { data: profiles } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .in('id', participantIds);
+    const profileMap = new Map((profiles || []).map((p: UserProfile) => [p.id, p]));
+
+    return data.map((m: any) => ({
+      ...m,
+      sender: profileMap.get(m.sender_id),
+      receiver: profileMap.get(m.receiver_id),
+    }));
+  }
+
+  static async getConversations(userId: string): Promise<Conversation[]> {
+    // Get all messages involving this user
+    const { data: msgs } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order('created_at', { ascending: false });
+
+    if (!msgs || msgs.length === 0) return [];
+
+    // Group by conversation partner
+    const convMap = new Map<string, { lastMessage: Message; unreadCount: number }>();
+    for (const msg of msgs) {
+      const otherId = msg.sender_id === userId ? msg.receiver_id : msg.sender_id;
+      if (!convMap.has(otherId)) {
+        convMap.set(otherId, { lastMessage: msg, unreadCount: 0 });
+      }
+      if (!msg.read && msg.receiver_id === userId) {
+        convMap.get(otherId)!.unreadCount++;
+      }
+    }
+
+    if (convMap.size === 0) return [];
+
+    const otherUserIds = [...convMap.keys()];
+    const { data: profiles } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .in('id', otherUserIds);
+    const profileMap = new Map((profiles || []).map((p: UserProfile) => [p.id, p]));
+
+    const convos: Conversation[] = [];
+    for (const [otherId, convData] of convMap.entries()) {
+      const otherUser = profileMap.get(otherId);
+      if (otherUser) {
+        convos.push({ otherUser, lastMessage: convData.lastMessage, unreadCount: convData.unreadCount });
+      }
+    }
+
+    return convos.sort((a, b) =>
+      new Date(b.lastMessage.created_at).getTime() - new Date(a.lastMessage.created_at).getTime()
+    );
+  }
+
+  static async markMessagesRead(senderId: string, receiverId: string): Promise<void> {
+    await supabase
+      .from('messages')
+      .update({ read: true })
+      .eq('sender_id', senderId)
+      .eq('receiver_id', receiverId)
+      .eq('read', false);
   }
 }

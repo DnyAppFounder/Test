@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
-import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck } from 'lucide-react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Alert } from 'react-native';
+import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck, Trash2 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { Post, UserProfile } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -11,6 +11,7 @@ interface PostCardProps {
   onComment: (postId: string) => void;
   onRepost: (postId: string) => void;
   onPromote: (postId: string) => void;
+  onDelete?: (postId: string) => void;
 }
 
 export function timeAgo(date: string) {
@@ -25,11 +26,18 @@ export function timeAgo(date: string) {
   return `${Math.floor(days / 7)}w`;
 }
 
-export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote }: PostCardProps) {
+export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote, onDelete }: PostCardProps) {
   const router = useRouter();
 
   const handleProfilePress = () => {
     if (post.author?.id) router.push(`/profile/${post.author.id}`);
+  };
+
+  const handleDelete = () => {
+    Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => onDelete?.(post.id) },
+    ]);
   };
 
   const handleShare = async () => {
@@ -68,13 +76,15 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
           <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.moreBtn}
-          onPress={() => onPromote(post.id)}
-          activeOpacity={0.7}
-        >
-          <MoreHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
-        </TouchableOpacity>
+        {onDelete ? (
+          <TouchableOpacity style={styles.moreBtn} onPress={handleDelete} activeOpacity={0.7}>
+            <Trash2 size={17} color="#ef4444" strokeWidth={2} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.moreBtn} onPress={() => onPromote(post.id)} activeOpacity={0.7}>
+            <MoreHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Content */}

@@ -10,13 +10,13 @@ import {
   Switch,
   SafeAreaView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
-import { X, Check, ChevronDown, Globe, Image as ImageIcon, Video, ChartBar as BarChart2, Coins, MapPin, Lock, MessageCircle, AtSign, ChevronRight } from 'lucide-react-native';
+import { X, Check, ChevronDown, Globe, Image as ImageIcon, Video, ChartBar as BarChart2, Coins, MapPin, Lock, MessageCircle, AtSign, User } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
-
-const AVATAR = 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?w=100';
+import { useProfile } from '@/contexts/ProfileContext';
+import { SocialService } from '@/services/socialService';
 
 const CHART_POINTS = [30, 45, 35, 50, 40, 60, 52, 68, 58, 75, 65, 80, 70, 85];
 
@@ -42,12 +42,30 @@ const qaGifText: any = {
 
 export default function CreatePostScreen() {
   const router = useRouter();
+  const { profile } = useProfile();
   const [content, setContent] = useState('');
+  const [posting, setPosting] = useState(false);
   const [allowQuotes, setAllowQuotes] = useState(true);
   const [mentionedReply, setMentionedReply] = useState(true);
   const [timeframe, setTimeframe] = useState('1D');
 
   const TIMEFRAMES = ['1D', '1W', '1M', '3M', '1Y', 'ALL'];
+
+  const handlePost = async () => {
+    if (!profile || !content.trim() || posting) return;
+    setPosting(true);
+    try {
+      await SocialService.createPost(profile.id, content.trim());
+      router.back();
+    } catch (e) {
+      console.error('[CreatePost] error:', e);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const displayName = profile?.username || profile?.wallet_address?.slice(0, 8) || 'Anonymous';
+  const handleText = `@${(profile?.username || 'user').toLowerCase()}`;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -59,26 +77,39 @@ export default function CreatePostScreen() {
           </TouchableOpacity>
           <Text style={styles.topTitle}>Create Post</Text>
           <TouchableOpacity
-            style={[styles.postBtn, content.trim() ? styles.postBtnActive : styles.postBtnDisabled]}
+            style={[styles.postBtn, content.trim() && !posting ? styles.postBtnActive : styles.postBtnDisabled]}
             activeOpacity={0.85}
-            onPress={() => router.back()}
+            onPress={handlePost}
+            disabled={!content.trim() || posting}
           >
-            <Text style={styles.postBtnText}>Post</Text>
+            {posting ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <Text style={styles.postBtnText}>Post</Text>
+            )}
           </TouchableOpacity>
         </View>
 
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {/* User info */}
           <View style={styles.userRow}>
-            <Image source={{ uri: AVATAR }} style={styles.avatar} />
+            <View style={styles.avatar}>
+              {profile?.avatar_url ? (
+                <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
+              ) : (
+                <User size={24} color={colors.textMuted} />
+              )}
+            </View>
             <View style={styles.userInfo}>
               <View style={styles.nameRow}>
-                <Text style={styles.username}>DawenMaster</Text>
-                <View style={styles.verifiedBadge}>
-                  <Check size={9} color={colors.white} strokeWidth={3} />
-                </View>
+                <Text style={styles.username}>{displayName}</Text>
+                {profile?.is_verified && (
+                  <View style={styles.verifiedBadge}>
+                    <Check size={9} color={colors.white} strokeWidth={3} />
+                  </View>
+                )}
               </View>
-              <Text style={styles.handle}>@dawenmaster</Text>
+              <Text style={styles.handle}>{handleText}</Text>
               <TouchableOpacity style={styles.visibilityBtn} activeOpacity={0.8}>
                 <Globe size={13} color={colors.textSecondary} strokeWidth={2} />
                 <Text style={styles.visibilityText}>Public</Text>
@@ -305,6 +336,15 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImg: {
     width: 52,
     height: 52,
     borderRadius: 26,

@@ -13,9 +13,11 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, MoveHorizontal as MoreHorizontal, Share2, X, Check, Copy, BadgeCheck, User } from 'lucide-react-native';
+import { ArrowLeft, MoveHorizontal as MoreHorizontal, Share2, X, Check, Copy, BadgeCheck, User, Camera } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
+import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, UserProfile, Post } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard from '@/components/PostCard';
@@ -49,6 +51,7 @@ export default function ProfileScreen() {
   const [editBannerUrl, setEditBannerUrl] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar } = useProfile();
   const walletAddr = (selectedAccount?.address || activeAddress || '');
   const isOwnProfile = currentUserProfile?.id === id;
 
@@ -102,17 +105,37 @@ export default function ProfileScreen() {
     setShowEditModal(true);
   };
 
+  const handlePickAvatar = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setEditAvatarUrl(result.assets[0].uri);
+    }
+  };
+
   const handleSaveProfile = async () => {
     if (!profile) return;
     setSaving(true);
-    const updated = await SocialService.updateProfile(profile.id, {
-      username: editUsername.trim() || undefined,
-      bio: editBio.trim(),
-      avatar_url: editAvatarUrl.trim() || undefined,
-    });
-    if (updated) setProfile(updated);
-    setSaving(false);
-    setShowEditModal(false);
+    try {
+      let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
+      if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
+        const uploaded = await uploadGlobalAvatar(avatarUrl);
+        if (uploaded) avatarUrl = uploaded;
+      }
+      await updateGlobalProfile({
+        username: editUsername.trim() || undefined,
+        bio: editBio.trim(),
+        avatar_url: avatarUrl,
+      });
+      await loadProfile();
+    } finally {
+      setSaving(false);
+      setShowEditModal(false);
+    }
   };
 
   const copyAddress = async () => {
@@ -343,21 +366,21 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.editLabel}>Avatar URL</Text>
-              <TextInput
-                style={styles.editInput}
-                placeholder="https://example.com/avatar.jpg"
-                placeholderTextColor={colors.textMuted}
-                value={editAvatarUrl}
-                onChangeText={setEditAvatarUrl}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {editAvatarUrl.trim() ? (
-                <View style={styles.avatarPreviewWrap}>
-                  <Image source={{ uri: editAvatarUrl.trim() }} style={styles.avatarPreview} />
+              <TouchableOpacity style={styles.avatarPickerWrap} onPress={handlePickAvatar} activeOpacity={0.85}>
+                <View style={styles.avatarPickerRing}>
+                  {editAvatarUrl ? (
+                    <Image source={{ uri: editAvatarUrl }} style={styles.avatarPreview} />
+                  ) : (
+                    <View style={styles.avatarPickerEmpty}>
+                      <User size={36} color={colors.textMuted} />
+                    </View>
+                  )}
                 </View>
-              ) : null}
+                <View style={styles.avatarCameraBtn}>
+                  <Camera size={15} color={colors.white} />
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.avatarPickerHint}>Tap to change photo</Text>
 
               <Text style={styles.editLabel}>Username</Text>
               <TextInput
@@ -692,14 +715,51 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: spacing.xs,
   },
-  avatarPreviewWrap: {
-    alignItems: 'center',
-    marginTop: spacing.md,
+  avatarPickerWrap: {
+    alignSelf: 'center',
+    marginBottom: spacing.sm,
+    position: 'relative',
+  },
+  avatarPickerRing: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    overflow: 'hidden',
   },
   avatarPreview: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  avatarPickerEmpty: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarCameraBtn: {
+    position: 'absolute',
+    bottom: 2,
+    right: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2.5,
+    borderColor: '#12121A',
+  },
+  avatarPickerHint: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.xl,
+    alignSelf: 'center',
   },
   saveBtn: {
     backgroundColor: colors.primary,
