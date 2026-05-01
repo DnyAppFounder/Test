@@ -27,6 +27,15 @@ import {
   Bell,
   Mail,
   Clock,
+  Plus,
+  Search,
+  Heart,
+  MessageSquare,
+  UserPlus,
+  AtSign,
+  Repeat2,
+  SlidersHorizontal,
+  BadgeCheck,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
@@ -63,6 +72,9 @@ export default function CommunityScreen() {
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [newCommentContent, setNewCommentContent] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+
+  const [msgSearch, setMsgSearch] = useState('');
+  const [notifFilter, setNotifFilter] = useState<'all' | 'likes' | 'replies' | 'mentions' | 'follows'>('all');
 
   const walletAddress = activeAddress || 'anonymous';
 
@@ -257,24 +269,139 @@ export default function CommunityScreen() {
     return null;
   };
 
-  const renderMessagesTab = () => (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrap}>
-        <Mail size={44} color={colors.primary} strokeWidth={1.5} />
-      </View>
-      <Text style={styles.emptyTitle}>No messages yet</Text>
-      <Text style={styles.emptySubtitle}>Start a conversation with other traders</Text>
-    </View>
+  const CONVERSATIONS = [
+    { id: '1', username: 'CryptoKing', verified: true, lastMsg: "Let's catch the next pump 🔥", time: '2m', unread: true, avatar: 'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?w=100' },
+    { id: '2', username: 'MoonWalker', verified: false, lastMsg: 'We are early, so early...', time: '15m', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
+    { id: '3', username: 'DawenArmy', verified: false, lastMsg: 'gm DAWEN family 💜', time: '1h', unread: true, avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?w=100' },
+    { id: '4', username: 'LadyTrader', verified: false, lastMsg: 'Nice call on $DAWEN', time: '2h', unread: true, avatar: 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?w=100' },
+    { id: '5', username: 'DeFiXplorer', verified: false, lastMsg: 'Alpha looks strong', time: '3h', unread: true, avatar: 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?w=100' },
+    { id: '6', username: 'BullishBro', verified: false, lastMsg: "Let's go! Phase 4 soon 🚀", time: '4h', unread: true, avatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?w=100' },
+    { id: '7', username: 'TraderJoe', verified: false, lastMsg: 'Send you a chart', time: '6h', unread: true, avatar: 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg?w=100' },
+  ];
+
+  const filteredConvos = CONVERSATIONS.filter(c =>
+    c.username.toLowerCase().includes(msgSearch.toLowerCase()) ||
+    c.lastMsg.toLowerCase().includes(msgSearch.toLowerCase())
   );
 
-  const renderNotificationsTab = () => (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrap}>
-        <Bell size={44} color={colors.primary} strokeWidth={1.5} />
+  const renderMessagesTab = () => (
+    <ScrollView style={styles.msgContainer} contentContainerStyle={styles.msgContent} showsVerticalScrollIndicator={false}>
+      {/* Search */}
+      <View style={styles.msgSearchWrap}>
+        <Search size={17} color={colors.textMuted} strokeWidth={2} />
+        <TextInput
+          style={styles.msgSearchInput}
+          placeholder="Search messages"
+          placeholderTextColor={colors.textMuted}
+          value={msgSearch}
+          onChangeText={setMsgSearch}
+        />
       </View>
-      <Text style={styles.emptyTitle}>No notifications yet</Text>
-      <Text style={styles.emptySubtitle}>Likes, comments, and follows will appear here</Text>
-    </View>
+
+      {/* Conversation list */}
+      <View style={styles.msgList}>
+        {filteredConvos.map((conv, idx) => (
+          <TouchableOpacity key={conv.id} style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]} activeOpacity={0.75}>
+            <View style={styles.convAvatarWrap}>
+              <Image source={{ uri: conv.avatar }} style={styles.convAvatar} />
+            </View>
+            <View style={styles.convBody}>
+              <View style={styles.convNameRow}>
+                <Text style={styles.convUsername}>{conv.username}</Text>
+                {conv.verified && (
+                  <View style={styles.verifiedBadge}>
+                    <Check size={9} color={colors.white} strokeWidth={3} />
+                  </View>
+                )}
+              </View>
+              <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMsg}</Text>
+            </View>
+            <View style={styles.convMeta}>
+              <Text style={styles.convTime}>{conv.time}</Text>
+              {conv.unread && <View style={styles.unreadDot} />}
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </ScrollView>
+  );
+
+  const NOTIF_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'likes', label: 'Likes' },
+    { key: 'replies', label: 'Replies' },
+    { key: 'mentions', label: 'Mentions' },
+    { key: 'follows', label: 'Follows' },
+  ] as const;
+
+  const NOTIFICATIONS = [
+    { id: '1', type: 'like', username: 'CryptoKing', action: 'liked your post', time: '2m', preview: 'Just aped into $DAWEN 🔥 The chart looks insane.', unread: true, avatar: 'https://images.pexels.com/photos/1681010/pexels-photo-1681010.jpeg?w=100' },
+    { id: '2', type: 'reply', username: 'MoonWalker', action: 'replied to your post', time: '15m', preview: 'We are early, so early...', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
+    { id: '3', type: 'follow', username: 'LadyTrader', action: 'followed you', time: '1h', preview: null, unread: true, avatar: 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?w=100' },
+    { id: '4', type: 'mention', username: 'DeFiXplorer', action: 'mentioned you in a post', time: '2h', preview: 'Check this out @dawenmaster 🚀', unread: true, avatar: 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?w=100' },
+    { id: '5', type: 'repost', username: 'BullishBro', action: 'reposted your post', time: '3h', preview: 'New partnerships incoming. Big things ahead...', unread: true, avatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?w=100' },
+    { id: '6', type: 'like', username: 'DawenArmy', action: 'liked your post', time: '4h', preview: 'gm DAWEN family 💜', unread: true, avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?w=100' },
+    { id: '7', type: 'follow', username: 'TraderJoe', action: 'followed you', time: '6h', preview: null, unread: true, avatar: 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg?w=100' },
+    { id: '8', type: 'reply', username: 'MoonWalker', action: 'replied to your comment', time: '8h', preview: 'Absolutely! The future is bright ✨', unread: true, avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?w=100' },
+  ];
+
+  const filteredNotifs = NOTIFICATIONS.filter(n => {
+    if (notifFilter === 'all') return true;
+    if (notifFilter === 'likes') return n.type === 'like';
+    if (notifFilter === 'replies') return n.type === 'reply';
+    if (notifFilter === 'mentions') return n.type === 'mention';
+    if (notifFilter === 'follows') return n.type === 'follow';
+    return true;
+  });
+
+  const NotifIcon = ({ type }: { type: string }) => {
+    if (type === 'like') return <Heart size={18} color="#ef4444" fill="#ef4444" />;
+    if (type === 'reply') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'follow') return <UserPlus size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'mention') return <AtSign size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'repost') return <Repeat2 size={18} color={colors.primary} strokeWidth={2} />;
+    return <Bell size={18} color={colors.primary} />;
+  };
+
+  const renderNotificationsTab = () => (
+    <ScrollView style={styles.notifContainer} contentContainerStyle={styles.notifContent} showsVerticalScrollIndicator={false}>
+      {/* Filter tabs */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.notifFilterScroll} contentContainerStyle={styles.notifFilterRow}>
+        {NOTIF_TABS.map(tab => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.notifFilterTab, notifFilter === tab.key && styles.notifFilterTabActive]}
+            onPress={() => setNotifFilter(tab.key)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.notifFilterText, notifFilter === tab.key && styles.notifFilterTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {/* Notification items */}
+      <View style={styles.notifList}>
+        {filteredNotifs.map((notif, idx) => (
+          <TouchableOpacity key={notif.id} style={[styles.notifRow, idx < filteredNotifs.length - 1 && styles.notifRowBorder]} activeOpacity={0.75}>
+            <View style={styles.notifIconWrap}>
+              <NotifIcon type={notif.type} />
+            </View>
+            <Image source={{ uri: notif.avatar }} style={styles.notifAvatar} />
+            <View style={styles.notifBody}>
+              <Text style={styles.notifText} numberOfLines={2}>
+                <Text style={styles.notifUsername}>{notif.username} </Text>
+                <Text style={styles.notifAction}>{notif.action}</Text>
+              </Text>
+              <Text style={styles.notifTime}>{notif.time}</Text>
+              {notif.preview && <Text style={styles.notifPreview} numberOfLines={1}>{notif.preview}</Text>}
+            </View>
+            {notif.unread && <View style={styles.unreadDot} />}
+          </TouchableOpacity>
+        ))}
+      </View>
+    </ScrollView>
   );
 
   const renderActiveTab = () => {
@@ -289,17 +416,33 @@ export default function CommunityScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Dawen Pulse</Text>
-          <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
-        </View>
-        {activeTab === 'feed' && (
-          <TouchableOpacity style={styles.composeBtn} onPress={() => setShowCreateModal(true)} activeOpacity={0.85}>
-            <Send size={20} color={colors.white} strokeWidth={2.5} />
+      {activeTab === 'messages' ? (
+        <View style={styles.msgHeader}>
+          <Text style={styles.msgHeaderTitle}>Messages</Text>
+          <TouchableOpacity style={styles.composeBtn} activeOpacity={0.85}>
+            <Plus size={22} color={colors.white} strokeWidth={2.5} />
           </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      ) : activeTab === 'notifications' ? (
+        <View style={styles.msgHeader}>
+          <Text style={styles.msgHeaderTitle}>Notifications</Text>
+          <TouchableOpacity style={styles.notifFilterBtn} activeOpacity={0.85}>
+            <SlidersHorizontal size={18} color={colors.primary} strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerTitle}>Dawen Pulse</Text>
+            <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
+          </View>
+          {activeTab === 'feed' && (
+            <TouchableOpacity style={styles.composeBtn} onPress={() => setShowCreateModal(true)} activeOpacity={0.85}>
+              <Send size={20} color={colors.white} strokeWidth={2.5} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Top tabs */}
       <View style={styles.topTabs}>
@@ -1102,5 +1245,221 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
+  },
+
+  // Messages
+  msgHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.xxl,
+    paddingTop: 56,
+    paddingBottom: spacing.lg,
+    backgroundColor: '#0A0A0F',
+  },
+  msgHeaderTitle: {
+    fontSize: 26,
+    fontWeight: '900',
+    color: colors.textPrimary,
+    letterSpacing: -0.3,
+  },
+  notifFilterBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorderLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  msgContainer: {
+    flex: 1,
+    backgroundColor: '#0A0A0F',
+  },
+  msgContent: {
+    paddingBottom: 40,
+  },
+  msgSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#12121A',
+    borderRadius: 14,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  msgSearchInput: {
+    flex: 1,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+  },
+  msgList: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: '#12121A',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    overflow: 'hidden',
+  },
+  convRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  convRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(139,92,246,0.07)',
+  },
+  convAvatarWrap: {
+    position: 'relative',
+  },
+  convAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.surfaceElevated,
+  },
+  convBody: {
+    flex: 1,
+    gap: 3,
+  },
+  convNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  convUsername: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  verifiedBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  convLastMsg: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+  },
+  convMeta: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  convTime: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
+  unreadDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.primary,
+  },
+
+  // Notifications
+  notifContainer: {
+    flex: 1,
+    backgroundColor: '#0A0A0F',
+  },
+  notifContent: {
+    paddingBottom: 40,
+  },
+  notifFilterScroll: {
+    marginBottom: spacing.md,
+  },
+  notifFilterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    gap: spacing.xs,
+    paddingBottom: 2,
+  },
+  notifFilterTab: {
+    paddingVertical: 9,
+    paddingHorizontal: spacing.md,
+    borderRadius: 20,
+    backgroundColor: '#12121A',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  notifFilterTabActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  notifFilterText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  notifFilterTextActive: {
+    color: colors.white,
+  },
+  notifList: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: '#12121A',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    overflow: 'hidden',
+  },
+  notifRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  notifRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(139,92,246,0.07)',
+  },
+  notifIconWrap: {
+    width: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notifAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.surfaceElevated,
+  },
+  notifBody: {
+    flex: 1,
+    gap: 2,
+  },
+  notifText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  notifUsername: {
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  notifAction: {
+    fontWeight: '400',
+    color: colors.textSecondary,
+  },
+  notifTime: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  notifPreview: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 3,
   },
 });
