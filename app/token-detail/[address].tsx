@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,27 +8,25 @@ import {
   ActivityIndicator,
   Image,
   RefreshControl,
-  Animated,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
   ArrowLeft,
   Copy,
   Star,
-  Zap,
   Droplet,
   ChartBar as BarChart3,
   DollarSign,
-  RefreshCw,
   CircleCheck as CheckCircle2,
   MessageSquare,
   Activity,
   ArrowUpDown,
   Users,
+  Crown,
 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
+import { SolanaConnectionService } from '@/services/solana/connectionService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { TradingViewChart, TokenInfo } from '@/components/TradingViewChart';
 import { TradingInterface } from '@/components/TradingInterface';
@@ -62,12 +60,12 @@ export default function TokenDetailScreen() {
   const [copiedPair, setCopiedPair] = useState(false);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [checkingWatchlist, setCheckingWatchlist] = useState(true);
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTab>('chat');
+  const [holders, setHolders] = useState<{ address: string; amount: number; uiAmount: number }[]>([]);
+  const [holdersLoading, setHoldersLoading] = useState(false);
+  const [totalSupply, setTotalSupply] = useState<number>(0);
 
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  const { price: livePrice, isUpdating } = usePriceUpdates(
+  const { price: livePrice } = usePriceUpdates(
     async () => {
       if (!address) return null;
       try {
@@ -79,17 +77,8 @@ export default function TokenDetailScreen() {
       } catch {}
       return null;
     },
-    { interval: 15000, enabled: autoRefreshEnabled && !!address }
+    { interval: 15000, enabled: !!address }
   );
-
-  useEffect(() => {
-    if (isUpdating) {
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.2, duration: 200, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [isUpdating]);
 
   useEffect(() => {
     if (address) {
@@ -97,6 +86,12 @@ export default function TokenDetailScreen() {
       checkWatchlistStatus();
     }
   }, [address]);
+
+  useEffect(() => {
+    if (activeBottomTab === 'holders' && holders.length === 0) {
+      loadHolders();
+    }
+  }, [activeBottomTab]);
 
   const loadTokenDetail = async (addr: string) => {
     setLoading(true);
@@ -141,6 +136,30 @@ export default function TokenDetailScreen() {
     if (!token || !profile?.id) return;
     const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name, profile.id).catch(() => false);
     if (success) setIsWatchlisted(w => !w);
+  };
+
+  const loadHolders = async () => {
+    if (!address) return;
+    setHoldersLoading(true);
+    try {
+      const rpc = SolanaConnectionService.getInstance();
+      const result = await rpc.rpcCall('getTokenLargestAccounts', [address, { commitment: 'confirmed' }]);
+      const accounts: any[] = result?.value ?? [];
+      // Also fetch supply for percentage calculation
+      const supplyResult = await rpc.rpcCall('getTokenSupply', [address, { commitment: 'confirmed' }]).catch(() => null);
+      const supply = supplyResult?.value?.uiAmount ?? 0;
+      setTotalSupply(supply);
+      setHolders(accounts.map((a: any) => ({
+        address: a.address,
+        amount: Number(a.amount),
+        uiAmount: a.uiAmount ?? 0,
+      })));
+    } catch (e) {
+      console.warn('[Holders] Failed to load holders:', e);
+      setHolders([]);
+    } finally {
+      setHoldersLoading(false);
+    }
   };
 
   const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -188,6 +207,7 @@ export default function TokenDetailScreen() {
     priceChange24h: token.priceChange24h,
     marketCap: token.marketCap,
     pairAddress: token.pairAddress,
+    address: token.address,
   };
 
   return (
@@ -208,15 +228,6 @@ export default function TokenDetailScreen() {
           <Text style={styles.topBarSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
         </View>
         <View style={styles.topBarRight}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => setAutoRefreshEnabled(e => !e)}
-            activeOpacity={0.7}
-          >
-            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <RefreshCw size={16} color={autoRefreshEnabled ? colors.success : colors.textMuted} strokeWidth={2.5} />
-            </Animated.View>
-          </TouchableOpacity>
           {!checkingWatchlist && (
             <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
               <Star
@@ -357,9 +368,55 @@ export default function TokenDetailScreen() {
             <TokenActivityFeed tokenAddress={token.address} />
           )}
           {activeBottomTab === 'holders' && (
-            <View style={styles.comingSoon}>
-              <Users size={32} color={colors.textMuted} strokeWidth={1.5} />
-              <Text style={styles.comingSoonText}>Top holders coming soon</Text>
+            <View style={styles.holdersWrap}>
+              <View style={styles.holdersHeader}>
+                <Crown size={16} color={colors.primary} strokeWidth={2} />
+                <Text style={styles.holdersTitle}>Top Holders</Text>
+                <TouchableOpacity onPress={loadHolders} style={styles.holdersRefreshBtn} activeOpacity={0.7}>
+                  <Text style={styles.holdersRefreshText}>Refresh</Text>
+                </TouchableOpacity>
+              </View>
+              {holdersLoading ? (
+                <View style={styles.holdersLoading}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={styles.holdersLoadingText}>Loading holders...</Text>
+                </View>
+              ) : holders.length === 0 ? (
+                <View style={styles.comingSoon}>
+                  <Users size={28} color={colors.textMuted} strokeWidth={1.5} />
+                  <Text style={styles.comingSoonText}>No holder data available</Text>
+                </View>
+              ) : (
+                holders.map((h, idx) => {
+                  const pct = totalSupply > 0 ? (h.uiAmount / totalSupply) * 100 : 0;
+                  const shortH = `${h.address.slice(0, 6)}...${h.address.slice(-4)}`;
+                  const isTop3 = idx < 3;
+                  return (
+                    <View key={h.address} style={[styles.holderRow, idx < holders.length - 1 && styles.holderRowBorder]}>
+                      <View style={[styles.holderRank, isTop3 && styles.holderRankTop]}>
+                        <Text style={[styles.holderRankText, isTop3 && styles.holderRankTextTop]}>#{idx + 1}</Text>
+                      </View>
+                      <View style={styles.holderInfo}>
+                        <Text style={styles.holderAddr}>{shortH}</Text>
+                        <View style={styles.holderBar}>
+                          <View style={[styles.holderBarFill, { width: `${Math.min(100, pct)}%` as any, backgroundColor: isTop3 ? colors.primary : colors.textMuted }]} />
+                        </View>
+                      </View>
+                      <View style={styles.holderRight}>
+                        <Text style={styles.holderAmount}>
+                          {h.uiAmount >= 1e9 ? `${(h.uiAmount / 1e9).toFixed(2)}B`
+                            : h.uiAmount >= 1e6 ? `${(h.uiAmount / 1e6).toFixed(2)}M`
+                            : h.uiAmount >= 1e3 ? `${(h.uiAmount / 1e3).toFixed(1)}K`
+                            : h.uiAmount.toFixed(2)}
+                        </Text>
+                        <Text style={[styles.holderPct, { color: isTop3 ? colors.primary : colors.textMuted }]}>
+                          {pct > 0 ? `${pct.toFixed(2)}%` : '—'}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
             </View>
           )}
         </View>
@@ -695,6 +752,116 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.06)',
     overflow: 'hidden',
     minHeight: 200,
+  },
+  holdersWrap: {
+    paddingBottom: spacing.md,
+  },
+  holdersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  holdersTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  holdersRefreshBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+    backgroundColor: colors.primaryMuted,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+  },
+  holdersRefreshText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  holdersLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xxl,
+  },
+  holdersLoadingText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+  },
+  holderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.md,
+  },
+  holderRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  holderRank: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  holderRankTop: {
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.4)',
+  },
+  holderRankText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.textMuted,
+  },
+  holderRankTextTop: {
+    color: colors.primary,
+  },
+  holderInfo: {
+    flex: 1,
+    gap: 5,
+  },
+  holderAddr: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    fontFamily: 'SpaceMono-Regular',
+  },
+  holderBar: {
+    height: 3,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  holderBarFill: {
+    height: 3,
+    borderRadius: 2,
+    opacity: 0.7,
+  },
+  holderRight: {
+    alignItems: 'flex-end',
+    gap: 2,
+    flexShrink: 0,
+  },
+  holderAmount: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  holderPct: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
   },
   comingSoon: {
     alignItems: 'center',

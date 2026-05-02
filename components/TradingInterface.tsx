@@ -244,15 +244,7 @@ export function TradingInterface({
           </View>
         </View>
         <View style={styles.inputBox}>
-          <TextInput
-            style={styles.amountInput}
-            value={amount}
-            onChangeText={setAmount}
-            placeholder="0.00"
-            placeholderTextColor={colors.textMuted}
-            keyboardType="decimal-pad"
-            editable={!isProcessing}
-          />
+          {/* Token selector on LEFT so logo is always visible */}
           <View style={styles.tokenSelector}>
             {fromLogoUrl ? (
               <Image source={{ uri: fromLogoUrl }} style={styles.tokenLogo} />
@@ -262,8 +254,17 @@ export function TradingInterface({
               </View>
             )}
             <Text style={styles.tokenSelectorText}>{fromSymbol}</Text>
-            <ChevronDown size={14} color={colors.textMuted} />
           </View>
+          <TextInput
+            style={styles.amountInput}
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0.00"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="decimal-pad"
+            editable={!isProcessing}
+            textAlign="right"
+          />
         </View>
       </View>
 
@@ -278,9 +279,7 @@ export function TradingInterface({
       <View style={styles.inputRow}>
         <Text style={styles.inputRowLabel}>You Receive (Est.)</Text>
         <View style={styles.inputBox}>
-          <Text style={[styles.amountInput, styles.receiveAmount]}>
-            {status === 'fetching_quote' ? '...' : getEstimatedOutput()}
-          </Text>
+          {/* Token selector on LEFT */}
           <View style={styles.tokenSelector}>
             {toLogoUrl ? (
               <Image source={{ uri: toLogoUrl }} style={styles.tokenLogo} />
@@ -290,8 +289,10 @@ export function TradingInterface({
               </View>
             )}
             <Text style={styles.tokenSelectorText}>{toSymbol}</Text>
-            <ChevronDown size={14} color={colors.textMuted} />
           </View>
+          <Text style={[styles.amountInput, styles.receiveAmount]}>
+            {status === 'fetching_quote' ? '...' : getEstimatedOutput()}
+          </Text>
         </View>
       </View>
 
