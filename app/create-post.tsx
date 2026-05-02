@@ -76,7 +76,8 @@ export default function CreatePostScreen() {
   const [showReplyPicker, setShowReplyPicker] = useState(false);
   const [showVisibilityPicker, setShowVisibilityPicker] = useState(false);
 
-  const displayName = profile?.username || profile?.wallet_address?.slice(0, 8) || 'Anonymous';
+  const displayName = profile?.username
+    || (profile?.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Wallet');
   const handleText = `@${(profile?.username || 'user').toLowerCase()}`;
 
   // ── Media picker (images + videos) ───────────────────────────────────────
@@ -330,7 +331,7 @@ export default function CreatePostScreen() {
                   )}
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
+                      <Text style={styles.mentionUsername}>{u.username || (u.wallet_address ? `${u.wallet_address.slice(0, 6)}...${u.wallet_address.slice(-4)}` : 'Wallet')}</Text>
                       <VerificationBadge profile={u} size="sm" />
                     </View>
                     <Text style={styles.mentionAddr}>

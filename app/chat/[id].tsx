@@ -36,7 +36,7 @@ export default function ChatScreen() {
     try {
       const [msgs, other] = await Promise.all([
         SocialService.getConversationMessages(profile.id, otherId),
-        SocialService.getOrCreateProfile(otherId),
+        SocialService.getProfile(otherId),
       ]);
       setMessages(msgs);
       setOtherUser(other);
@@ -137,7 +137,12 @@ export default function ChatScreen() {
   };
 
   const otherName = otherUser?.username
-    || (otherUser?.wallet_address ? `${otherUser.wallet_address.slice(0, 6)}...` : 'User');
+    || (otherUser?.wallet_address
+      ? `${otherUser.wallet_address.slice(0, 6)}...${otherUser.wallet_address.slice(-4)}`
+      : 'User');
+  const otherAddr = otherUser?.wallet_address
+    ? `${otherUser.wallet_address.slice(0, 6)}...${otherUser.wallet_address.slice(-4)}`
+    : null;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -158,7 +163,11 @@ export default function ChatScreen() {
             </View>
             <View style={styles.topUserInfo}>
               <Text style={styles.topUsername}>{otherName}</Text>
-              <Text style={styles.onlineText}>View profile</Text>
+              {otherAddr && otherUser?.username ? (
+                <Text style={styles.onlineText}>{otherAddr}</Text>
+              ) : (
+                <Text style={styles.onlineText}>View profile</Text>
+              )}
             </View>
           </TouchableOpacity>
 
