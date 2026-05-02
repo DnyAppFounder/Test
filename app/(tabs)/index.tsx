@@ -10,7 +10,8 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
-  Alert,
+  Modal,
+  Pressable,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -38,6 +39,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
+import { useProfile } from '@/contexts/ProfileContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { liveMarketService, LiveToken, MarketCategory } from '@/services/liveMarketService';
 import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
@@ -63,6 +65,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 export default function WalletHome() {
   const router = useRouter();
   const { activeAddress, activeWallet } = useWallet();
+  const { profile } = useProfile();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,6 +83,8 @@ export default function WalletHome() {
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [nfts, setNfts] = useState<NFT[]>([]);
   const [nftsLoading, setNftsLoading] = useState(false);
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [filterSort, setFilterSort] = useState<'default' | 'gainers' | 'losers' | 'volume' | 'mcap' | 'price_asc' | 'price_desc'>('default');
 
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
@@ -141,14 +146,15 @@ export default function WalletHome() {
   }, [activeAddress]);
 
   const loadWatchlist = useCallback(async () => {
+    if (!profile?.id) { setWatchlist([]); return; }
     try {
-      const data = await watchlistService.getWatchlist();
+      const data = await watchlistService.getWatchlist(profile.id);
       setWatchlist(data);
     } catch (error) {
       console.error('Error loading watchlist:', error);
       setWatchlist([]);
     }
-  }, []);
+  }, [profile?.id]);
 
   const loadNFTs = useCallback(async () => {
     if (!activeAddress) {
@@ -227,9 +233,18 @@ export default function WalletHome() {
     return () => clearTimeout(timer);
   }, [searchQuery, activeTab]);
 
-  const filteredTokens = searchQuery && searchQuery.length >= 2
-    ? searchResults
-    : liveTokens;
+  const baseTokens = searchQuery && searchQuery.length >= 2 ? searchResults : liveTokens;
+  const filteredTokens = [...baseTokens].sort((a, b) => {
+    switch (filterSort) {
+      case 'gainers': return b.priceChange24h - a.priceChange24h;
+      case 'losers': return a.priceChange24h - b.priceChange24h;
+      case 'volume': return (b.volume24h || 0) - (a.volume24h || 0);
+      case 'mcap': return (b.marketCap || 0) - (a.marketCap || 0);
+      case 'price_asc': return a.price - b.price;
+      case 'price_desc': return b.price - a.price;
+      default: return 0;
+    }
+  });
 
   const [copiedAddr, setCopiedAddr] = useState(false);
 
@@ -257,7 +272,43 @@ export default function WalletHome() {
     : '---';
   const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : (activeWallet ? 'Wallet' : 'No Wallet');
 
+  const FILTER_OPTIONS: { key: typeof filterSort; label: string }[] = [
+    { key: 'default', label: 'Default' },
+    { key: 'gainers', label: 'Top Gainers' },
+    { key: 'losers', label: 'Top Losers' },
+    { key: 'volume', label: 'Highest Volume' },
+    { key: 'mcap', label: 'Highest Market Cap' },
+    { key: 'price_desc', label: 'Price: High to Low' },
+    { key: 'price_asc', label: 'Price: Low to High' },
+  ];
+
   return (
+    <>
+    <Modal
+      visible={filterModalVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setFilterModalVisible(false)}
+    >
+      <Pressable style={styles.modalOverlay} onPress={() => setFilterModalVisible(false)}>
+        <Pressable style={styles.filterModal} onPress={() => {}}>
+          <Text style={styles.filterModalTitle}>Sort Tokens</Text>
+          {FILTER_OPTIONS.map(opt => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.filterOption, filterSort === opt.key && styles.filterOptionActive]}
+              onPress={() => { setFilterSort(opt.key); setFilterModalVisible(false); }}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.filterOptionText, filterSort === opt.key && styles.filterOptionTextActive]}>
+                {opt.label}
+              </Text>
+              {filterSort === opt.key && <View style={styles.filterOptionDot} />}
+            </TouchableOpacity>
+          ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
@@ -359,11 +410,11 @@ export default function WalletHome() {
           />
         </View>
         <TouchableOpacity
-          style={styles.filterBtn}
-          onPress={() => Alert.alert('Filter', 'Token filter options coming soon.')}
+          style={[styles.filterBtn, filterSort !== 'default' && styles.filterBtnActive]}
+          onPress={() => setFilterModalVisible(true)}
           activeOpacity={0.7}
         >
-          <SlidersHorizontal size={18} color={colors.textMuted} strokeWidth={2} />
+          <SlidersHorizontal size={18} color={filterSort !== 'default' ? colors.primary : colors.textMuted} strokeWidth={2} />
         </TouchableOpacity>
       </View>
 
@@ -594,7 +645,7 @@ export default function WalletHome() {
                   style={styles.starBtn}
                   onPress={async (e) => {
                     e.stopPropagation();
-                    await watchlistService.removeFromWatchlist(item.token_address);
+                    if (profile?.id) await watchlistService.removeFromWatchlist(item.token_address, profile.id);
                     await loadWatchlist();
                   }}
                 >
@@ -608,6 +659,7 @@ export default function WalletHome() {
 
       <View style={{ height: 100 }} />
     </ScrollView>
+    </>
   );
 }
 
@@ -1605,5 +1657,57 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.primary,
+  },
+  filterBtnActive: {
+    backgroundColor: colors.primaryMuted,
+    borderColor: colors.primary,
+    borderWidth: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  filterModal: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: spacing.lg,
+    paddingBottom: 40,
+    paddingHorizontal: spacing.lg,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  filterModalTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: spacing.md,
+  },
+  filterOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  filterOptionActive: {
+    borderBottomColor: 'rgba(139,92,246,0.15)',
+  },
+  filterOptionText: {
+    fontSize: fontSize.md,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  filterOptionTextActive: {
+    color: colors.primary,
+    fontWeight: '700',
+  },
+  filterOptionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.primary,
   },
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { Send, MessageCircle, User } from 'lucide-react-native';
 import { tokenDiscussionService, TokenDiscussion } from '@/services/tokenDiscussionService';
+import { SocialService, UserProfile } from '@/services/socialService';
+import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
 interface TokenDiscussionProps {
@@ -19,15 +22,22 @@ interface TokenDiscussionProps {
   userWallet?: string;
 }
 
+type ProfileCache = Record<string, UserProfile | null>;
+
+function shortAddr(addr: string) {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
 export function TokenDiscussionComponent({ tokenAddress, userWallet }: TokenDiscussionProps) {
   const [discussions, setDiscussions] = useState<TokenDiscussion[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [posting, setPosting] = useState(false);
+  const profileCache = useRef<ProfileCache>({});
+  const [profileMap, setProfileMap] = useState<ProfileCache>({});
 
   useEffect(() => {
     loadDiscussions();
-
     const interval = setInterval(loadDiscussions, 30000);
     return () => clearInterval(interval);
   }, [tokenAddress]);
@@ -36,22 +46,38 @@ export function TokenDiscussionComponent({ tokenAddress, userWallet }: TokenDisc
     const data = await tokenDiscussionService.getDiscussions(tokenAddress);
     setDiscussions(data);
     setLoading(false);
+    // Fetch profiles for any wallet addresses not yet cached
+    const missing = data.filter(d => !(d.user_wallet in profileCache.current));
+    if (missing.length === 0) return;
+    const fetched = await Promise.all(
+      missing.map(async (d) => {
+        try {
+          const p = await SocialService.getOrCreateProfile(d.user_wallet);
+          return { wallet: d.user_wallet, profile: p };
+        } catch {
+          return { wallet: d.user_wallet, profile: null };
+        }
+      })
+    );
+    const updates: ProfileCache = {};
+    for (const { wallet, profile } of fetched) {
+      profileCache.current[wallet] = profile;
+      updates[wallet] = profile;
+    }
+    setProfileMap(prev => ({ ...prev, ...updates }));
   };
 
   const handlePost = async () => {
     if (!message.trim()) return;
     if (!userWallet) {
-      alert('Please connect your wallet to post messages');
       return;
     }
-
     setPosting(true);
     const result = await tokenDiscussionService.postMessage(
       tokenAddress,
       userWallet,
       message.trim()
     );
-
     if (result) {
       setMessage('');
       await loadDiscussions();
@@ -59,30 +85,48 @@ export function TokenDiscussionComponent({ tokenAddress, userWallet }: TokenDisc
     setPosting(false);
   };
 
-  const renderMessage = ({ item }: { item: TokenDiscussion }) => (
-    <View style={styles.messageCard}>
-      <View style={styles.messageHeader}>
-        <View style={styles.userIcon}>
-          <User size={14} color={colors.primary} strokeWidth={2} />
+  const renderMessage = ({ item }: { item: TokenDiscussion }) => {
+    const p = profileCache.current[item.user_wallet] ?? null;
+    const displayName = p?.username || shortAddr(item.user_wallet);
+    const showAddr = !!p?.username;
+
+    return (
+      <View style={styles.messageCard}>
+        <View style={styles.messageHeader}>
+          <View style={styles.avatarWrap}>
+            {p?.avatar_url ? (
+              <Image source={{ uri: p.avatar_url }} style={styles.avatarImg} />
+            ) : (
+              <User size={14} color={colors.primary} strokeWidth={2} />
+            )}
+          </View>
+          <View style={styles.authorInfo}>
+            <View style={styles.nameRow}>
+              <Text style={styles.userName}>{displayName}</Text>
+              {p && (p.is_verified || (p as any).verified_basic || (p as any).premium_expiration) && (
+                <VerificationBadge profile={p as any} size="sm" />
+              )}
+            </View>
+            {showAddr && (
+              <Text style={styles.walletAddr}>{shortAddr(item.user_wallet)}</Text>
+            )}
+          </View>
+          <Text style={styles.timestamp}>
+            {tokenDiscussionService.formatTimeAgo(item.created_at)}
+          </Text>
         </View>
-        <Text style={styles.userName}>
-          {tokenDiscussionService.formatWalletAddress(item.user_wallet)}
-        </Text>
-        <Text style={styles.timestamp}>
-          {tokenDiscussionService.formatTimeAgo(item.created_at)}
-        </Text>
+
+        <Text style={styles.messageText}>{item.message}</Text>
+
+        {item.replies_count > 0 && (
+          <View style={styles.replyCount}>
+            <MessageCircle size={12} color={colors.textMuted} strokeWidth={2} />
+            <Text style={styles.replyCountText}>{item.replies_count} replies</Text>
+          </View>
+        )}
       </View>
-
-      <Text style={styles.messageText}>{item.message}</Text>
-
-      {item.replies_count > 0 && (
-        <View style={styles.replyCount}>
-          <MessageCircle size={12} color={colors.textMuted} strokeWidth={2} />
-          <Text style={styles.replyCountText}>{item.replies_count} replies</Text>
-        </View>
-      )}
-    </View>
-  );
+    );
+  };
 
   if (loading) {
     return (
@@ -197,27 +241,48 @@ const styles = StyleSheet.create({
   },
   messageHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing.sm,
     marginBottom: spacing.sm,
   },
-  userIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  avatarWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: colors.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  avatarImg: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  authorInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   userName: {
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.textPrimary,
-    flex: 1,
+  },
+  walletAddr: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
   },
   timestamp: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
+    flexShrink: 0,
   },
   messageText: {
     fontSize: fontSize.md,

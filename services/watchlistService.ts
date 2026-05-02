@@ -10,15 +10,12 @@ export interface WatchlistToken {
 }
 
 class WatchlistService {
-  async isInWatchlist(tokenAddress: string): Promise<boolean> {
+  async isInWatchlist(tokenAddress: string, profileId: string): Promise<boolean> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return false;
-
       const { data, error } = await supabase
         .from('watchlist')
         .select('id')
-        .eq('user_id', user.id)
+        .eq('user_id', profileId)
         .eq('token_address', tokenAddress)
         .maybeSingle();
 
@@ -33,14 +30,12 @@ class WatchlistService {
   async addToWatchlist(
     tokenAddress: string,
     tokenSymbol: string,
-    tokenName: string
+    tokenName: string,
+    profileId: string
   ): Promise<boolean> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-
       const { error } = await supabase.from('watchlist').insert({
-        user_id: user.id,
+        user_id: profileId,
         token_address: tokenAddress,
         token_symbol: tokenSymbol,
         token_name: tokenName,
@@ -54,15 +49,12 @@ class WatchlistService {
     }
   }
 
-  async removeFromWatchlist(tokenAddress: string): Promise<boolean> {
+  async removeFromWatchlist(tokenAddress: string, profileId: string): Promise<boolean> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-
       const { error } = await supabase
         .from('watchlist')
         .delete()
-        .eq('user_id', user.id)
+        .eq('user_id', profileId)
         .eq('token_address', tokenAddress);
 
       if (error) throw error;
@@ -73,15 +65,12 @@ class WatchlistService {
     }
   }
 
-  async getWatchlist(): Promise<WatchlistToken[]> {
+  async getWatchlist(profileId: string): Promise<WatchlistToken[]> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return [];
-
       const { data, error } = await supabase
         .from('watchlist')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('user_id', profileId)
         .order('added_at', { ascending: false });
 
       if (error) throw error;
@@ -95,14 +84,14 @@ class WatchlistService {
   async toggleWatchlist(
     tokenAddress: string,
     tokenSymbol: string,
-    tokenName: string
+    tokenName: string,
+    profileId: string
   ): Promise<boolean> {
-    const isInWatchlist = await this.isInWatchlist(tokenAddress);
-
-    if (isInWatchlist) {
-      return await this.removeFromWatchlist(tokenAddress);
+    const inList = await this.isInWatchlist(tokenAddress, profileId);
+    if (inList) {
+      return this.removeFromWatchlist(tokenAddress, profileId);
     } else {
-      return await this.addToWatchlist(tokenAddress, tokenSymbol, tokenName);
+      return this.addToWatchlist(tokenAddress, tokenSymbol, tokenName, profileId);
     }
   }
 }

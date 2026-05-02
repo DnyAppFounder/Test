@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera } from 'lucide-react-native';
+import VerificationBadge from '@/components/VerificationBadge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -31,7 +32,7 @@ type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' |
 export default function SettingsScreen() {
   const router = useRouter();
   const { t, language, setLanguage } = useLanguage();
-  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, setActiveWallet, connectedWallet, disconnectExternalWallet, fullLogout } = useWallet();
+  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, activeAddress, setActiveWallet, connectedWallet, disconnectExternalWallet, fullLogout } = useWallet();
   const { profile, updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
   const [editUsername, setEditUsername] = useState('');
@@ -45,7 +46,10 @@ export default function SettingsScreen() {
   const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
-  const walletAddress = selectedAccount?.address || 'anonymous';
+  const rawWalletAddress = activeAddress || selectedAccount?.address || '';
+  const walletAddress = rawWalletAddress
+    ? `${rawWalletAddress.slice(0, 6)}...${rawWalletAddress.slice(-4)}`
+    : '';
 
   const loadNotifSettings = useCallback(async () => {
     if (!profile) return;
@@ -298,8 +302,15 @@ export default function SettingsScreen() {
             )}
           </View>
           <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>{profile?.username || 'Set username'}</Text>
-            <Text style={styles.profileAddress}>{walletAddress.slice(0, 16)}...</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.profileName}>{profile?.username || 'Set username'}</Text>
+              {profile && (profile.is_verified || (profile as any).verified_basic || (profile as any).premium_expiration) && (
+                <VerificationBadge profile={profile as any} size="sm" />
+              )}
+            </View>
+            {walletAddress ? (
+              <Text style={styles.profileAddress}>{walletAddress}</Text>
+            ) : null}
           </View>
           <ChevronRight size={20} color={colors.textMuted} />
         </TouchableOpacity>

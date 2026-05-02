@@ -36,6 +36,7 @@ import { TokenActivityFeed } from '@/components/TokenActivityFeed';
 import { TokenDiscussionComponent } from '@/components/TokenDiscussion';
 import { watchlistService } from '@/services/watchlistService';
 import { useWallet } from '@/contexts/WalletContext';
+import { useProfile } from '@/contexts/ProfileContext';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
@@ -52,6 +53,7 @@ export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
   const router = useRouter();
   const { activeAddress, tokens } = useWallet();
+  const { profile } = useProfile();
 
   const [token, setToken] = useState<LiveToken | null>(null);
   const [loading, setLoading] = useState(true);
@@ -128,16 +130,16 @@ export default function TokenDetailScreen() {
   };
 
   const checkWatchlistStatus = async () => {
-    if (!address) { setCheckingWatchlist(false); return; }
+    if (!address || !profile?.id) { setCheckingWatchlist(false); return; }
     try {
-      setIsWatchlisted(await watchlistService.isInWatchlist(address));
+      setIsWatchlisted(await watchlistService.isInWatchlist(address, profile.id));
     } catch {}
     finally { setCheckingWatchlist(false); }
   };
 
   const toggleWatchlist = async () => {
-    if (!token) return;
-    const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name).catch(() => false);
+    if (!token || !profile?.id) return;
+    const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name, profile.id).catch(() => false);
     if (success) setIsWatchlisted(w => !w);
   };
 
