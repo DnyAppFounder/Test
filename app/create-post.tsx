@@ -23,6 +23,7 @@ import {
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
   Search, Megaphone, Film,
 } from 'lucide-react-native';
+import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService } from '@/services/socialService';
@@ -281,11 +282,7 @@ export default function CreatePostScreen() {
             <View style={styles.userInfo}>
               <View style={styles.nameRow}>
                 <Text style={styles.username}>{displayName}</Text>
-                {profile?.is_verified && (
-                  <View style={styles.verifiedBadge}>
-                    <Check size={9} color={colors.white} strokeWidth={3} />
-                  </View>
-                )}
+                {profile && <VerificationBadge profile={profile} size="sm" />}
               </View>
               <Text style={styles.handle}>{handleText}</Text>
               <TouchableOpacity
@@ -334,7 +331,7 @@ export default function CreatePostScreen() {
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                       <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
-                      {u.is_verified && <Check size={11} color={colors.primary} strokeWidth={3} />}
+                      <VerificationBadge profile={u} size="sm" />
                     </View>
                     <Text style={styles.mentionAddr}>
                       {u.wallet_address?.slice(0, 6)}...{u.wallet_address?.slice(-4)}
