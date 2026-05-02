@@ -26,7 +26,6 @@ config.resolver.extraNodeModules = {
   process: require.resolve('process/browser.js'),
   buffer: require.resolve('buffer/'),
   'readable-stream': safeReadableStream,
-  crypto: path.resolve(__dirname, 'lib/crypto-shim.js'),
 };
 
 // Intercept readable-stream requires to always use v3 (safe for browser)

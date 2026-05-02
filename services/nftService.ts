@@ -25,8 +25,6 @@ export interface NFTCollection {
   blockchain_id: string;
 }
 
-const FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
-
 function getNftRpcUrl(): string {
   const supabaseUrl = typeof process !== 'undefined'
     ? process.env?.EXPO_PUBLIC_SUPABASE_URL
@@ -40,7 +38,8 @@ function getNftRpcUrl(): string {
   if (directUrl) {
     return directUrl;
   }
-  return FALLBACK_RPC;
+  console.error('[NFTService] RPC error: No RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL or EXPO_PUBLIC_SUPABASE_URL.');
+  throw new Error('RPC error: No Solana RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL.');
 }
 
 function sanitizeImageUrl(url?: string): string | null {

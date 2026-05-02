@@ -18,7 +18,6 @@ import { useWallet } from '@/contexts/WalletContext';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import {
   PublicKey,
-  Keypair,
   SystemProgram,
   Transaction,
   LAMPORTS_PER_SOL,
@@ -175,8 +174,7 @@ export default function SendScreen() {
         // Internal wallet — sign with derived keypair (auto-unlocks if needed)
         const walletManager = SecureWalletManager.getInstance();
         const mnemonic = await walletManager.getMnemonicUnlocked();
-        const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
-        const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
+        const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
 
         transaction.sign(keypair);
         const rawTx = transaction.serialize();

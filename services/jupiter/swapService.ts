@@ -169,15 +169,6 @@ class JupiterSwapService {
       return new Map();
     }
   }
-
-  formatAmount(rawAmount: number, decimals: number): string {
-    if (!rawAmount || !decimals) return '0';
-    return (rawAmount / Math.pow(10, decimals)).toFixed(decimals > 6 ? 6 : decimals);
-  }
-
-  calculatePriceImpact(quote: JupiterQuote): number {
-    return typeof quote.priceImpactPct === 'number' ? quote.priceImpactPct : 0;
-  }
 }
 
 export const jupiterSwapService = new JupiterSwapService();

@@ -13,6 +13,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
 import {
   Send,
@@ -260,12 +261,12 @@ export default function CommunityScreen() {
   };
 
   const handleConfirmPromotion = async () => {
-    if (!selectedPostId || !selectedTierKey) return;
-    setPromoteStep('processing');
-    await new Promise(r => setTimeout(r, 1000));
-    await SocialService.promotePost(selectedPostId, selectedTierKey);
-    setPromoteStep('done');
-    await loadFeed();
+    // Promotion payment not configured — show unavailable message
+    Alert.alert(
+      'Promotion Not Configured',
+      'Promotion is not configured yet. Payment processing will be available in a future update.',
+      [{ text: 'OK' }]
+    );
   };
 
   const closePromoteModal = () => {

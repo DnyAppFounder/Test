@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Alert } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck, Trash2 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { Post, UserProfile } from '@/services/socialService';
@@ -39,7 +39,10 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
   };
 
   const handleDelete = () => {
-    onDelete?.(post.id);
+    Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => onDelete?.(post.id) },
+    ]);
   };
 
   const handleShare = async () => {
