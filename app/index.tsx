@@ -11,10 +11,10 @@ export default function Index() {
   useEffect(() => {
     AsyncStorage.getItem(ONBOARDING_KEY)
       .then((completed) => {
-        setTarget(completed === 'true' ? '/(tabs)' : '/onboarding');
+        setTarget(completed === 'true' ? '/(tabs)' : '/onboarding/index');
       })
       .catch(() => {
-        setTarget('/onboarding');
+        setTarget('/onboarding/index');
       });
   }, []);
 

@@ -41,7 +41,9 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="index" />
-              <Stack.Screen name="onboarding" />
+              <Stack.Screen name="onboarding/index" />
+              <Stack.Screen name="onboarding/create" />
+              <Stack.Screen name="onboarding/import" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="chat/[id]" />
               <Stack.Screen name="create-post" />
