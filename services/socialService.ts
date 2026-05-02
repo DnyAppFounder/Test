@@ -8,6 +8,9 @@ export interface UserProfile {
   avatar_url: string | null;
   token_balance: number;
   is_verified: boolean;
+  is_premium: boolean;
+  premium_expires_at: string | null;
+  premium_tier: 'sol' | 'dawen' | null;
   created_at: string;
 }
 
@@ -694,6 +697,75 @@ export class SocialService {
       .eq('id', postId)
       .eq('author_id', authorId);
     return !error;
+  }
+
+  // Full cascading delete: likes, comments, reposts, notifications, then post
+  static async deletePostFull(postId: string, authorId: string): Promise<boolean> {
+    // Verify ownership first
+    const { data: post } = await supabase
+      .from('posts')
+      .select('id, author_id')
+      .eq('id', postId)
+      .eq('author_id', authorId)
+      .maybeSingle();
+    if (!post) return false;
+
+    await Promise.all([
+      supabase.from('post_likes').delete().eq('post_id', postId),
+      supabase.from('reposts').delete().eq('post_id', postId),
+      supabase.from('notifications').delete().eq('post_id', postId),
+    ]);
+    // Delete comments after their likes
+    const { data: comments } = await supabase.from('post_comments').select('id').eq('post_id', postId);
+    if (comments && comments.length > 0) {
+      const commentIds = comments.map((c: any) => c.id);
+      await supabase.from('comment_likes').delete().in('comment_id', commentIds);
+      await supabase.from('post_comments').delete().eq('post_id', postId);
+    }
+    const { error } = await supabase.from('posts').delete().eq('id', postId).eq('author_id', authorId);
+    return !error;
+  }
+
+  // Get list of followers for a profile
+  static async getFollowers(profileId: string): Promise<UserProfile[]> {
+    const { data } = await supabase
+      .from('follows')
+      .select('follower_id')
+      .eq('following_id', profileId);
+    if (!data || data.length === 0) return [];
+    const ids = data.map((r: any) => r.follower_id);
+    const { data: profiles } = await supabase.from('user_profiles').select('*').in('id', ids);
+    return profiles || [];
+  }
+
+  // Get list of users this profile is following
+  static async getFollowing(profileId: string): Promise<UserProfile[]> {
+    const { data } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', profileId);
+    if (!data || data.length === 0) return [];
+    const ids = data.map((r: any) => r.following_id);
+    const { data: profiles } = await supabase.from('user_profiles').select('*').in('id', ids);
+    return profiles || [];
+  }
+
+  // Purchase premium certification
+  static async purchasePremiumCertification(profileId: string, tier: 'sol' | 'dawen'): Promise<boolean> {
+    const expiresAt = new Date();
+    expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 year
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({ is_premium: true, premium_tier: tier, premium_expires_at: expiresAt.toISOString() })
+      .eq('id', profileId);
+    return !error;
+  }
+
+  // Check if premium is still active
+  static isPremiumActive(profile: UserProfile): boolean {
+    if (!profile.is_premium) return false;
+    if (!profile.premium_expires_at) return true;
+    return new Date(profile.premium_expires_at) > new Date();
   }
 
   // ─── Notifications ────────────────────────────────────────────────────────
