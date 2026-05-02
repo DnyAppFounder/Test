@@ -895,4 +895,96 @@ export class SocialService {
       .eq('receiver_id', receiverId)
       .eq('read', false);
   }
+
+  static async searchUsers(query: string, limit = 20): Promise<UserProfile[]> {
+    if (!query.trim()) return [];
+    const { data } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .ilike('username', `%${query.trim()}%`)
+      .limit(limit);
+    return data || [];
+  }
+
+  // Posts where this user left a comment (replies tab)
+  static async getUserReplies(userId: string): Promise<Post[]> {
+    const { data: comments } = await supabase
+      .from('post_comments')
+      .select('post_id, created_at')
+      .eq('author_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(40);
+
+    if (!comments || comments.length === 0) return [];
+
+    const postIds = [...new Set(comments.map((c: any) => c.post_id))];
+    const { data: posts } = await supabase
+      .from('posts')
+      .select('*')
+      .in('id', postIds);
+
+    if (!posts || posts.length === 0) return [];
+
+    const authorIds = [...new Set(posts.map((p: any) => p.author_id))];
+    const { data: authors } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .in('id', authorIds);
+    const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
+
+    return posts.map((p: any) => ({ ...p, author: authorMap.get(p.author_id) }));
+  }
+
+  // Posts the user has liked
+  static async getUserLikedPosts(userId: string): Promise<Post[]> {
+    const { data: likes } = await supabase
+      .from('post_likes')
+      .select('post_id, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(40);
+
+    if (!likes || likes.length === 0) return [];
+
+    const postIds = likes.map((l: any) => l.post_id);
+    const { data: posts } = await supabase
+      .from('posts')
+      .select('*')
+      .in('id', postIds);
+
+    if (!posts || posts.length === 0) return [];
+
+    const authorIds = [...new Set(posts.map((p: any) => p.author_id))];
+    const { data: authors } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .in('id', authorIds);
+    const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
+
+    return posts.map((p: any) => ({
+      ...p,
+      author: authorMap.get(p.author_id),
+      liked_by_user: true,
+    }));
+  }
+
+  // Posts by this user that have a media attachment
+  static async getUserMediaPosts(userId: string): Promise<Post[]> {
+    const { data } = await supabase
+      .from('posts')
+      .select('*')
+      .eq('author_id', userId)
+      .not('media_url', 'is', null)
+      .order('created_at', { ascending: false });
+
+    if (!data || data.length === 0) return [];
+
+    const { data: author } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    return data.map((p: any) => ({ ...p, author: author || undefined }));
+  }
 }

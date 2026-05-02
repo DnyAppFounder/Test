@@ -77,6 +77,18 @@ export default function CommunityScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [convsLoading, setConvsLoading] = useState(false);
 
+  // Compose new message
+  const [showComposeModal, setShowComposeModal] = useState(false);
+  const [composeSearch, setComposeSearch] = useState('');
+  const [composeResults, setComposeResults] = useState<any[]>([]);
+  const [composeSearching, setComposeSearching] = useState(false);
+
+  // Profile tab posts
+  const [profilePosts, setProfilePosts] = useState<Post[]>([]);
+  const [profilePostsLoading, setProfilePostsLoading] = useState(false);
+  const [profileFollowers, setProfileFollowers] = useState(0);
+  const [profileFollowing, setProfileFollowing] = useState(0);
+
   // Notifications state
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notifLoading, setNotifLoading] = useState(false);
@@ -136,7 +148,31 @@ export default function CommunityScreen() {
   useEffect(() => {
     if (activeTab === 'notifications') loadNotifications();
     if (activeTab === 'messages') loadConversations();
-  }, [activeTab, loadNotifications, loadConversations]);
+    if (activeTab === 'profile' && profile?.id) {
+      setProfilePostsLoading(true);
+      Promise.all([
+        SocialService.getUserPosts(profile.id),
+        SocialService.getFollowerCount(profile.id),
+        SocialService.getFollowingCount(profile.id),
+      ]).then(([posts, followers, following]) => {
+        setProfilePosts(posts);
+        setProfileFollowers(followers);
+        setProfileFollowing(following);
+      }).finally(() => setProfilePostsLoading(false));
+    }
+  }, [activeTab, loadNotifications, loadConversations, profile?.id]);
+
+  const handleComposeSearch = async (q: string) => {
+    setComposeSearch(q);
+    if (!q.trim()) { setComposeResults([]); return; }
+    setComposeSearching(true);
+    try {
+      const results = await SocialService.searchUsers(q.trim());
+      setComposeResults(results.filter((u: any) => u.id !== profile?.id));
+    } finally {
+      setComposeSearching(false);
+    }
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -351,22 +387,105 @@ export default function CommunityScreen() {
   };
 
   const renderProfileTab = () => {
-    return (
-      <View style={styles.emptyState}>
-        <View style={styles.emptyIconWrap}>
-          <User size={44} color={colors.primary} strokeWidth={1.5} />
+    if (!profile) {
+      return (
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrap}>
+            <User size={44} color={colors.primary} strokeWidth={1.5} />
+          </View>
+          <Text style={styles.emptyTitle}>No Profile</Text>
+          <Text style={styles.emptySubtitle}>Connect a wallet to create your profile</Text>
+          <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/onboarding' as any)}>
+            <Text style={styles.emptyBtnText}>Connect Wallet</Text>
+          </TouchableOpacity>
         </View>
-        <Text style={styles.emptyTitle}>{profile ? profile.username || 'My Profile' : 'No Profile'}</Text>
-        <Text style={styles.emptySubtitle}>
-          {profile ? 'Tap to view your full profile' : 'Connect a wallet to create your profile'}
-        </Text>
-        <TouchableOpacity
-          style={styles.emptyBtn}
-          onPress={() => profile?.id ? router.push(`/profile/${profile.id}` as any) : router.push('/onboarding' as any)}
-        >
-          <Text style={styles.emptyBtnText}>{profile ? 'View Profile' : 'Connect Wallet'}</Text>
-        </TouchableOpacity>
-      </View>
+      );
+    }
+
+    const displayName = profile.username || (activeAddress ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}` : 'Anonymous');
+
+    return (
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+        {/* Profile card */}
+        <View style={styles.profileCard}>
+          <View style={styles.profileCardTop}>
+            <View style={styles.profileAvatarLg}>
+              {profile.avatar_url
+                ? <Image source={{ uri: profile.avatar_url }} style={styles.profileAvatarLgImg} />
+                : <View style={styles.profileAvatarLgFallback}><User size={36} color={colors.textMuted} /></View>
+              }
+            </View>
+            <View style={styles.profileCardInfo}>
+              <Text style={styles.profileCardName} numberOfLines={1}>{displayName}</Text>
+              {profile.wallet_address ? (
+                <Text style={styles.profileCardAddr} numberOfLines={1}>
+                  {profile.wallet_address.slice(0, 6)}...{profile.wallet_address.slice(-4)}
+                </Text>
+              ) : null}
+              {profile.bio ? (
+                <Text style={styles.profileCardBio} numberOfLines={2}>{profile.bio}</Text>
+              ) : null}
+            </View>
+          </View>
+
+          <View style={styles.profileCardStats}>
+            <View style={styles.profileCardStat}>
+              <Text style={styles.profileCardStatValue}>{profilePosts.length}</Text>
+              <Text style={styles.profileCardStatLabel}>Posts</Text>
+            </View>
+            <View style={styles.profileCardStatDivider} />
+            <View style={styles.profileCardStat}>
+              <Text style={styles.profileCardStatValue}>{profileFollowers}</Text>
+              <Text style={styles.profileCardStatLabel}>Followers</Text>
+            </View>
+            <View style={styles.profileCardStatDivider} />
+            <View style={styles.profileCardStat}>
+              <Text style={styles.profileCardStatValue}>{profileFollowing}</Text>
+              <Text style={styles.profileCardStatLabel}>Following</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.viewFullProfileBtn}
+            onPress={() => router.push(`/profile/${profile.id}` as any)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.viewFullProfileBtnText}>View Full Profile</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* My posts section */}
+        <View style={styles.profileSectionHeader}>
+          <Text style={styles.profileSectionTitle}>My Posts</Text>
+        </View>
+
+        {profilePostsLoading ? (
+          <ActivityIndicator color={colors.primary} style={{ marginTop: 32 }} />
+        ) : profilePosts.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingTop: 32, gap: 12 }}>
+            <Text style={{ color: colors.textMuted, fontSize: fontSize.md }}>No posts yet</Text>
+            <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/create-post' as any)}>
+              <Text style={styles.emptyBtnText}>Create Post</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          profilePosts.map(post => (
+            <PostCard
+              key={post.id}
+              post={post}
+              currentProfile={profile}
+              onLike={handleLike}
+              onComment={openCommentsModal}
+              onRepost={handleRepost}
+              onPromote={openPromoteModal}
+              onDelete={async (pid) => {
+                await SocialService.deletePost(pid, profile.id);
+                setProfilePosts(prev => prev.filter(p => p.id !== pid));
+              }}
+            />
+          ))
+        )}
+      </ScrollView>
     );
   };
 
@@ -556,7 +675,7 @@ export default function CommunityScreen() {
           <TouchableOpacity
             style={styles.composeBtn}
             activeOpacity={0.85}
-            onPress={() => Alert.alert('New Message', 'Visit a user\'s profile to start a conversation.')}
+            onPress={() => { setComposeSearch(''); setComposeResults([]); setShowComposeModal(true); }}
           >
             <Plus size={22} color={colors.white} strokeWidth={2.5} />
           </TouchableOpacity>
@@ -592,17 +711,7 @@ export default function CommunityScreen() {
           <TouchableOpacity
             key={tab.key}
             style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
-            onPress={() => {
-              if (tab.key === 'profile') {
-                if (profile?.id) {
-                  router.push(`/profile/${profile.id}` as any);
-                } else {
-                  setActiveTab('profile');
-                }
-                return;
-              }
-              setActiveTab(tab.key);
-            }}
+            onPress={() => setActiveTab(tab.key)}
             activeOpacity={0.8}
           >
             <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
@@ -616,6 +725,70 @@ export default function CommunityScreen() {
       <View style={styles.tabContent}>
         {renderActiveTab()}
       </View>
+
+      {/* Compose New Message Modal */}
+      <Modal visible={showComposeModal} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={[styles.modalSheet, { maxHeight: '75%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>New Message</Text>
+              <TouchableOpacity onPress={() => setShowComposeModal(false)}>
+                <X size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.msgSearchWrap}>
+              <Search size={17} color={colors.textMuted} strokeWidth={2} />
+              <TextInput
+                style={styles.msgSearchInput}
+                placeholder="Search by username..."
+                placeholderTextColor={colors.textMuted}
+                value={composeSearch}
+                onChangeText={handleComposeSearch}
+                autoFocus
+                autoCapitalize="none"
+              />
+              {composeSearching && <ActivityIndicator size="small" color={colors.primary} />}
+            </View>
+            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+              {composeSearch.trim() && composeResults.length === 0 && !composeSearching ? (
+                <View style={{ alignItems: 'center', paddingTop: 32 }}>
+                  <Text style={{ color: colors.textMuted, fontSize: fontSize.md }}>No users found</Text>
+                </View>
+              ) : (
+                composeResults.map((user: any, idx: number) => {
+                  const name = user.username || `${user.wallet_address?.slice(0, 6)}...`;
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[styles.convRow, idx < composeResults.length - 1 && styles.convRowBorder]}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        setShowComposeModal(false);
+                        router.push(`/chat/${user.id}` as any);
+                      }}
+                    >
+                      <View style={styles.convAvatarWrap}>
+                        {user.avatar_url
+                          ? <Image source={{ uri: user.avatar_url }} style={styles.convAvatar} />
+                          : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>
+                        }
+                      </View>
+                      <View style={styles.convBody}>
+                        <Text style={styles.convUsername}>{name}</Text>
+                        {user.bio ? <Text style={styles.convLastMsg} numberOfLines={1}>{user.bio}</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Create Post Modal */}
       <Modal visible={showCreateModal} animationType="slide" transparent>
@@ -1764,5 +1937,112 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceElevated,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  // Inline profile tab
+  profileCard: {
+    margin: spacing.lg,
+    backgroundColor: '#12121A',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  profileCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  profileAvatarLg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    overflow: 'hidden',
+  },
+  profileAvatarLgImg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  profileAvatarLgFallback: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surfaceElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileCardInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  profileCardName: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  profileCardAddr: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    fontFamily: 'monospace',
+  },
+  profileCardBio: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  profileCardStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceBorder,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+  },
+  profileCardStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  profileCardStatValue: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  profileCardStatLabel: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  profileCardStatDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: colors.surfaceBorder,
+  },
+  viewFullProfileBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  viewFullProfileBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.white,
+  },
+  profileSectionHeader: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+  },
+  profileSectionTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: colors.textPrimary,
   },
 });

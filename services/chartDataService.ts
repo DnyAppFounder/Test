@@ -9,11 +9,54 @@ export interface CandleData {
 
 export type TimeFrame = '1m' | '5m' | '15m' | '1H' | '1D' | '4H' | '1W' | '1M';
 
-const BIRDEYE_API = 'https://public-api.birdeye.so';
+const GECKO_TERMINAL_API = 'https://api.geckoterminal.com/api/v2';
+const DEX_SCREENER_API = 'https://api.dexscreener.com';
+
+// Maps our timeframe to GeckoTerminal aggregate (minutes) and limit
+const GECKO_TIMEFRAME_MAP: Record<TimeFrame, { aggregate: number; timeframe: string; limit: number }> = {
+  '1m':  { aggregate: 1,    timeframe: 'minute', limit: 120 },
+  '5m':  { aggregate: 5,    timeframe: 'minute', limit: 144 },
+  '15m': { aggregate: 15,   timeframe: 'minute', limit: 96  },
+  '1H':  { aggregate: 1,    timeframe: 'hour',   limit: 168 },
+  '4H':  { aggregate: 4,    timeframe: 'hour',   limit: 90  },
+  '1D':  { aggregate: 1,    timeframe: 'day',    limit: 90  },
+  '1W':  { aggregate: 1,    timeframe: 'day',    limit: 90  },
+  '1M':  { aggregate: 1,    timeframe: 'day',    limit: 365 },
+};
 
 class ChartDataService {
   private cache = new Map<string, { data: CandleData[]; timestamp: number }>();
-  private readonly CACHE_DURATION = 60 * 1000; // 1 minute
+  // pair address cache: tokenMint -> pairAddress
+  private pairCache = new Map<string, { pairAddress: string; timestamp: number }>();
+  private readonly CACHE_DURATION = 60 * 1000;
+  private readonly PAIR_CACHE_DURATION = 10 * 60 * 1000;
+
+  private async resolvePairAddress(tokenAddress: string): Promise<string | null> {
+    const cached = this.pairCache.get(tokenAddress);
+    if (cached && Date.now() - cached.timestamp < this.PAIR_CACHE_DURATION) {
+      return cached.pairAddress;
+    }
+
+    try {
+      const response = await fetch(
+        `${DEX_SCREENER_API}/latest/dex/tokens/${tokenAddress}`
+      );
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const pairs: any[] = (data.pairs || []).filter((p: any) => p.chainId === 'solana');
+      if (pairs.length === 0) return null;
+
+      // Pick highest liquidity pair
+      pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+      const pairAddress = pairs[0].pairAddress;
+
+      this.pairCache.set(tokenAddress, { pairAddress, timestamp: Date.now() });
+      return pairAddress;
+    } catch {
+      return null;
+    }
+  }
 
   async getOHLCVData(
     tokenAddress: string,
@@ -27,123 +70,50 @@ class ChartDataService {
     }
 
     try {
-      // Map timeframes to intervals
-      const intervalMap: Record<TimeFrame, string> = {
-        '1m': '1m',
-        '5m': '5m',
-        '15m': '15m',
-        '1H': '1h',
-        '4H': '4h',
-        '1D': '1d',
-        '1W': '1w',
-        '1M': '1M',
-      };
+      const pairAddress = await this.resolvePairAddress(tokenAddress);
+      if (!pairAddress) {
+        return this.getEmptyData();
+      }
 
-      const interval = intervalMap[timeFrame];
-      const now = Math.floor(Date.now() / 1000);
-      const timeAgoMap: Record<TimeFrame, number> = {
-        '1m': 2 * 60 * 60, // 2 hours
-        '5m': 6 * 60 * 60, // 6 hours
-        '15m': 24 * 60 * 60, // 24 hours
-        '1H': 7 * 24 * 60 * 60, // 7 days
-        '4H': 14 * 24 * 60 * 60, // 14 days
-        '1D': 30 * 24 * 60 * 60, // 30 days
-        '1W': 90 * 24 * 60 * 60, // 90 days
-        '1M': 365 * 24 * 60 * 60, // 365 days
-      };
+      const { aggregate, timeframe, limit } = GECKO_TIMEFRAME_MAP[timeFrame];
+      const url = `${GECKO_TERMINAL_API}/networks/solana/pools/${pairAddress}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}&currency=usd&token=base`;
 
-      const timeFrom = now - timeAgoMap[timeFrame];
-
-      // Try Birdeye API first (they have good Solana data)
-      const response = await fetch(
-        `${BIRDEYE_API}/defi/ohlcv?address=${tokenAddress}&type=${interval}&time_from=${timeFrom}&time_to=${now}`,
-        {
-          headers: {
-            'X-API-KEY': 'demo', // In production, use a real API key
-          },
-        }
-      );
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json;version=20230302' },
+      });
 
       if (response.ok) {
         const data = await response.json();
-        if (data.data && data.data.items) {
-          const candles: CandleData[] = data.data.items.map((item: any) => ({
-            timestamp: item.unixTime * 1000,
-            open: item.o,
-            high: item.h,
-            low: item.l,
-            close: item.c,
-            volume: item.v,
+        const ohlcvList = data?.data?.attributes?.ohlcv_list;
+
+        if (ohlcvList && ohlcvList.length > 0) {
+          const candles: CandleData[] = ohlcvList.map((item: number[]) => ({
+            // GeckoTerminal format: [timestamp, open, high, low, close, volume]
+            timestamp: item[0] * 1000,
+            open: item[1],
+            high: item[2],
+            low: item[3],
+            close: item[4],
+            volume: item[5],
           }));
+
+          // Sort ascending by timestamp
+          candles.sort((a, b) => a.timestamp - b.timestamp);
 
           this.cache.set(cacheKey, { data: candles, timestamp: Date.now() });
           return candles;
         }
       }
 
-      // Fallback: Generate synthetic data based on current price
-      const fallbackData = this.generateFallbackData(timeFrame, 100);
-      this.cache.set(cacheKey, { data: fallbackData, timestamp: Date.now() });
-      return fallbackData;
+      return this.getEmptyData();
     } catch (error) {
-      console.error('Error fetching OHLCV data:', error);
-      return this.generateFallbackData(timeFrame, 100);
+      console.error('[ChartDataService] Error fetching OHLCV:', error);
+      return this.getEmptyData();
     }
   }
 
-  private generateFallbackData(timeFrame: TimeFrame, count: number): CandleData[] {
-    const now = Date.now();
-    const intervalMs = this.getIntervalMs(timeFrame);
-    const basePrice = 100 + Math.random() * 50;
-    const candles: CandleData[] = [];
-
-    let currentPrice = basePrice;
-
-    for (let i = count - 1; i >= 0; i--) {
-      const timestamp = now - i * intervalMs;
-      const volatility = 0.02; // 2% volatility
-
-      const change = (Math.random() - 0.5) * volatility * currentPrice;
-      const open = currentPrice;
-      const close = currentPrice + change;
-      const high = Math.max(open, close) * (1 + Math.random() * volatility);
-      const low = Math.min(open, close) * (1 - Math.random() * volatility);
-      const volume = Math.random() * 1000000;
-
-      candles.push({
-        timestamp,
-        open,
-        high,
-        low,
-        close,
-        volume,
-      });
-
-      currentPrice = close;
-    }
-
-    return candles;
-  }
-
-  private getIntervalMs(timeFrame: TimeFrame): number {
-    switch (timeFrame) {
-      case '1m':
-        return 60 * 1000;
-      case '5m':
-        return 5 * 60 * 1000;
-      case '15m':
-        return 15 * 60 * 1000;
-      case '1H':
-        return 60 * 60 * 1000;
-      case '4H':
-        return 4 * 60 * 60 * 1000;
-      case '1D':
-        return 24 * 60 * 60 * 1000;
-      case '1W':
-        return 7 * 24 * 60 * 60 * 1000;
-      case '1M':
-        return 30 * 24 * 60 * 60 * 1000;
-    }
+  private getEmptyData(): CandleData[] {
+    return [];
   }
 
   async getSimplePriceHistory(
@@ -159,6 +129,7 @@ class ChartDataService {
 
   clearCache() {
     this.cache.clear();
+    this.pairCache.clear();
   }
 }
 

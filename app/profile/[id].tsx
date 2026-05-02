@@ -35,6 +35,10 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [replies, setReplies] = useState<Post[]>([]);
+  const [mediaPosts, setMediaPosts] = useState<Post[]>([]);
+  const [likedPosts, setLikedPosts] = useState<Post[]>([]);
+  const [tabLoading, setTabLoading] = useState<ProfileTab | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<ProfileTab>('posts');
@@ -189,6 +193,31 @@ export default function ProfileScreen() {
       setCopiedAddr(true);
       setTimeout(() => setCopiedAddr(false), 2000);
     }
+  };
+
+  const loadTab = useCallback(async (tab: ProfileTab) => {
+    if (!id) return;
+    if (tab === 'posts') return; // already loaded in loadProfile
+    setTabLoading(tab);
+    try {
+      if (tab === 'replies') {
+        const data = await SocialService.getUserReplies(id);
+        setReplies(data);
+      } else if (tab === 'media') {
+        const data = await SocialService.getUserMediaPosts(id);
+        setMediaPosts(data);
+      } else if (tab === 'likes') {
+        const data = await SocialService.getUserLikedPosts(id);
+        setLikedPosts(data);
+      }
+    } finally {
+      setTabLoading(null);
+    }
+  }, [id]);
+
+  const handleTabChange = (tab: ProfileTab) => {
+    setActiveTab(tab);
+    loadTab(tab);
   };
 
   const handleLike = async (postId: string) => {
@@ -354,7 +383,7 @@ export default function ProfileScreen() {
             <TouchableOpacity
               key={tab.key}
               style={styles.tab}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => handleTabChange(tab.key)}
               activeOpacity={0.8}
             >
               <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
@@ -365,8 +394,15 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        {/* Posts */}
-        {activeTab === 'posts' && (
+        {/* Tab loading spinner */}
+        {tabLoading === activeTab && (
+          <View style={styles.emptyPosts}>
+            <ActivityIndicator size="small" color={colors.primary} />
+          </View>
+        )}
+
+        {/* Posts tab */}
+        {activeTab === 'posts' && tabLoading !== 'posts' && (
           posts.length === 0 ? (
             <View style={styles.emptyPosts}>
               <Text style={styles.emptyPostsText}>No posts yet</Text>
@@ -392,10 +428,73 @@ export default function ProfileScreen() {
           )
         )}
 
-        {activeTab !== 'posts' && (
-          <View style={styles.emptyPosts}>
-            <Text style={styles.emptyPostsText}>No content yet</Text>
-          </View>
+        {/* Replies tab */}
+        {activeTab === 'replies' && tabLoading !== 'replies' && (
+          replies.length === 0 ? (
+            <View style={styles.emptyPosts}>
+              <Text style={styles.emptyPostsText}>No replies yet</Text>
+            </View>
+          ) : (
+            <View style={{ paddingTop: spacing.sm }}>
+              {replies.map(post => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentProfile={currentUserProfile}
+                  onLike={handleLike}
+                  onComment={() => {}}
+                  onRepost={handleRepost}
+                  onPromote={() => {}}
+                />
+              ))}
+            </View>
+          )
+        )}
+
+        {/* Media tab */}
+        {activeTab === 'media' && tabLoading !== 'media' && (
+          mediaPosts.length === 0 ? (
+            <View style={styles.emptyPosts}>
+              <Text style={styles.emptyPostsText}>No media posts yet</Text>
+            </View>
+          ) : (
+            <View style={{ paddingTop: spacing.sm }}>
+              {mediaPosts.map(post => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentProfile={currentUserProfile}
+                  onLike={handleLike}
+                  onComment={() => {}}
+                  onRepost={handleRepost}
+                  onPromote={isOwnProfile ? openPromoteModal : () => {}}
+                />
+              ))}
+            </View>
+          )
+        )}
+
+        {/* Likes tab */}
+        {activeTab === 'likes' && tabLoading !== 'likes' && (
+          likedPosts.length === 0 ? (
+            <View style={styles.emptyPosts}>
+              <Text style={styles.emptyPostsText}>No liked posts yet</Text>
+            </View>
+          ) : (
+            <View style={{ paddingTop: spacing.sm }}>
+              {likedPosts.map(post => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentProfile={currentUserProfile}
+                  onLike={handleLike}
+                  onComment={() => {}}
+                  onRepost={handleRepost}
+                  onPromote={() => {}}
+                />
+              ))}
+            </View>
+          )
         )}
 
         <View style={{ height: 80 }} />
