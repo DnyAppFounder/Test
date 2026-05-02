@@ -15,27 +15,7 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import {
-  Send,
-  X,
-  User,
-  ImagePlus,
-  MessageCircle,
-  Check,
-  CircleAlert,
-  Wallet,
-  Bell,
-  Clock,
-  Plus,
-  Search,
-  Heart,
-  MessageSquare,
-  UserPlus,
-  AtSign,
-  Repeat2,
-  SlidersHorizontal,
-  Trash2,
-} from 'lucide-react-native';
+import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation } from '@/services/socialService';
@@ -98,6 +78,11 @@ export default function CommunityScreen() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // @mention dropdown
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionResults, setMentionResults] = useState<any[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
 
   const loadFeed = useCallback(async () => {
     try {
@@ -176,6 +161,39 @@ export default function CommunityScreen() {
     } finally {
       setComposeSearching(false);
     }
+  };
+
+  // Handle @mention in comment input
+  const handleCommentTextChange = async (text: string) => {
+    setNewCommentContent(text);
+    const match = text.match(/@(\w*)$/);
+    if (match) {
+      const q = match[1];
+      setMentionQuery(q);
+      if (q.length >= 1) {
+        setMentionLoading(true);
+        try {
+          const results = await SocialService.searchUsers(q);
+          setMentionResults(results.slice(0, 6));
+        } catch {
+          setMentionResults([]);
+        } finally {
+          setMentionLoading(false);
+        }
+      } else {
+        setMentionResults([]);
+      }
+    } else {
+      setMentionQuery('');
+      setMentionResults([]);
+    }
+  };
+
+  const insertMention = (username: string) => {
+    const text = newCommentContent.replace(/@(\w*)$/, `@${username} `);
+    setNewCommentContent(text);
+    setMentionResults([]);
+    setMentionQuery('');
   };
 
   const onRefresh = async () => {
@@ -291,20 +309,22 @@ export default function CommunityScreen() {
   };
 
   const handleAddComment = async () => {
-    if (!newCommentContent.trim() || !profile || !selectedPostId) return;
+    if (!newCommentContent.trim() || !profile || !selectedPostId || submittingComment) return;
+    const commentText = newCommentContent.trim();
+    const parentId = replyingToComment?.id;
     setSubmittingComment(true);
+    setNewCommentContent('');
+    setReplyingToComment(null);
     try {
-      await SocialService.addComment(
-        selectedPostId,
-        profile.id,
-        newCommentContent.trim(),
-        replyingToComment?.id
-      );
-      setNewCommentContent('');
-      setReplyingToComment(null);
+      await SocialService.addComment(selectedPostId, profile.id, commentText, parentId);
       const updated = await SocialService.getComments(selectedPostId, profile.id);
       setComments(updated);
-      await loadFeed();
+      // Update comment count in both feed and profile posts
+      const increment = (list: Post[]) => list.map(p =>
+        p.id === selectedPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+      );
+      setPosts(increment);
+      setProfilePosts(increment);
     } catch (e) {
       console.warn('[Community] addComment error:', e);
     } finally {
@@ -352,12 +372,12 @@ export default function CommunityScreen() {
   const selectedPost = posts.find(p => p.id === selectedPostId);
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
-  // Top tabs
-  const TOP_TABS: { key: TopTab; label: string }[] = [
-    { key: 'feed', label: 'Feed' },
-    { key: 'profile', label: 'Profile' },
-    { key: 'messages', label: 'Messages' },
-    { key: 'notifications', label: 'Alerts' },
+  // Top tabs — icon-based
+  const TOP_TABS: { key: TopTab }[] = [
+    { key: 'feed' },
+    { key: 'profile' },
+    { key: 'messages' },
+    { key: 'notifications' },
   ];
 
   const renderFeedTab = () => {
@@ -719,27 +739,65 @@ export default function CommunityScreen() {
         </View>
       )}
 
-      {/* Top tabs */}
+      {/* Top tabs — icon-based */}
       <View style={styles.topTabs}>
-        {TOP_TABS.map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
-            onPress={() => setActiveTab(tab.key)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.topTabInner}>
-              <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
-                {tab.label}
-              </Text>
-              {tab.key === 'notifications' && unreadNotifCount > 0 && (
-                <View style={styles.topTabBadge}>
-                  <Text style={styles.topTabBadgeText}>{unreadNotifCount > 99 ? '99+' : unreadNotifCount}</Text>
-                </View>
-              )}
-            </View>
-          </TouchableOpacity>
-        ))}
+        {/* Feed */}
+        <TouchableOpacity
+          style={[styles.topTab, activeTab === 'feed' && styles.topTabActive]}
+          onPress={() => setActiveTab('feed')}
+          activeOpacity={0.8}
+        >
+          <Home size={20} color={activeTab === 'feed' ? colors.white : colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
+
+        {/* Profile — avatar bubble */}
+        <TouchableOpacity
+          style={[styles.topTab, activeTab === 'profile' && styles.topTabActive]}
+          onPress={() => {
+            if (profile?.id && activeTab === 'profile') {
+              router.push(`/profile/${profile.id}` as any);
+            } else {
+              setActiveTab('profile');
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <View style={styles.topTabAvatarWrap}>
+            {profile?.avatar_url ? (
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={[styles.topTabAvatar, activeTab === 'profile' && styles.topTabAvatarActive]}
+              />
+            ) : (
+              <User size={20} color={activeTab === 'profile' ? colors.white : colors.textMuted} strokeWidth={2} />
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Messages */}
+        <TouchableOpacity
+          style={[styles.topTab, activeTab === 'messages' && styles.topTabActive]}
+          onPress={() => setActiveTab('messages')}
+          activeOpacity={0.8}
+        >
+          <Mail size={20} color={activeTab === 'messages' ? colors.white : colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
+
+        {/* Alerts / Notifications */}
+        <TouchableOpacity
+          style={[styles.topTab, activeTab === 'notifications' && styles.topTabActive]}
+          onPress={() => setActiveTab('notifications')}
+          activeOpacity={0.8}
+        >
+          <View style={styles.topTabInner}>
+            <Bell size={20} color={activeTab === 'notifications' ? colors.white : colors.textMuted} strokeWidth={2} />
+            {unreadNotifCount > 0 && (
+              <View style={styles.topTabBadge}>
+                <Text style={styles.topTabBadgeText}>{unreadNotifCount > 99 ? '99+' : unreadNotifCount}</Text>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
       </View>
 
       {/* Tab content */}
@@ -1036,13 +1094,41 @@ export default function CommunityScreen() {
                 </TouchableOpacity>
               </View>
             )}
+
+            {/* @mention dropdown */}
+            {mentionResults.length > 0 && (
+              <View style={styles.mentionDropdown}>
+                {mentionLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 6 }} />}
+                {mentionResults.map(u => (
+                  <TouchableOpacity
+                    key={u.id}
+                    style={styles.mentionRow}
+                    onPress={() => insertMention(u.username || u.wallet_address?.slice(0, 8))}
+                    activeOpacity={0.75}
+                  >
+                    {u.avatar_url
+                      ? <Image source={{ uri: u.avatar_url }} style={styles.mentionAvatar} />
+                      : <View style={[styles.mentionAvatar, styles.mentionAvatarFallback]}><User size={13} color={colors.textMuted} /></View>
+                    }
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
+                        {u.is_verified && <Check size={11} color={colors.primary} strokeWidth={3} />}
+                      </View>
+                      <Text style={styles.mentionAddr}>{u.wallet_address?.slice(0, 6)}...{u.wallet_address?.slice(-4)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
             <View style={styles.commentInputRow}>
               <TextInput
                 style={styles.commentInput}
-                placeholder={replyingToComment ? `Reply to ${replyingToComment.author?.username || 'user'}...` : 'Add a comment...'}
+                placeholder={replyingToComment ? `Reply to ${replyingToComment.author?.username || 'user'}...` : 'Add a comment... (@mention)'}
                 placeholderTextColor={colors.textMuted}
                 value={newCommentContent}
-                onChangeText={setNewCommentContent}
+                onChangeText={handleCommentTextChange}
                 maxLength={300}
               />
               <TouchableOpacity
@@ -1212,8 +1298,9 @@ const styles = StyleSheet.create({
   },
   topTab: {
     flex: 1,
-    paddingVertical: 9,
+    paddingVertical: 10,
     alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: borderRadius.md,
     backgroundColor: '#12121A',
   },
@@ -1227,6 +1314,19 @@ const styles = StyleSheet.create({
   },
   topTabTextActive: {
     color: colors.white,
+  },
+  topTabAvatarWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topTabAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+  },
+  topTabAvatarActive: {
+    borderWidth: 2,
+    borderColor: colors.white,
   },
   tabContent: {
     flex: 1,
@@ -1564,6 +1664,44 @@ const styles = StyleSheet.create({
   },
   commentSendBtnDisabled: {
     opacity: 0.5,
+  },
+  // @mention dropdown
+  mentionDropdown: {
+    backgroundColor: '#1A1A28',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.sm,
+    overflow: 'hidden',
+  },
+  mentionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  mentionAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  mentionAvatarFallback: {
+    backgroundColor: '#2A2A3A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mentionUsername: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  mentionAddr: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
   },
   // Promote
   promoteDesc: {

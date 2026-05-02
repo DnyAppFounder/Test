@@ -21,7 +21,7 @@ import {
   X, Check, ChevronDown, ChevronRight, Globe,
   Image as ImageIcon, Video, ChartBar as BarChart2,
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
-  Search,
+  Search, Megaphone, Film,
 } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -55,6 +55,10 @@ export default function CreatePostScreen() {
   const [mediaUri, setMediaUri] = useState<string | null>(null);
   const [mediaUploading, setMediaUploading] = useState(false);
 
+  // @mention
+  const [mentionResults, setMentionResults] = useState<any[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+
   // Token attachment
   const [attachedToken, setAttachedToken] = useState<LiveToken | null>(null);
   const [showTokenPicker, setShowTokenPicker] = useState(false);
@@ -74,15 +78,15 @@ export default function CreatePostScreen() {
   const displayName = profile?.username || profile?.wallet_address?.slice(0, 8) || 'Anonymous';
   const handleText = `@${(profile?.username || 'user').toLowerCase()}`;
 
-  // ── Image picker ──────────────────────────────────────────────────────────
-  const pickImage = async () => {
+  // ── Media picker (images + videos) ───────────────────────────────────────
+  const pickMedia = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to attach images.');
+      Alert.alert('Permission needed', 'Allow photo access to attach media.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
       allowsEditing: true,
     });
@@ -92,6 +96,31 @@ export default function CreatePostScreen() {
   };
 
   const removeMedia = () => setMediaUri(null);
+
+  // ── @mention handling ─────────────────────────────────────────────────────
+  const handleContentChange = async (text: string) => {
+    setContent(text);
+    const match = text.match(/@(\w+)$/);
+    if (match && match[1].length >= 1) {
+      setMentionLoading(true);
+      try {
+        const results = await SocialService.searchUsers(match[1]);
+        setMentionResults(results.slice(0, 6));
+      } catch {
+        setMentionResults([]);
+      } finally {
+        setMentionLoading(false);
+      }
+    } else {
+      setMentionResults([]);
+    }
+  };
+
+  const insertMention = (username: string) => {
+    const updated = content.replace(/@(\w+)$/, `@${username} `);
+    setContent(updated);
+    setMentionResults([]);
+  };
 
   // ── Token search ──────────────────────────────────────────────────────────
   const searchTokens = useCallback(async (query: string) => {
@@ -278,10 +307,42 @@ export default function CreatePostScreen() {
             placeholder={"What's happening in the market?\nShare your thoughts with the DAWEN community."}
             placeholderTextColor={colors.textMuted}
             value={content}
-            onChangeText={setContent}
+            onChangeText={handleContentChange}
             multiline
             autoFocus={false}
           />
+
+          {/* @mention dropdown */}
+          {mentionResults.length > 0 && (
+            <View style={styles.mentionDropdown}>
+              {mentionLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 4 }} />}
+              {mentionResults.map(u => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={styles.mentionRow}
+                  onPress={() => insertMention(u.username || u.wallet_address?.slice(0, 8))}
+                  activeOpacity={0.75}
+                >
+                  {u.avatar_url ? (
+                    <Image source={{ uri: u.avatar_url }} style={styles.mentionAvatar} />
+                  ) : (
+                    <View style={[styles.mentionAvatar, styles.mentionAvatarFallback]}>
+                      <User size={13} color={colors.textMuted} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
+                      {u.is_verified && <Check size={11} color={colors.primary} strokeWidth={3} />}
+                    </View>
+                    <Text style={styles.mentionAddr}>
+                      {u.wallet_address?.slice(0, 6)}...{u.wallet_address?.slice(-4)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
           {/* Attached media */}
           {mediaUri && (
@@ -313,7 +374,7 @@ export default function CreatePostScreen() {
             )}
 
             {/* Add media box */}
-            <TouchableOpacity style={styles.addMediaBox} activeOpacity={0.8} onPress={pickImage}>
+            <TouchableOpacity style={styles.addMediaBox} activeOpacity={0.8} onPress={pickMedia}>
               {mediaUri ? (
                 <Check size={22} color={colors.primary} strokeWidth={2.5} />
               ) : (
@@ -327,23 +388,23 @@ export default function CreatePostScreen() {
 
           {/* Quick actions */}
           <View style={styles.quickActionsRow}>
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={pickImage}>
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={pickMedia}>
               <View style={[styles.qaIconWrap, { backgroundColor: '#8B5CF622' }]}>
-                <ImageIcon size={20} color="#8B5CF6" strokeWidth={2} />
+                <Film size={20} color="#8B5CF6" strokeWidth={2} />
               </View>
-              <Text style={styles.qaLabel}>Image</Text>
+              <Text style={styles.qaLabel}>Media</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Video', 'Not configured yet')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#ef444422' }]}>
-                <Video size={20} color="#ef4444" strokeWidth={2} />
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Promote Post', 'Post promotion is coming soon. Your post will be boosted to the top of the feed.')}>
+              <View style={[styles.qaIconWrap, { backgroundColor: '#f59e0b22' }]}>
+                <Megaphone size={20} color="#f59e0b" strokeWidth={2} />
               </View>
-              <Text style={styles.qaLabel}>Video</Text>
+              <Text style={styles.qaLabel}>Promote</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Poll', 'Not configured yet')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#f59e0b22' }]}>
-                <BarChart2 size={20} color="#f59e0b" strokeWidth={2} />
+              <View style={[styles.qaIconWrap, { backgroundColor: '#ef444422' }]}>
+                <BarChart2 size={20} color="#ef4444" strokeWidth={2} />
               </View>
               <Text style={styles.qaLabel}>Poll</Text>
             </TouchableOpacity>
@@ -607,7 +668,43 @@ const styles = StyleSheet.create({
   visibilityText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
 
   contentInput: {
-    fontSize: 18, color: colors.textPrimary, lineHeight: 26, minHeight: 80, marginBottom: spacing.xl,
+    fontSize: 18, color: colors.textPrimary, lineHeight: 26, minHeight: 80, marginBottom: spacing.sm,
+  },
+  mentionDropdown: {
+    backgroundColor: '#1A1A28',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    borderRadius: 12,
+    marginBottom: spacing.lg,
+    overflow: 'hidden',
+  },
+  mentionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  mentionAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  mentionAvatarFallback: {
+    backgroundColor: '#2A2A3A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mentionUsername: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  mentionAddr: {
+    fontSize: 10,
+    color: colors.textMuted,
   },
 
   mediaPreviewWrap: { marginBottom: spacing.lg, borderRadius: 16, overflow: 'hidden', position: 'relative' },

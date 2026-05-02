@@ -291,13 +291,31 @@ export default function ProfileScreen() {
   };
 
   const handlePickBanner = async () => {
+    if (!isOwnProfile || !profile) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [3, 1],
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) setEditBannerUrl(result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) {
+      const uri = result.assets[0].uri;
+      setEditBannerUrl(uri);
+      // Save immediately
+      try {
+        let bannerUrl: string | undefined = uri;
+        if (uri.startsWith('file://') || uri.startsWith('blob:') || uri.startsWith('data:')) {
+          const uploaded = await SocialService.uploadAvatar(profile.wallet_address, uri, profile.id + '_banner');
+          if (uploaded) bannerUrl = uploaded;
+        }
+        if (bannerUrl) {
+          await SocialService.updateProfile(profile.id, { banner_url: bannerUrl } as any);
+          await loadProfile();
+        }
+      } catch (e) {
+        console.warn('[Profile] banner upload error:', e);
+      }
+    }
   };
 
   const handlePickAvatar = async () => {
@@ -502,11 +520,22 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {/* Banner */}
-        <View style={styles.bannerWrap}>
-          <Image source={{ uri: bannerUrl }} style={styles.banner} resizeMode="cover" />
-          <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)']} style={StyleSheet.absoluteFill} />
-        </View>
+        {/* Banner — tap to change cover if own profile */}
+        {isOwnProfile ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={handlePickBanner} style={styles.bannerWrap}>
+            <Image source={{ uri: bannerUrl }} style={styles.banner} resizeMode="cover" />
+            <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)']} style={StyleSheet.absoluteFill} />
+            <View style={styles.bannerEditOverlay}>
+              <Camera size={18} color={colors.white} strokeWidth={2} />
+              <Text style={styles.bannerEditText}>Change Cover</Text>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.bannerWrap}>
+            <Image source={{ uri: bannerUrl }} style={styles.banner} resizeMode="cover" />
+            <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)']} style={StyleSheet.absoluteFill} />
+          </View>
+        )}
 
         {/* Avatar + name row */}
         <View style={styles.profileTopRow}>
@@ -824,19 +853,7 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.editLabel}>Cover Photo</Text>
-              <TouchableOpacity style={styles.bannerPickerWrap} onPress={handlePickBanner} activeOpacity={0.85}>
-                {editBannerUrl ? (
-                  <Image source={{ uri: editBannerUrl }} style={styles.bannerPickerImg} resizeMode="cover" />
-                ) : (
-                  <View style={styles.bannerPickerEmpty}>
-                    <Camera size={22} color={colors.textMuted} />
-                    <Text style={styles.bannerPickerText}>Tap to set cover photo</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <Text style={[styles.editLabel, { marginTop: spacing.lg }]}>Profile Photo</Text>
+              <Text style={styles.editLabel}>Profile Photo</Text>
               <TouchableOpacity style={styles.avatarPickerWrap} onPress={handlePickAvatar} activeOpacity={0.85}>
                 <View style={styles.avatarPickerRing}>
                   {editAvatarUrl ? (
@@ -976,6 +993,19 @@ const styles = StyleSheet.create({
   topBarBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   topBarTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.textPrimary },
   bannerWrap: { width: '100%', height: 160, backgroundColor: '#1A0B2E', overflow: 'hidden' },
+  bannerEditOverlay: {
+    position: 'absolute',
+    bottom: 8,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  bannerEditText: { color: colors.white, fontSize: 12, fontWeight: '600' },
   banner: { width: '100%', height: '100%' },
   profileTopRow: {
     flexDirection: 'row', alignItems: 'flex-end',

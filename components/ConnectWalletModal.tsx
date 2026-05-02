@@ -90,6 +90,8 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
         setError(`${id.charAt(0).toUpperCase() + id.slice(1)} is not detected. Open this page inside the ${id.charAt(0).toUpperCase() + id.slice(1)} in-app browser.`);
       } else if (err.message?.includes('rejected') || err.message?.includes('User rejected')) {
         setError('Connection rejected. Please approve the request in your wallet.');
+      } else if (err.message?.includes('timed out')) {
+        setError('Connection timed out. Dismiss any pending wallet popups and try again.');
       } else {
         setError(err.message || 'Failed to connect wallet');
       }

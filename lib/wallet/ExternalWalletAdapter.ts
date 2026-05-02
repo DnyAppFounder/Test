@@ -140,6 +140,7 @@ export class ExternalWalletAdapter {
   /**
    * Connect to an extension wallet. Calls provider.connect() — this triggers
    * the wallet popup inside the app, NOT an external redirect.
+   * Times out after 30s to prevent infinite loading if wallet popup is dismissed.
    */
   static async connectExtension(id: ExternalWalletId): Promise<ConnectedExternalWallet> {
     const provider = this.getProvider(id);
@@ -147,7 +148,15 @@ export class ExternalWalletAdapter {
       throw new Error(`${id} wallet extension is not installed`);
     }
 
-    const result = await provider.connect();
+    // Timeout wrapper: if wallet popup is dismissed without response, reject after 30s
+    const connectWithTimeout = new Promise<{ publicKey: { toBase58(): string } }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('Connection timed out. Please try again and approve the request in your wallet.'));
+      }, 30000);
+      provider.connect().then(res => { clearTimeout(timer); resolve(res); }).catch(err => { clearTimeout(timer); reject(err); });
+    });
+
+    const result = await connectWithTimeout;
     const address = result.publicKey.toBase58();
     const balance = await this.getBalance(address);
 
