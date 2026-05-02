@@ -22,6 +22,7 @@ import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversa
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
+import VerificationBadge from '@/components/VerificationBadge';
 
 type TopTab = 'feed' | 'profile' | 'messages' | 'notifications';
 type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
@@ -622,11 +623,7 @@ export default function CommunityScreen() {
                 <View style={styles.convBody}>
                   <View style={styles.convNameRow}>
                     <Text style={styles.convUsername}>{displayName}</Text>
-                    {otherUser.is_verified && (
-                      <View style={styles.verifiedBadge}>
-                        <Check size={9} color={colors.white} strokeWidth={3} />
-                      </View>
-                    )}
+                    <VerificationBadge profile={otherUser} size="sm" />
                   </View>
                   <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMessage.content}</Text>
                 </View>
@@ -1163,7 +1160,7 @@ export default function CommunityScreen() {
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                         <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
-                        {u.is_verified && <Check size={11} color={colors.primary} strokeWidth={3} />}
+                        <VerificationBadge profile={u} size="sm" />
                       </View>
                       <Text style={styles.mentionAddr}>{u.wallet_address?.slice(0, 6)}...{u.wallet_address?.slice(-4)}</Text>
                     </View>
@@ -1346,11 +1343,7 @@ export default function CommunityScreen() {
                       <View style={styles.convBody}>
                         <View style={styles.convNameRow}>
                           <Text style={styles.convUsername}>{name}</Text>
-                          {user.is_verified && (
-                            <View style={styles.verifiedBadge}>
-                              <Check size={9} color={colors.white} strokeWidth={3} />
-                            </View>
-                          )}
+                          <VerificationBadge profile={user} size="sm" />
                         </View>
                         {shortAddr ? <Text style={{ fontSize: 11, color: colors.textMuted, fontFamily: 'SpaceMono-Regular' }}>{shortAddr}</Text> : null}
                       </View>
@@ -1407,10 +1400,11 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
     gap: spacing.xs,
     backgroundColor: '#0A0A0F',
+    minHeight: 52,
   },
   topTab: {
     flex: 1,
-    paddingVertical: 10,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: borderRadius.md,
@@ -1428,6 +1422,8 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   topTabAvatarWrap: {
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2361,7 +2357,10 @@ const styles = StyleSheet.create({
   topTabInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    justifyContent: 'center',
+    gap: 3,
+    minWidth: 24,
+    minHeight: 24,
   },
   topTabBadge: {
     backgroundColor: '#ef4444',
