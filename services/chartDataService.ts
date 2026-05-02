@@ -129,7 +129,7 @@ class ChartDataService {
 
   clearCache() {
     this.cache.clear();
-    this.pairCache.clear();
+    // deliberately keep pairCache — pair addresses don't change frequently
   }
 }
 

@@ -71,7 +71,7 @@ const CHART_MODES: { key: ChartMode; label: string }[] = [
 const CHART_H = 220;
 const VOL_H = 36;
 const PAD = { top: 18, right: 56, bottom: 18, left: 4 };
-const REFRESH_INTERVAL = 8000;
+const REFRESH_INTERVAL = 30000;
 
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
@@ -142,29 +142,29 @@ export function TradingViewChart({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const prevTokenMint = useRef<string | undefined>(undefined);
+  const livePriceRef = useRef<number | null>(null);
+  const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep ref in sync so loadData can access livePrice without being a dependency
+  useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
 
   const loadData = useCallback(async (tf: TimeFrame, silent = false) => {
     if (!tokenMint) { setLoading(false); return; }
-    if (!silent) {
-      setLoading(true);
-      chartDataService.clearCache();
-    }
+    if (!silent) setLoading(true);
     try {
       const data = await chartDataService.getOHLCVData(tokenMint, tf);
       if (data && data.length > 0) {
-        // Smooth update: replace candles without flash
         setCandles(prev => {
           if (!silent) return data;
-          // On silent update, only update last candle if WS has live price
           if (prev.length === 0) return data;
+          const currentLivePrice = livePriceRef.current;
+          if (currentLivePrice == null) return data;
           const merged = [...data];
-          if (livePrice != null && merged.length > 0) {
-            const last = { ...merged[merged.length - 1] };
-            last.close = livePrice;
-            last.high = Math.max(last.high, livePrice);
-            last.low = Math.min(last.low, livePrice);
-            merged[merged.length - 1] = last;
-          }
+          const last = { ...merged[merged.length - 1] };
+          last.close = currentLivePrice;
+          last.high = Math.max(last.high, currentLivePrice);
+          last.low = Math.min(last.low, currentLivePrice);
+          merged[merged.length - 1] = last;
           return merged;
         });
         setHasData(true);
@@ -176,7 +176,7 @@ export function TradingViewChart({
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [tokenMint, livePrice]);
+  }, [tokenMint]);
 
   const connectWebSocket = useCallback(() => {
     if (!tokenMint || typeof WebSocket === 'undefined') return;
@@ -195,18 +195,28 @@ export function TradingViewChart({
           if (data?.pair?.priceUsd) {
             const newPrice = parseFloat(data.pair.priceUsd);
             if (!isNaN(newPrice) && newPrice > 0) {
-              setLivePrice(newPrice);
-              // Smooth in-place update of last candle
-              setCandles(prev => {
-                if (prev.length === 0) return prev;
-                const updated = [...prev];
-                const last = { ...updated[updated.length - 1] };
-                last.close = newPrice;
-                last.high = Math.max(last.high, newPrice);
-                last.low = Math.min(last.low, newPrice);
-                updated[updated.length - 1] = last;
-                return updated;
-              });
+              livePriceRef.current = newPrice;
+              // Debounce candle/price state updates to max once per second
+              if (wsDebounceRef.current) return;
+              wsDebounceRef.current = setTimeout(() => {
+                wsDebounceRef.current = null;
+                const price = livePriceRef.current;
+                if (price == null) return;
+                setLivePrice(price);
+                setCandles(prev => {
+                  if (prev.length === 0) return prev;
+                  const last = prev[prev.length - 1];
+                  if (last.close === price) return prev;
+                  const updated = [...prev];
+                  updated[updated.length - 1] = {
+                    ...last,
+                    close: price,
+                    high: Math.max(last.high, price),
+                    low: Math.min(last.low, price),
+                  };
+                  return updated;
+                });
+              }, 1000);
             }
           }
         } catch {}
@@ -236,6 +246,7 @@ export function TradingViewChart({
   useEffect(() => {
     connectWebSocket();
     return () => {
+      if (wsDebounceRef.current) { clearTimeout(wsDebounceRef.current); wsDebounceRef.current = null; }
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();

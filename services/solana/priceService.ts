@@ -81,6 +81,24 @@ export class SolanaPriceService {
   }
 
   async getSOLPrice(): Promise<number> {
+    // Jupiter price API is more reliable for native SOL
+    try {
+      const supabaseUrl = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_URL) || '';
+      const anonKey = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY) || '';
+      const solMint = 'So11111111111111111111111111111111111111112';
+
+      if (supabaseUrl && anonKey) {
+        const url = `${supabaseUrl}/functions/v1/solana-rpc?action=price&ids=${solMint}`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey } });
+        if (res.ok) {
+          const data = await res.json();
+          const price = data?.data?.[solMint]?.price;
+          if (price && price > 0) return price;
+        }
+      }
+    } catch {}
+
+    // Fallback to DexScreener
     const solMint = 'So11111111111111111111111111111111111111112';
     const price = await this.getTokenPrice(solMint);
     return price?.price || 0;
