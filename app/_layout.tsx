@@ -1,5 +1,5 @@
 import '@/lib/polyfills';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -10,60 +10,44 @@ import { ProfileProvider } from '@/contexts/ProfileContext';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   useFrameworkReady();
-  const [appIsReady, setAppIsReady] = useState(false);
 
   const [fontsLoaded, fontError] = useFonts({
     'SpaceMono-Regular': require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
 
   useEffect(() => {
-    async function prepare() {
-      try {
-        if (fontsLoaded || fontError) {
-          setAppIsReady(true);
-        }
-      } catch (e) {
-        console.warn('Error during app preparation:', e);
-        setAppIsReady(true);
-      }
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync().catch(() => {});
     }
-
-    prepare();
   }, [fontsLoaded, fontError]);
 
-  const onLayoutRootView = useCallback(async () => {
-    if (appIsReady) {
-      await SplashScreen.hideAsync();
-    }
-  }, [appIsReady]);
-
-  if (!appIsReady) {
+  if (!fontsLoaded && !fontError) {
     return null;
   }
 
   return (
-    <View style={styles.root} onLayout={onLayoutRootView}>
+    <View style={styles.root}>
       <LanguageProvider>
         <WalletProvider>
           <ProfileProvider>
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: styles.screenContent,
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="onboarding" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="chat/[id]" />
-            <Stack.Screen name="create-post" />
-            <Stack.Screen name="+not-found" />
-          </Stack>
-          <StatusBar style="light" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: styles.screenContent,
+              }}
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="onboarding" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="chat/[id]" />
+              <Stack.Screen name="create-post" />
+              <Stack.Screen name="+not-found" />
+            </Stack>
+            <StatusBar style="light" />
           </ProfileProvider>
         </WalletProvider>
       </LanguageProvider>
