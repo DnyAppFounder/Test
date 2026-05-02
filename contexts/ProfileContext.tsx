@@ -8,6 +8,8 @@ interface ProfileContextValue {
   refreshProfile: () => Promise<void>;
   updateProfile: (updates: { username?: string; bio?: string; avatar_url?: string }) => Promise<void>;
   uploadAvatar: (imageUri: string) => Promise<string | null>;
+  unreadNotifCount: number;
+  clearUnreadNotifCount: () => void;
 }
 
 const ProfileContext = createContext<ProfileContextValue>({
@@ -16,12 +18,19 @@ const ProfileContext = createContext<ProfileContextValue>({
   refreshProfile: async () => {},
   updateProfile: async () => {},
   uploadAvatar: async () => null,
+  unreadNotifCount: 0,
+  clearUnreadNotifCount: () => {},
 });
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const { activeAddress } = useWallet();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  const clearUnreadNotifCount = useCallback(() => {
+    setUnreadNotifCount(0);
+  }, []);
 
   const refreshProfile = useCallback(async () => {
     if (!activeAddress) {
@@ -43,6 +52,20 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     refreshProfile();
   }, [refreshProfile]);
 
+  useEffect(() => {
+    if (!profile?.id) { setUnreadNotifCount(0); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const notifs = await SocialService.getNotifications(profile.id);
+        if (!cancelled) setUnreadNotifCount(notifs.filter(n => !n.read).length);
+      } catch {}
+    };
+    poll();
+    const interval = setInterval(poll, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [profile?.id]);
+
   const updateProfile = useCallback(async (updates: { username?: string; bio?: string; avatar_url?: string }) => {
     if (!profile) return;
     const updated = await SocialService.updateProfile(profile.id, updates);
@@ -57,7 +80,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [profile, activeAddress]);
 
   return (
-    <ProfileContext.Provider value={{ profile, loading, refreshProfile, updateProfile, uploadAvatar }}>
+    <ProfileContext.Provider value={{ profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount }}>
       {children}
     </ProfileContext.Provider>
   );

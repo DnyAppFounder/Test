@@ -49,7 +49,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress } = useWallet();
-  const { profile, refreshProfile } = useProfile();
+  const { profile, refreshProfile, clearUnreadNotifCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +94,10 @@ export default function CommunityScreen() {
   const [notifLoading, setNotifLoading] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'like' | 'comment' | 'mention' | 'follow' | 'repost'>('all');
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  // Delete confirmation
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadFeed = useCallback(async () => {
     try {
@@ -146,7 +150,7 @@ export default function CommunityScreen() {
   useEffect(() => { loadInitialFeed(); }, [loadInitialFeed]);
 
   useEffect(() => {
-    if (activeTab === 'notifications') loadNotifications();
+    if (activeTab === 'notifications') { loadNotifications(); clearUnreadNotifCount(); }
     if (activeTab === 'messages') loadConversations();
     if (activeTab === 'profile' && profile?.id) {
       setProfilePostsLoading(true);
@@ -225,10 +229,23 @@ export default function CommunityScreen() {
     await SocialService.toggleRepost(postId, profile.id);
   };
 
-  const handleDeletePost = async (postId: string) => {
-    if (!profile) return;
-    await SocialService.deletePost(postId, profile.id);
-    setPosts(prev => prev.filter(p => p.id !== postId));
+  const requestDeletePost = (postId: string) => {
+    setDeleteConfirmId(postId);
+  };
+
+  const confirmDeletePost = async () => {
+    if (!profile || !deleteConfirmId) return;
+    setDeleting(true);
+    try {
+      await SocialService.deletePostFull(deleteConfirmId, profile.id);
+      setPosts(prev => prev.filter(p => p.id !== deleteConfirmId));
+      setProfilePosts(prev => prev.filter(p => p.id !== deleteConfirmId));
+    } catch (e) {
+      console.warn('[Community] deletePost error:', e);
+    } finally {
+      setDeleting(false);
+      setDeleteConfirmId(null);
+    }
   };
 
   const openPromoteModal = (postId: string) => {
@@ -364,7 +381,7 @@ export default function CommunityScreen() {
             onComment={openCommentsModal}
             onRepost={handleRepost}
             onPromote={item.author_id === profile?.id ? openPromoteModal : undefined}
-            onDelete={item.author_id === profile?.id ? handleDeletePost : undefined}
+            onDelete={item.author_id === profile?.id ? requestDeletePost : undefined}
           />
         )}
         ListEmptyComponent={
@@ -478,10 +495,7 @@ export default function CommunityScreen() {
               onComment={openCommentsModal}
               onRepost={handleRepost}
               onPromote={openPromoteModal}
-              onDelete={async (pid) => {
-                await SocialService.deletePost(pid, profile.id);
-                setProfilePosts(prev => prev.filter(p => p.id !== pid));
-              }}
+              onDelete={requestDeletePost}
             />
           ))
         )}
@@ -714,9 +728,16 @@ export default function CommunityScreen() {
             onPress={() => setActiveTab(tab.key)}
             activeOpacity={0.8}
           >
-            <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
-              {tab.label}
-            </Text>
+            <View style={styles.topTabInner}>
+              <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
+                {tab.label}
+              </Text>
+              {tab.key === 'notifications' && unreadNotifCount > 0 && (
+                <View style={styles.topTabBadge}>
+                  <Text style={styles.topTabBadgeText}>{unreadNotifCount > 99 ? '99+' : unreadNotifCount}</Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         ))}
       </View>
@@ -725,6 +746,38 @@ export default function CommunityScreen() {
       <View style={styles.tabContent}>
         {renderActiveTab()}
       </View>
+
+      {/* Delete Confirmation Modal */}
+      <Modal visible={deleteConfirmId !== null} animationType="fade" transparent>
+        <View style={styles.deleteOverlay}>
+          <View style={styles.deleteModal}>
+            <View style={styles.deleteIconWrap}>
+              <Trash2 size={28} color="#ef4444" strokeWidth={2} />
+            </View>
+            <Text style={styles.deleteTitle}>Delete Post</Text>
+            <Text style={styles.deleteSubtitle}>This will permanently remove the post and all its likes, comments, and reposts.</Text>
+            <TouchableOpacity
+              style={[styles.deleteConfirmBtn, deleting && { opacity: 0.6 }]}
+              onPress={confirmDeletePost}
+              disabled={deleting}
+              activeOpacity={0.85}
+            >
+              {deleting
+                ? <ActivityIndicator size="small" color={colors.white} />
+                : <Text style={styles.deleteConfirmBtnText}>Delete</Text>
+              }
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.deleteCancelBtn}
+              onPress={() => setDeleteConfirmId(null)}
+              disabled={deleting}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.deleteCancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Compose New Message Modal */}
       <Modal visible={showComposeModal} animationType="slide" transparent>
@@ -2044,5 +2097,91 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '800',
     color: colors.textPrimary,
+  },
+
+  // Top tab badge
+  topTabInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  topTabBadge: {
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  topTabBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#fff',
+  },
+
+  // Delete confirmation
+  deleteOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xxl,
+  },
+  deleteModal: {
+    backgroundColor: '#12121A',
+    borderRadius: 20,
+    padding: spacing.xxl,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+  },
+  deleteIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  deleteTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  deleteSubtitle: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  deleteConfirmBtn: {
+    backgroundColor: '#ef4444',
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    width: '100%',
+    marginTop: spacing.sm,
+    minHeight: 46,
+    justifyContent: 'center',
+  },
+  deleteConfirmBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.white,
+  },
+  deleteCancelBtn: {
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    width: '100%',
+  },
+  deleteCancelBtnText: {
+    fontSize: fontSize.md,
+    color: colors.textMuted,
+    fontWeight: '600',
   },
 });
