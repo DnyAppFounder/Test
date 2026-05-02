@@ -32,7 +32,14 @@ function getNftRpcUrl(): string {
   if (supabaseUrl) {
     return `${supabaseUrl}/functions/v1/solana-rpc`;
   }
-  return 'https://api.mainnet-beta.solana.com';
+  const directUrl = typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_SOLANA_RPC_URL
+    : undefined;
+  if (directUrl) {
+    return directUrl;
+  }
+  console.error('[NFTService] RPC error: No RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL or EXPO_PUBLIC_SUPABASE_URL.');
+  throw new Error('RPC error: No Solana RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL.');
 }
 
 function sanitizeImageUrl(url?: string): string | null {
@@ -68,7 +75,11 @@ export class NFTService {
         }),
       });
 
-      if (!response.ok) return [];
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error(`[NFTService] RPC error: getAssetsByOwner failed HTTP ${response.status}: ${text.substring(0, 200)}`);
+        return [];
+      }
 
       const json = await response.json();
       const items: any[] = json?.result?.items ?? [];
@@ -112,7 +123,7 @@ export class NFTService {
 
       return nfts;
     } catch (error) {
-      console.error('Error fetching NFTs from Helius:', error);
+      console.error('[NFTService] RPC error: Failed to fetch NFTs:', error);
       return [];
     }
   }

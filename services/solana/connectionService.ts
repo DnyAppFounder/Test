@@ -18,7 +18,7 @@ function getDirectRpcUrl(): string {
   if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SOLANA_RPC_URL) {
     return process.env.EXPO_PUBLIC_SOLANA_RPC_URL;
   }
-  return 'https://api.mainnet-beta.solana.com';
+  return '';
 }
 
 export class SolanaConnectionService {
@@ -31,12 +31,16 @@ export class SolanaConnectionService {
     this.proxyUrl = getSupabaseRpcProxyUrl();
     this.directUrl = getDirectRpcUrl();
     const rpcUrl = this.proxyUrl || this.directUrl;
+    if (!rpcUrl) {
+      console.error('[ConnectionService] RPC error: No RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL or EXPO_PUBLIC_SUPABASE_URL in your environment.');
+      throw new Error('RPC error: No Solana RPC URL configured. Set EXPO_PUBLIC_SOLANA_RPC_URL.');
+    }
     this.connection = new Connection(rpcUrl, {
       commitment: 'confirmed',
       confirmTransactionInitialTimeout: 30000,
     });
     console.log('[ConnectionService] Proxy URL:', this.proxyUrl || 'none');
-    console.log('[ConnectionService] Direct URL:', this.directUrl);
+    console.log('[ConnectionService] Direct URL:', this.directUrl || 'none (using proxy)');
   }
 
   static getInstance(): SolanaConnectionService {
@@ -82,12 +86,16 @@ export class SolanaConnectionService {
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`RPC ${response.status}: ${text.substring(0, 200)}`);
+      const msg = `RPC error: ${method} failed with HTTP ${response.status}: ${text.substring(0, 200)}`;
+      console.error('[RPC]', msg);
+      throw new Error(msg);
     }
 
     const json = await response.json();
     if (json.error) {
-      throw new Error(`RPC error: ${json.error.message || JSON.stringify(json.error)}`);
+      const msg = `RPC error: ${method} → ${json.error.message || JSON.stringify(json.error)}`;
+      console.error('[RPC]', msg);
+      throw new Error(msg);
     }
 
     return json.result;

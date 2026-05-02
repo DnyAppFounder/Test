@@ -6,10 +6,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const RPC_ENDPOINTS = [
-  Deno.env.get("SOLANA_RPC_URL"),
-  "https://api.mainnet-beta.solana.com",
-].filter(Boolean) as string[];
+const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL");
+if (!SOLANA_RPC_URL) {
+  console.error("[solana-rpc] RPC error: SOLANA_RPC_URL environment variable is not set.");
+}
+const RPC_ENDPOINTS = [SOLANA_RPC_URL].filter(Boolean) as string[];
 
 const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
 const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
