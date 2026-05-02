@@ -337,6 +337,13 @@ export default function CommunityScreen() {
     if (!newCommentContent.trim() || !profile || !selectedPostId || submittingComment) return;
     const commentText = newCommentContent.trim();
     const parentId = replyingToComment?.id;
+
+    // Limit: one top-level comment per user per post
+    if (!parentId) {
+      const alreadyCommented = comments.some(c => c.author_id === profile.id && !c.parent_comment_id);
+      if (alreadyCommented) return;
+    }
+
     setSubmittingComment(true);
     setNewCommentContent('');
     setReplyingToComment(null);
