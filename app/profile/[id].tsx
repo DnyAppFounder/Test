@@ -472,9 +472,10 @@ export default function ProfileScreen() {
       setReplyingToComment(null);
       setComments(await SocialService.getComments(commentsPostId, currentUserProfile.id));
       setPosts(prev => prev.map(p => p.id === commentsPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p));
-    } catch {} finally {
-      setSubmittingComment(false);
+    } catch {
+      // ignore
     }
+    setSubmittingComment(false);
   };
 
   const handleCommentLike = async (commentId: string) => {
@@ -486,15 +487,14 @@ export default function ProfileScreen() {
     await SocialService.toggleCommentLike(commentId, currentUserProfile.id);
   };
 
-  const handleShareProfile = async () => {
-    try {
-      const name = profile?.username || displayName;
-      await Share.share({ message: `Check out ${name}'s profile on Dawen Pulse!` });
-    } catch {}
-  };
-
   const displayName = profile?.username
     || (profile?.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Unknown');
+
+  const handleShareProfile = async () => {
+    try {
+      await Share.share({ message: `Check out ${displayName}'s profile on Dawen Pulse!` });
+    } catch {}
+  };
 
   const shortAddr = profile?.wallet_address
     ? `${profile.wallet_address.slice(0, 4)}...${profile.wallet_address.slice(-4)}`
