@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck, Trash2 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
-import { Post, UserProfile } from '@/services/socialService';
+import { Post, UserProfile, SocialService } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 interface PostCardProps {
@@ -39,10 +39,7 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
   };
 
   const handleDelete = () => {
-    Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => onDelete?.(post.id) },
-    ]);
+    onDelete?.(post.id);
   };
 
   const handleShare = async () => {
@@ -96,8 +93,27 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         ) : null}
       </View>
 
-      {/* Content */}
-      <Text style={styles.content}>{post.content}</Text>
+      {/* Content with clickable @mentions */}
+      <Text style={styles.content}>
+        {post.content.split(/(@\w+)/g).map((part, i) => {
+          if (/^@\w+$/.test(part)) {
+            return (
+              <Text
+                key={i}
+                style={styles.mentionText}
+                onPress={() => {
+                  SocialService.searchUsers(part.slice(1)).then(results => {
+                    if (results[0]?.id) router.push(`/profile/${results[0].id}` as any);
+                  }).catch(() => {});
+                }}
+              >
+                {part}
+              </Text>
+            );
+          }
+          return <Text key={i}>{part}</Text>;
+        })}
+      </Text>
 
       {/* Image — prefer media_url, fallback to image_url */}
       {(post.media_url || post.image_url) && !imageError && (
@@ -113,21 +129,39 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       {post.token_symbol && (
         <View style={styles.tokenCard}>
           <View style={styles.tokenCardRow}>
-            <Text style={styles.tokenCardSymbol}>${post.token_symbol}</Text>
-            {post.token_price != null && (
-              <Text style={styles.tokenCardPrice}>
-                {post.token_price < 0.01
-                  ? `$${post.token_price.toFixed(6)}`
-                  : post.token_price < 1
-                  ? `$${post.token_price.toFixed(4)}`
-                  : `$${post.token_price.toFixed(2)}`}
-              </Text>
-            )}
-            {post.token_change_24h != null && (
-              <Text style={[styles.tokenCardChange, { color: post.token_change_24h >= 0 ? '#10b981' : '#ef4444' }]}>
-                {post.token_change_24h >= 0 ? '+' : ''}{post.token_change_24h.toFixed(2)}%
-              </Text>
-            )}
+            <View style={styles.tokenCardLeft}>
+              {post.token_logo_uri ? (
+                <Image source={{ uri: post.token_logo_uri }} style={styles.tokenCardLogo} />
+              ) : (
+                <View style={styles.tokenCardLogoFallback}>
+                  <Text style={styles.tokenCardLogoText}>{post.token_symbol[0]}</Text>
+                </View>
+              )}
+              <View style={styles.tokenCardInfo}>
+                <Text style={styles.tokenCardSymbol}>${post.token_symbol}</Text>
+                {post.token_address && (
+                  <Text style={styles.tokenCardAddress}>
+                    {post.token_address.slice(0, 4)}...{post.token_address.slice(-4)}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.tokenCardRight}>
+              {post.token_price != null && (
+                <Text style={styles.tokenCardPrice}>
+                  {post.token_price < 0.01
+                    ? `$${post.token_price.toFixed(6)}`
+                    : post.token_price < 1
+                    ? `$${post.token_price.toFixed(4)}`
+                    : `$${post.token_price.toFixed(2)}`}
+                </Text>
+              )}
+              {post.token_change_24h != null && (
+                <Text style={[styles.tokenCardChange, { color: post.token_change_24h >= 0 ? '#10b981' : '#ef4444' }]}>
+                  {post.token_change_24h >= 0 ? '+' : ''}{post.token_change_24h.toFixed(2)}%
+                </Text>
+              )}
+            </View>
           </View>
         </View>
       )}
@@ -247,7 +281,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0E0E1A',
     borderRadius: 12,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
     marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: 'rgba(139,92,246,0.2)',
@@ -255,13 +289,48 @@ const styles = StyleSheet.create({
   tokenCardRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    justifyContent: 'space-between',
+  },
+  tokenCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flex: 1,
+  },
+  tokenCardLogo: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  tokenCardLogoFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#1E1E2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tokenCardLogoText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  tokenCardInfo: {
+    gap: 2,
   },
   tokenCardSymbol: {
     fontSize: 13,
     fontWeight: '800',
     color: colors.primary,
-    flex: 1,
+  },
+  tokenCardAddress: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
+  },
+  tokenCardRight: {
+    alignItems: 'flex-end',
+    gap: 2,
   },
   tokenCardPrice: {
     fontSize: 14,
@@ -269,7 +338,11 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   tokenCardChange: {
-    fontSize: 13,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  mentionText: {
+    color: '#8B5CF6',
     fontWeight: '700',
   },
   actions: {

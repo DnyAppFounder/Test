@@ -18,7 +18,7 @@ import {
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
-import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation } from '@/services/socialService';
+import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
@@ -78,6 +78,11 @@ export default function CommunityScreen() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Followers / Following list modal
+  const [followListType, setFollowListType] = useState<'followers' | 'following' | null>(null);
+  const [followListUsers, setFollowListUsers] = useState<UserProfile[]>([]);
+  const [followListLoading, setFollowListLoading] = useState(false);
 
   // @mention dropdown
   const [mentionQuery, setMentionQuery] = useState('');
@@ -369,6 +374,44 @@ export default function CommunityScreen() {
     setUnreadNotifCount(0);
   };
 
+  const openFollowList = async (type: 'followers' | 'following') => {
+    if (!profile?.id) return;
+    setFollowListType(type);
+    setFollowListLoading(true);
+    setFollowListUsers([]);
+    try {
+      const users = type === 'followers'
+        ? await SocialService.getFollowers(profile.id)
+        : await SocialService.getFollowing(profile.id);
+      setFollowListUsers(users);
+    } catch (e) {
+      console.warn('[Community] followList error:', e);
+    } finally {
+      setFollowListLoading(false);
+    }
+  };
+
+  const handleClearAllNotifs = async () => {
+    if (!profile?.id) return;
+    await SocialService.clearAllNotifications(profile.id);
+    setNotifications([]);
+    setUnreadNotifCount(0);
+  };
+
+  const handleNotifPress = (notif: Notification) => {
+    if (!notif.read) {
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+      setUnreadNotifCount(prev => Math.max(0, prev - 1));
+    }
+    if (notif.type === 'follow' && notif.actor?.id) {
+      router.push(`/profile/${notif.actor.id}` as any);
+    } else if (notif.post_id && (notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention')) {
+      openCommentsModal(notif.post_id);
+    } else if (notif.type === 'message' && notif.actor?.id) {
+      router.push(`/chat/${notif.actor.id}` as any);
+    }
+  };
+
   const selectedPost = posts.find(p => p.id === selectedPostId);
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
@@ -471,15 +514,15 @@ export default function CommunityScreen() {
               <Text style={styles.profileCardStatLabel}>Posts</Text>
             </View>
             <View style={styles.profileCardStatDivider} />
-            <View style={styles.profileCardStat}>
+            <TouchableOpacity style={styles.profileCardStat} onPress={() => openFollowList('followers')} activeOpacity={0.7}>
               <Text style={styles.profileCardStatValue}>{profileFollowers}</Text>
-              <Text style={styles.profileCardStatLabel}>Followers</Text>
-            </View>
+              <Text style={[styles.profileCardStatLabel, styles.statLabelTappable]}>Followers</Text>
+            </TouchableOpacity>
             <View style={styles.profileCardStatDivider} />
-            <View style={styles.profileCardStat}>
+            <TouchableOpacity style={styles.profileCardStat} onPress={() => openFollowList('following')} activeOpacity={0.7}>
               <Text style={styles.profileCardStatValue}>{profileFollowing}</Text>
-              <Text style={styles.profileCardStatLabel}>Following</Text>
-            </View>
+              <Text style={[styles.profileCardStatLabel, styles.statLabelTappable]}>Following</Text>
+            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
@@ -626,7 +669,7 @@ export default function CommunityScreen() {
     <ScrollView style={styles.notifContainer} contentContainerStyle={styles.notifContent} showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
     >
-      {/* Filter tabs + mark all read */}
+      {/* Filter tabs + actions */}
       <View style={styles.notifHeader}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.notifFilterScroll} contentContainerStyle={styles.notifFilterRow}>
           {NOTIF_TABS.map(tab => (
@@ -642,11 +685,18 @@ export default function CommunityScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-        {unreadNotifCount > 0 && (
-          <TouchableOpacity onPress={handleMarkNotifsRead} style={styles.markReadBtn}>
-            <Text style={styles.markReadText}>Mark all read</Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.notifActions}>
+          {unreadNotifCount > 0 && (
+            <TouchableOpacity onPress={handleMarkNotifsRead} style={styles.markReadBtn}>
+              <Text style={styles.markReadText}>Read all</Text>
+            </TouchableOpacity>
+          )}
+          {notifications.length > 0 && (
+            <TouchableOpacity onPress={handleClearAllNotifs} style={styles.markReadBtn}>
+              <Text style={[styles.markReadText, { color: '#ef4444' }]}>Clear</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {notifLoading ? (
@@ -667,7 +717,7 @@ export default function CommunityScreen() {
               || (notif.actor?.wallet_address ? `${notif.actor.wallet_address.slice(0, 6)}...` : 'Someone');
             return (
           <TouchableOpacity key={notif.id} style={[styles.notifRow, idx < filteredNotifs.length - 1 && styles.notifRowBorder,
-            !notif.read && styles.notifRowUnread]} activeOpacity={0.75}>
+            !notif.read && styles.notifRowUnread]} activeOpacity={0.75} onPress={() => handleNotifPress(notif)}>
             <View style={styles.notifIconWrap}>
               <NotifIcon type={notif.type} />
             </View>
@@ -1249,6 +1299,68 @@ export default function CommunityScreen() {
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* Followers / Following List Modal */}
+      <Modal visible={followListType !== null} animationType="slide" transparent>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalSheet, { maxHeight: '80%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {followListType === 'followers' ? 'Followers' : 'Following'}
+              </Text>
+              <TouchableOpacity onPress={() => setFollowListType(null)}>
+                <X size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            {followListLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginTop: 40, marginBottom: 40 }} />
+            ) : followListUsers.length === 0 ? (
+              <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                <Text style={{ color: colors.textMuted, fontSize: fontSize.md }}>
+                  {followListType === 'followers' ? 'No followers yet' : 'Not following anyone yet'}
+                </Text>
+              </View>
+            ) : (
+              <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+                {followListUsers.map((user, idx) => {
+                  const name = user.username || `${user.wallet_address?.slice(0, 6)}...${user.wallet_address?.slice(-4)}`;
+                  const shortAddr = user.wallet_address
+                    ? `${user.wallet_address.slice(0, 4)}...${user.wallet_address.slice(-4)}`
+                    : '';
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[styles.convRow, idx < followListUsers.length - 1 && styles.convRowBorder]}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        setFollowListType(null);
+                        router.push(`/profile/${user.id}` as any);
+                      }}
+                    >
+                      {user.avatar_url
+                        ? <Image source={{ uri: user.avatar_url }} style={styles.convAvatar} />
+                        : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>
+                      }
+                      <View style={styles.convBody}>
+                        <View style={styles.convNameRow}>
+                          <Text style={styles.convUsername}>{name}</Text>
+                          {user.is_verified && (
+                            <View style={styles.verifiedBadge}>
+                              <Check size={9} color={colors.white} strokeWidth={3} />
+                            </View>
+                          )}
+                        </View>
+                        {shortAddr ? <Text style={{ fontSize: 11, color: colors.textMuted, fontFamily: 'SpaceMono-Regular' }}>{shortAddr}</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -2105,6 +2217,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.primary,
   },
+  notifActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
   msgHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2208,6 +2325,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  statLabelTappable: {
+    color: colors.primary,
   },
   profileCardStatDivider: {
     width: 1,

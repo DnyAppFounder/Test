@@ -32,6 +32,7 @@ export interface Post {
   token_symbol: string | null;
   token_price: number | null;
   token_change_24h: number | null;
+  token_logo_uri: string | null;
   // Post settings
   visibility: 'public' | 'followers';
   who_can_reply: 'everyone' | 'followers' | 'mentioned';
@@ -337,6 +338,7 @@ export class SocialService {
       tokenSymbol?: string;
       tokenPrice?: number;
       tokenChange24h?: number;
+      tokenLogoUri?: string;
       visibility?: 'public' | 'followers';
       whoCanReply?: 'everyone' | 'followers' | 'mentioned';
       allowQuotes?: boolean;
@@ -363,6 +365,7 @@ export class SocialService {
         token_symbol: options?.tokenSymbol || null,
         token_price: options?.tokenPrice ?? null,
         token_change_24h: options?.tokenChange24h ?? null,
+        token_logo_uri: options?.tokenLogoUri ?? null,
         visibility: options?.visibility ?? 'public',
         who_can_reply: options?.whoCanReply ?? 'everyone',
         allow_quotes: options?.allowQuotes ?? true,
@@ -371,6 +374,11 @@ export class SocialService {
       })
       .select()
       .maybeSingle();
+
+    if (data) {
+      await this.notifyMentions(content, authorId, data.id);
+    }
+
     return data;
   }
 
@@ -551,8 +559,9 @@ export class SocialService {
       .maybeSingle();
 
     if (data) {
+      await this.notifyMentions(content, authorId, postId);
+
       if (parentCommentId) {
-        // Increment replies_count on parent comment
         const { data: parent } = await supabase
           .from('post_comments')
           .select('replies_count, author_id')
@@ -830,6 +839,29 @@ export class SocialService {
       .update({ read: true })
       .eq('user_id', userId)
       .eq('read', false);
+  }
+
+  static async clearAllNotifications(userId: string): Promise<void> {
+    await supabase
+      .from('notifications')
+      .delete()
+      .eq('user_id', userId);
+  }
+
+  static async notifyMentions(content: string, actorId: string, postId: string | null): Promise<void> {
+    const matches = content.match(/@(\w+)/g);
+    if (!matches) return;
+    const usernames = [...new Set(matches.map(m => m.slice(1)))];
+    for (const username of usernames) {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .eq('username', username)
+        .maybeSingle();
+      if (data?.id && data.id !== actorId) {
+        await this.createNotification(data.id, actorId, 'mention', postId, 'mentioned you');
+      }
+    }
   }
 
   static async getUnreadNotificationCount(userId: string): Promise<number> {

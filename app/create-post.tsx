@@ -159,6 +159,7 @@ export default function CreatePostScreen() {
         tokenSymbol: attachedToken?.symbol ?? undefined,
         tokenPrice: attachedToken?.price ?? undefined,
         tokenChange24h: attachedToken?.priceChange24h ?? undefined,
+        tokenLogoUri: attachedToken?.image ?? undefined,
         visibility,
         whoCanReply: effectiveReply,
         allowQuotes,
