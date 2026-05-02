@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2 } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
+import PostTokenCard from './PostTokenCard';
 import { useRouter } from 'expo-router';
 import { Post, UserProfile, SocialService } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -78,7 +79,14 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
             <Text style={styles.name}>{authorName}</Text>
             {post.author && <VerificationBadge profile={post.author} size="sm" />}
           </View>
-          <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
+          <View style={styles.subRow}>
+            {post.author?.username && post.author?.wallet_address ? (
+              <Text style={styles.walletAddr}>
+                {post.author.wallet_address.slice(0, 4)}...{post.author.wallet_address.slice(-4)}
+              </Text>
+            ) : null}
+            <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
+          </View>
         </TouchableOpacity>
 
         {onDelete ? (
@@ -124,45 +132,15 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         />
       )}
 
-      {/* Token card */}
-      {post.token_symbol && (
-        <View style={styles.tokenCard}>
-          <View style={styles.tokenCardRow}>
-            <View style={styles.tokenCardLeft}>
-              {post.token_logo_uri ? (
-                <Image source={{ uri: post.token_logo_uri }} style={styles.tokenCardLogo} />
-              ) : (
-                <View style={styles.tokenCardLogoFallback}>
-                  <Text style={styles.tokenCardLogoText}>{post.token_symbol[0]}</Text>
-                </View>
-              )}
-              <View style={styles.tokenCardInfo}>
-                <Text style={styles.tokenCardSymbol}>${post.token_symbol}</Text>
-                {post.token_address && (
-                  <Text style={styles.tokenCardAddress}>
-                    {post.token_address.slice(0, 4)}...{post.token_address.slice(-4)}
-                  </Text>
-                )}
-              </View>
-            </View>
-            <View style={styles.tokenCardRight}>
-              {post.token_price != null && (
-                <Text style={styles.tokenCardPrice}>
-                  {post.token_price < 0.01
-                    ? `$${post.token_price.toFixed(6)}`
-                    : post.token_price < 1
-                    ? `$${post.token_price.toFixed(4)}`
-                    : `$${post.token_price.toFixed(2)}`}
-                </Text>
-              )}
-              {post.token_change_24h != null && (
-                <Text style={[styles.tokenCardChange, { color: post.token_change_24h >= 0 ? '#10b981' : '#ef4444' }]}>
-                  {post.token_change_24h >= 0 ? '+' : ''}{post.token_change_24h.toFixed(2)}%
-                </Text>
-              )}
-            </View>
-          </View>
-        </View>
+      {/* Live token card */}
+      {post.token_symbol && post.token_address && (
+        <PostTokenCard
+          tokenAddress={post.token_address}
+          tokenSymbol={post.token_symbol}
+          tokenLogoUri={post.token_logo_uri}
+          storedPrice={post.token_price}
+          storedChange24h={post.token_change_24h}
+        />
       )}
 
       {/* Actions */}
@@ -250,10 +228,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
   },
+  subRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  walletAddr: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
+  },
   time: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
-    marginTop: 2,
     fontWeight: '500',
   },
   moreBtn: {
@@ -275,70 +263,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     marginBottom: spacing.md,
     backgroundColor: '#1A1A28',
-  },
-  tokenCard: {
-    backgroundColor: '#0E0E1A',
-    borderRadius: 12,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.2)',
-  },
-  tokenCardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  tokenCardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    flex: 1,
-  },
-  tokenCardLogo: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  tokenCardLogoFallback: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#1E1E2E',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tokenCardLogoText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  tokenCardInfo: {
-    gap: 2,
-  },
-  tokenCardSymbol: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.primary,
-  },
-  tokenCardAddress: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontFamily: 'SpaceMono-Regular',
-  },
-  tokenCardRight: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  tokenCardPrice: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  tokenCardChange: {
-    fontSize: 12,
-    fontWeight: '700',
   },
   mentionText: {
     color: '#8B5CF6',

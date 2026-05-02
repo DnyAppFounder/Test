@@ -19,7 +19,7 @@ import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/
 
 export default function RewardsScreen() {
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { activeAddress } = useWallet();
   const [loading, setLoading] = useState(true);
   const [referralCode, setReferralCode] = useState('');
   const [referrals, setReferrals] = useState<Referral[]>([]);
@@ -32,17 +32,17 @@ export default function RewardsScreen() {
 
   useEffect(() => {
     loadData();
-  }, [selectedAccount]);
+  }, [activeAddress]);
 
   const loadData = async () => {
-    if (!selectedAccount) return;
+    if (!activeAddress) return;
 
     setLoading(true);
     const [code, refs, rwds, sts] = await Promise.all([
-      ReferralService.getOrCreateReferralCode(selectedAccount.address),
-      ReferralService.getUserReferrals(selectedAccount.address),
-      ReferralService.getUserRewards(selectedAccount.address),
-      ReferralService.getReferralStats(selectedAccount.address),
+      ReferralService.getOrCreateReferralCode(activeAddress),
+      ReferralService.getUserReferrals(activeAddress),
+      ReferralService.getUserRewards(activeAddress),
+      ReferralService.getReferralStats(activeAddress),
     ]);
 
     if (code) setReferralCode(code.code);
@@ -69,11 +69,11 @@ export default function RewardsScreen() {
   };
 
   const handleApplyCode = async () => {
-    if (!inputCode.trim() || !selectedAccount) return;
+    if (!inputCode.trim() || !activeAddress) return;
 
     setApplyingCode(true);
     const success = await ReferralService.applyReferralCode(
-      selectedAccount.address,
+      activeAddress,
       inputCode.trim().toUpperCase()
     );
 
@@ -93,7 +93,7 @@ export default function RewardsScreen() {
     }
   };
 
-  if (!selectedAccount) {
+  if (!activeAddress) {
     return (
       <View style={styles.container}>
         <LinearGradient colors={colors.gradient.primary} style={styles.header}>

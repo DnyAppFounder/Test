@@ -648,6 +648,11 @@ export default function CommunityScreen() {
                     <Text style={styles.convUsername}>{displayName}</Text>
                     <VerificationBadge profile={otherUser} size="sm" />
                   </View>
+                  {otherUser.username && otherUser.wallet_address ? (
+                    <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'SpaceMono-Regular', marginBottom: 1 }}>
+                      {otherUser.wallet_address.slice(0, 4)}...{otherUser.wallet_address.slice(-4)}
+                    </Text>
+                  ) : null}
                   <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMessage.content}</Text>
                 </View>
                 <View style={styles.convMeta}>
@@ -735,7 +740,9 @@ export default function CommunityScreen() {
         <View style={styles.notifList}>
           {filteredNotifs.map((notif, idx) => {
             const actorName = notif.actor?.username
-              || (notif.actor?.wallet_address ? `${notif.actor.wallet_address.slice(0, 6)}...` : 'Someone');
+              || (notif.actor?.wallet_address
+                ? `${notif.actor.wallet_address.slice(0, 6)}...${notif.actor.wallet_address.slice(-4)}`
+                : 'Someone');
             return (
           <TouchableOpacity key={notif.id} style={[styles.notifRow, idx < filteredNotifs.length - 1 && styles.notifRowBorder,
             !notif.read && styles.notifRowUnread]} activeOpacity={0.75} onPress={() => handleNotifPress(notif)}>
