@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+
 export interface NFT {
   id: string;
   collection_id: string;
@@ -26,15 +28,11 @@ export interface NFTCollection {
 }
 
 function getNftRpcUrl(): string {
-  const supabaseUrl = typeof process !== 'undefined'
-    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
-    : undefined;
+  const supabaseUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
   if (supabaseUrl) {
     return `${supabaseUrl}/functions/v1/solana-rpc`;
   }
-  const directUrl = typeof process !== 'undefined'
-    ? process.env?.EXPO_PUBLIC_SOLANA_RPC_URL
-    : undefined;
+  const directUrl = process.env.EXPO_PUBLIC_SOLANA_RPC_URL || '';
   if (directUrl) {
     return directUrl;
   }

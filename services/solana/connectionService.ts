@@ -1,9 +1,12 @@
 import { Connection } from '@solana/web3.js';
+import Constants from 'expo-constants';
+
+function getSupabaseUrl(): string {
+  return Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+}
 
 function getSupabaseRpcProxyUrl(): string {
-  const supabaseUrl =
-    (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_URL) ||
-    '';
+  const supabaseUrl = getSupabaseUrl();
   if (supabaseUrl) {
     return `${supabaseUrl}/functions/v1/solana-rpc`;
   }
@@ -11,14 +14,11 @@ function getSupabaseRpcProxyUrl(): string {
 }
 
 function getSupabaseAnonKey(): string {
-  return (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY) || '';
+  return Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 }
 
 function getDirectRpcUrl(): string {
-  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SOLANA_RPC_URL) {
-    return process.env.EXPO_PUBLIC_SOLANA_RPC_URL;
-  }
-  return '';
+  return process.env.EXPO_PUBLIC_SOLANA_RPC_URL || '';
 }
 
 export class SolanaConnectionService {

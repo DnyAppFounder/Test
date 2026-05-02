@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+
 export interface TokenPrice {
   mint: string;
   price: number;
@@ -83,8 +85,8 @@ export class SolanaPriceService {
   async getSOLPrice(): Promise<number> {
     // Jupiter price API is more reliable for native SOL
     try {
-      const supabaseUrl = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_URL) || '';
-      const anonKey = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY) || '';
+      const supabaseUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+      const anonKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
       const solMint = 'So11111111111111111111111111111111111111112';
 
       if (supabaseUrl && anonKey) {

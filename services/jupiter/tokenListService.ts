@@ -1,10 +1,10 @@
+import Constants from 'expo-constants';
+
 const JUPITER_TOKEN_LIST_URL = 'https://token.jup.ag/all';
 const CACHE_DURATION = 5 * 60 * 1000;
 
 function getProxyTokenListUrl(): string {
-  const supabaseUrl = typeof process !== 'undefined'
-    ? process.env?.EXPO_PUBLIC_SUPABASE_URL
-    : undefined;
+  const supabaseUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
   if (supabaseUrl) {
     return `${supabaseUrl}/functions/v1/solana-rpc?action=tokens`;
   }
