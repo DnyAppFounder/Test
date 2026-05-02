@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   Alert,
 } from 'react-native';
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -80,6 +80,9 @@ export default function CommunityScreen() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Timestamp set when notifications are cleared — hides older notifications locally
+  const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
+
   // Followers / Following list modal
   const [followListType, setFollowListType] = useState<'followers' | 'following' | null>(null);
   const [followListUsers, setFollowListUsers] = useState<UserProfile[]>([]);
@@ -105,13 +108,18 @@ export default function CommunityScreen() {
     try {
       const data = await SocialService.getNotifications(profile.id);
       setNotifications(data);
-      setUnreadNotifCount(data.filter(n => !n.read).length);
+      // Unread count respects the cleared timestamp
+      const clearedAt = notifClearedAt;
+      const visible = clearedAt
+        ? data.filter(n => new Date(n.created_at) > new Date(clearedAt))
+        : data;
+      setUnreadNotifCount(visible.filter(n => !n.read).length);
     } catch (e) {
       console.warn('[Community] loadNotifications error:', e);
     } finally {
       setNotifLoading(false);
     }
-  }, [profile?.id]);
+  }, [profile?.id, notifClearedAt]);
 
   const loadConversations = useCallback(async () => {
     if (!profile?.id) return;
@@ -139,6 +147,17 @@ export default function CommunityScreen() {
   }, [profile?.id]);
 
   useEffect(() => { loadInitialFeed(); }, [loadInitialFeed]);
+
+  // Reload conversations when screen regains focus (e.g. after returning from chat)
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  useFocusEffect(
+    useCallback(() => {
+      if (activeTabRef.current === 'messages' && profile?.id) {
+        loadConversations();
+      }
+    }, [profile?.id, loadConversations])
+  );
 
   useEffect(() => {
     if (activeTab === 'notifications') { loadNotifications(); clearUnreadNotifCount(); }
@@ -394,9 +413,11 @@ export default function CommunityScreen() {
 
   const handleClearAllNotifs = async () => {
     if (!profile?.id) return;
-    await SocialService.clearAllNotifications(profile.id);
+    const clearedAt = new Date().toISOString();
+    setNotifClearedAt(clearedAt);
     setNotifications([]);
     setUnreadNotifCount(0);
+    await SocialService.clearAllNotifications(profile.id);
   };
 
   const handleNotifPress = (notif: Notification) => {
@@ -483,7 +504,9 @@ export default function CommunityScreen() {
       );
     }
 
-    const displayName = profile.username || (activeAddress ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}` : 'Anonymous');
+    const displayName = profile.username
+      || (activeAddress ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}` : null)
+      || (profile.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Wallet');
 
     return (
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
@@ -648,6 +671,7 @@ export default function CommunityScreen() {
   ] as const;
 
   const filteredNotifs = notifications.filter(n => {
+    if (notifClearedAt && new Date(n.created_at) <= new Date(notifClearedAt)) return false;
     if (notifFilter === 'all') return true;
     return n.type === notifFilter;
   });
@@ -971,7 +995,11 @@ export default function CommunityScreen() {
                 }
               </View>
               <Text style={styles.createAuthorName}>
-                {profile?.username || (activeAddress ? activeAddress.slice(0, 8) + '...' : 'Anonymous')}
+                {profile?.username || (activeAddress
+                  ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}`
+                  : profile?.wallet_address
+                    ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}`
+                    : 'Wallet')}
               </Text>
             </View>
 
@@ -1159,7 +1187,7 @@ export default function CommunityScreen() {
                     }
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <Text style={styles.mentionUsername}>{u.username || 'anonymous'}</Text>
+                        <Text style={styles.mentionUsername}>{u.username || (u.wallet_address ? `${u.wallet_address.slice(0, 6)}...${u.wallet_address.slice(-4)}` : 'Wallet')}</Text>
                         <VerificationBadge profile={u} size="sm" />
                       </View>
                       <Text style={styles.mentionAddr}>{u.wallet_address?.slice(0, 6)}...{u.wallet_address?.slice(-4)}</Text>
