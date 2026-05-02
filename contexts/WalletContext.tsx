@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
@@ -337,8 +337,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeAddress, applyPortfolioResult]);
 
-  // Refresh when app returns to foreground
+  // Refresh when app returns to foreground (native only)
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     const handleAppState = (nextState: AppStateStatus) => {
       if (nextState === 'active' && activeAddress) {
         console.log('[WalletContext] App foregrounded, refreshing assets');
