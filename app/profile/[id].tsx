@@ -11,6 +11,9 @@ import {
   Modal,
   RefreshControl,
   FlatList,
+  Share,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,12 +32,15 @@ import {
   MessageCircle,
   Star,
   Wallet,
+  Heart,
+  Send,
 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
-import { SocialService, UserProfile, Post, PROMOTE_TIERS } from '@/services/socialService';
+import { SocialService, UserProfile, Post, PostComment, PROMOTE_TIERS } from '@/services/socialService';
+import { timeAgo } from '@/components/PostCard';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard from '@/components/PostCard';
 
@@ -216,6 +222,15 @@ export default function ProfileScreen() {
   const [purchasingPremium, setPurchasingPremium] = useState(false);
   const [premiumDone, setPremiumDone] = useState(false);
 
+  // Comments modal
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [comments, setComments] = useState<PostComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newCommentContent, setNewCommentContent] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [replyingToComment, setReplyingToComment] = useState<PostComment | null>(null);
+
   const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar } = useProfile();
   const walletAddr = selectedAccount?.address || activeAddress || '';
   const isOwnProfile = currentUserProfile?.id === id;
@@ -286,7 +301,7 @@ export default function ProfileScreen() {
     setEditUsername(profile.username || '');
     setEditBio(profile.bio || '');
     setEditAvatarUrl(profile.avatar_url || '');
-    setEditBannerUrl((profile as any).banner_url || '');
+    setEditBannerUrl(profile.banner_url || '');
     setShowEditModal(true);
   };
 
@@ -330,7 +345,7 @@ export default function ProfileScreen() {
         avatar_url: avatarUrl,
       });
       if (bannerUrl) {
-        await SocialService.updateProfile(profile.id, { banner_url: bannerUrl } as any);
+        await SocialService.updateProfile(profile.id, { banner_url: bannerUrl });
       }
       await loadProfile();
     } finally {
@@ -435,6 +450,49 @@ export default function ProfileScreen() {
     }
   };
 
+  const openCommentsModal = async (postId: string) => {
+    setCommentsPostId(postId);
+    setShowCommentsModal(true);
+    setCommentsLoading(true);
+    try {
+      setComments(await SocialService.getComments(postId, currentUserProfile?.id));
+    } catch {
+      setComments([]);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  const handleAddComment = async () => {
+    if (!newCommentContent.trim() || !currentUserProfile || !commentsPostId) return;
+    setSubmittingComment(true);
+    try {
+      await SocialService.addComment(commentsPostId, currentUserProfile.id, newCommentContent.trim(), replyingToComment?.id);
+      setNewCommentContent('');
+      setReplyingToComment(null);
+      setComments(await SocialService.getComments(commentsPostId, currentUserProfile.id));
+      setPosts(prev => prev.map(p => p.id === commentsPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p));
+    } catch {} finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleCommentLike = async (commentId: string) => {
+    if (!currentUserProfile) return;
+    setComments(prev => prev.map(c => {
+      if (c.id === commentId) return { ...c, liked_by_user: !c.liked_by_user, likes_count: c.liked_by_user ? Math.max(0, (c.likes_count || 0) - 1) : (c.likes_count || 0) + 1 };
+      return { ...c, replies: (c.replies || []).map(r => r.id === commentId ? { ...r, liked_by_user: !r.liked_by_user, likes_count: r.liked_by_user ? Math.max(0, (r.likes_count || 0) - 1) : (r.likes_count || 0) + 1 } : r) };
+    }));
+    await SocialService.toggleCommentLike(commentId, currentUserProfile.id);
+  };
+
+  const handleShareProfile = async () => {
+    try {
+      const name = profile?.username || displayName;
+      await Share.share({ message: `Check out ${name}'s profile on Dawen Pulse!` });
+    } catch {}
+  };
+
   const displayName = profile?.username
     || (profile?.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Unknown');
 
@@ -442,7 +500,7 @@ export default function ProfileScreen() {
     ? `${profile.wallet_address.slice(0, 4)}...${profile.wallet_address.slice(-4)}`
     : '';
 
-  const bannerUrl = (profile as any)?.banner_url || DEFAULT_BANNER;
+  const bannerUrl = profile?.banner_url || DEFAULT_BANNER;
   const isPremiumActive = profile ? SocialService.isPremiumActive(profile) : false;
 
   if (loading) {
@@ -475,9 +533,9 @@ export default function ProfileScreen() {
             post={post}
             currentProfile={currentUserProfile}
             onLike={handleLike}
-            onComment={() => {}}
+            onComment={openCommentsModal}
             onRepost={handleRepost}
-            onPromote={canDelete && isOwnProfile ? openPromoteModal : () => {}}
+            onPromote={canDelete && isOwnProfile ? openPromoteModal : undefined}
             onDelete={canDelete && isOwnProfile ? requestDeletePost : undefined}
           />
         ))}
@@ -533,7 +591,7 @@ export default function ProfileScreen() {
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.shareBtn} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.shareBtn} onPress={handleShareProfile} activeOpacity={0.8}>
             <Share2 size={18} color={colors.textPrimary} strokeWidth={2} />
           </TouchableOpacity>
         </View>
@@ -961,9 +1019,130 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ── Comments Modal ───────────────────────────────────────────────── */}
+      <Modal visible={showCommentsModal} animationType="slide" transparent>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalSheet, { maxHeight: '90%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Comments</Text>
+              <TouchableOpacity onPress={() => { setShowCommentsModal(false); setComments([]); setNewCommentContent(''); setReplyingToComment(null); }}>
+                <X size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+              {commentsLoading ? (
+                <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
+              ) : comments.length === 0 ? (
+                <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                  <Text style={{ color: colors.textMuted, fontSize: fontSize.md }}>No comments yet. Be the first!</Text>
+                </View>
+              ) : (
+                <View style={{ paddingBottom: spacing.lg }}>
+                  {comments.map(item => (
+                    <View key={item.id}>
+                      <View style={commentStyles.item}>
+                        <TouchableOpacity onPress={() => item.author?.id && router.push(`/profile/${item.author.id}` as any)} activeOpacity={0.8}>
+                          <View style={commentStyles.avatarXS}>
+                            {item.author?.avatar_url ? <Image source={{ uri: item.author.avatar_url }} style={commentStyles.avatarXSImg} /> : <User size={12} color={colors.textMuted} />}
+                          </View>
+                        </TouchableOpacity>
+                        <View style={commentStyles.body}>
+                          <View style={commentStyles.meta}>
+                            <Text style={commentStyles.author}>{item.author?.username || `${item.author?.wallet_address?.slice(0, 6)}...`}</Text>
+                            <Text style={commentStyles.time}>{timeAgo(item.created_at)}</Text>
+                          </View>
+                          <Text style={commentStyles.text}>{item.content}</Text>
+                          <View style={commentStyles.actions}>
+                            <TouchableOpacity style={commentStyles.actionBtn} onPress={() => handleCommentLike(item.id)} activeOpacity={0.7}>
+                              <Heart size={13} color={item.liked_by_user ? '#ef4444' : colors.textMuted} fill={item.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                              {(item.likes_count || 0) > 0 && <Text style={[commentStyles.actionText, item.liked_by_user && { color: '#ef4444' }]}>{item.likes_count}</Text>}
+                            </TouchableOpacity>
+                            <TouchableOpacity style={commentStyles.actionBtn} onPress={() => setReplyingToComment(item)} activeOpacity={0.7}>
+                              <MessageCircle size={13} color={colors.textMuted} strokeWidth={2} />
+                              <Text style={commentStyles.actionText}>Reply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                      {(item.replies || []).map(reply => (
+                        <View key={reply.id} style={commentStyles.reply}>
+                          <View style={commentStyles.avatarXXS}>
+                            {reply.author?.avatar_url ? <Image source={{ uri: reply.author.avatar_url }} style={commentStyles.avatarXXSImg} /> : <User size={10} color={colors.textMuted} />}
+                          </View>
+                          <View style={commentStyles.body}>
+                            <View style={commentStyles.meta}>
+                              <Text style={commentStyles.author}>{reply.author?.username || `${reply.author?.wallet_address?.slice(0, 6)}...`}</Text>
+                              <Text style={commentStyles.time}>{timeAgo(reply.created_at)}</Text>
+                            </View>
+                            <Text style={commentStyles.text}>{reply.content}</Text>
+                            <View style={commentStyles.actions}>
+                              <TouchableOpacity style={commentStyles.actionBtn} onPress={() => handleCommentLike(reply.id)} activeOpacity={0.7}>
+                                <Heart size={13} color={reply.liked_by_user ? '#ef4444' : colors.textMuted} fill={reply.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                                {(reply.likes_count || 0) > 0 && <Text style={[commentStyles.actionText, reply.liked_by_user && { color: '#ef4444' }]}>{reply.likes_count}</Text>}
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              )}
+            </ScrollView>
+            {replyingToComment && (
+              <View style={commentStyles.replyBanner}>
+                <Text style={commentStyles.replyBannerText}>Replying to <Text style={commentStyles.replyBannerName}>{replyingToComment.author?.username || 'user'}</Text></Text>
+                <TouchableOpacity onPress={() => setReplyingToComment(null)}><X size={14} color={colors.textMuted} /></TouchableOpacity>
+              </View>
+            )}
+            <View style={commentStyles.inputRow}>
+              <TextInput
+                style={commentStyles.input}
+                placeholder={replyingToComment ? `Reply to ${replyingToComment.author?.username || 'user'}...` : 'Add a comment...'}
+                placeholderTextColor={colors.textMuted}
+                value={newCommentContent}
+                onChangeText={setNewCommentContent}
+                maxLength={300}
+              />
+              <TouchableOpacity
+                style={[commentStyles.sendBtn, !newCommentContent.trim() && { opacity: 0.5 }]}
+                onPress={handleAddComment}
+                disabled={!newCommentContent.trim() || submittingComment}
+              >
+                {submittingComment ? <ActivityIndicator size="small" color={colors.white} /> : <Send size={15} color={colors.white} />}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
+
+const commentStyles = StyleSheet.create({
+  item: { flexDirection: 'row', marginBottom: spacing.lg, gap: spacing.md },
+  avatarXS: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#1E1E2E', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  avatarXSImg: { width: 28, height: 28, borderRadius: 14 },
+  avatarXXS: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#1E1E2E', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  avatarXXSImg: { width: 22, height: 22, borderRadius: 11 },
+  body: { flex: 1 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: 3 },
+  author: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
+  time: { fontSize: fontSize.xs, color: colors.textMuted },
+  text: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: 6 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  actionText: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
+  reply: { flexDirection: 'row', marginBottom: spacing.md, gap: spacing.md, paddingLeft: 36 },
+  replyBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(139,92,246,0.08)', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.15)' },
+  replyBannerText: { fontSize: 13, color: colors.textMuted },
+  replyBannerName: { fontWeight: '700', color: colors.primary },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.surfaceBorder, paddingTop: spacing.md, marginTop: spacing.sm },
+  input: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary, backgroundColor: '#1A1A28', borderRadius: borderRadius.full, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, maxHeight: 80 },
+  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0A0F' },

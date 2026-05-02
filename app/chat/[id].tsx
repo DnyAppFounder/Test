@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send, Plus, Check, User } from 'lucide-react-native';
+import { ArrowLeft, Smile, Send, Plus, Check, User } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, Message, UserProfile } from '@/services/socialService';
@@ -36,7 +36,7 @@ export default function ChatScreen() {
     try {
       const [msgs, other] = await Promise.all([
         SocialService.getConversationMessages(profile.id, otherId),
-        SocialService.getOrCreateProfile(otherId),
+        SocialService.getProfile(otherId),
       ]);
       setMessages(msgs);
       setOtherUser(other);
@@ -148,7 +148,11 @@ export default function ChatScreen() {
             <ArrowLeft size={22} color={colors.textPrimary} strokeWidth={2.5} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.topBarUser} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.topBarUser}
+            onPress={() => otherId && router.push(`/profile/${otherId}` as any)}
+            activeOpacity={0.8}
+          >
             <View style={styles.topAvatar}>
               {otherUser?.avatar_url ? (
                 <Image source={{ uri: otherUser.avatar_url }} style={styles.topAvatarImg} />
@@ -161,18 +165,6 @@ export default function ChatScreen() {
               <Text style={styles.onlineText}>View profile</Text>
             </View>
           </TouchableOpacity>
-
-          <View style={styles.topActions}>
-            <TouchableOpacity style={styles.topActionBtn} activeOpacity={0.7}>
-              <Phone size={20} color={colors.textSecondary} strokeWidth={2} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.topActionBtn} activeOpacity={0.7}>
-              <Video size={20} color={colors.textSecondary} strokeWidth={2} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.topActionBtn} activeOpacity={0.7}>
-              <MoreHorizontal size={20} color={colors.textSecondary} strokeWidth={2} />
-            </TouchableOpacity>
-          </View>
         </View>
 
         <View style={styles.divider} />
@@ -304,17 +296,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     fontWeight: '500',
-  },
-  topActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  topActionBtn: {
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   divider: {
     height: 1,

@@ -6,6 +6,7 @@ export interface UserProfile {
   username: string | null;
   bio: string;
   avatar_url: string | null;
+  banner_url: string | null;
   token_balance: number;
   is_verified: boolean;
   is_premium: boolean;
@@ -139,7 +140,7 @@ export class SocialService {
 
   static async updateProfile(
     profileId: string,
-    updates: { username?: string; bio?: string; avatar_url?: string }
+    updates: { username?: string; bio?: string; avatar_url?: string; banner_url?: string }
   ): Promise<UserProfile | null> {
     const { data } = await supabase
       .from('user_profiles')
@@ -203,7 +204,7 @@ export class SocialService {
       .from('posts')
       .select('*')
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit * 2);
+      .range(offset, offset + limit - 1);
 
     if (!posts || posts.length === 0) return [];
 
