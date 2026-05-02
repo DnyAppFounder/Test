@@ -1,6 +1,6 @@
 import '@/lib/polyfills';
 import { useEffect, useState, useCallback } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
@@ -10,7 +10,9 @@ import { ProfileProvider } from '@/contexts/ProfileContext';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 
-SplashScreen.preventAutoHideAsync();
+if (Platform.OS !== 'web') {
+  SplashScreen.preventAutoHideAsync().catch(() => {});
+}
 
 export default function RootLayout() {
   useFrameworkReady();
@@ -36,8 +38,8 @@ export default function RootLayout() {
   }, [fontsLoaded, fontError]);
 
   const onLayoutRootView = useCallback(async () => {
-    if (appIsReady) {
-      await SplashScreen.hideAsync();
+    if (appIsReady && Platform.OS !== 'web') {
+      await SplashScreen.hideAsync().catch(() => {});
     }
   }, [appIsReady]);
 
