@@ -29,7 +29,10 @@ import {
   MessageCircle,
   Star,
   Wallet,
+  Shield,
 } from 'lucide-react-native';
+import VerificationBadge from '@/components/VerificationBadge';
+import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
@@ -43,30 +46,6 @@ type ProfileTab = 'posts' | 'replies' | 'media' | 'likes';
 const DEFAULT_BANNER =
   'https://images.pexels.com/photos/956999/milky-way-starry-sky-night-sky-star-956999.jpeg?auto=compress&cs=tinysrgb&w=800';
 
-// Certification badge component
-function CertBadge({ profile }: { profile: UserProfile }) {
-  const isPremiumActive = SocialService.isPremiumActive(profile);
-  if (!profile.is_verified && !isPremiumActive) return null;
-  return (
-    <View style={certStyles.row}>
-      {profile.is_verified && (
-        <BadgeCheck size={18} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-      )}
-      {isPremiumActive && (
-        <View style={certStyles.premiumWrap}>
-          <BadgeCheck size={18} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-          <Star size={10} color="#FBBF24" fill="#FBBF24" strokeWidth={0} style={certStyles.star} />
-        </View>
-      )}
-    </View>
-  );
-}
-
-const certStyles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  premiumWrap: { position: 'relative', width: 20, height: 20 },
-  star: { position: 'absolute', bottom: -1, right: -2 },
-});
 
 // User row for followers/following list
 function UserRow({
@@ -109,7 +88,7 @@ function UserRow({
       <View style={urStyles.info}>
         <View style={urStyles.nameRow}>
           <Text style={urStyles.name} numberOfLines={1}>{name}</Text>
-          <CertBadge profile={user} />
+          <VerificationBadge profile={user} size="sm" />
         </View>
         <Text style={urStyles.handle} numberOfLines={1}>
           @{user.username?.toLowerCase() || name.toLowerCase().replace(/\s/g, '')}
@@ -215,6 +194,15 @@ export default function ProfileScreen() {
   const [showPremiumModal, setShowPremiumModal] = useState(false);
   const [purchasingPremium, setPurchasingPremium] = useState(false);
   const [premiumDone, setPremiumDone] = useState(false);
+
+  // Basic verification modal
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState<{
+    followsDecent: boolean; followsBadge: boolean; repliedToPost: boolean;
+    alreadyVerified: boolean; decentId: string | null; badgeId: string | null; pinnedPostId: string | null;
+  } | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyChecking, setVerifyChecking] = useState(false);
 
   const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar } = useProfile();
   const walletAddr = selectedAccount?.address || activeAddress || '';
@@ -442,12 +430,40 @@ export default function ProfileScreen() {
     setDeleteConfirmId(null);
   };
 
-  const handlePurchasePremium = async (tier: 'sol' | 'dawen') => {
+  const [selectedPremiumTier, setSelectedPremiumTier] = useState<PremiumTierKey>('1m');
+
+  const openVerifyModal = async () => {
+    if (!currentUserProfile) return;
+    setShowVerifyModal(true);
+    setVerifyLoading(true);
+    const status = await VerificationService.getVerificationStatus(currentUserProfile.id);
+    setVerifyStatus(status);
+    setVerifyLoading(false);
+  };
+
+  const handleCheckVerification = async () => {
+    if (!currentUserProfile) return;
+    setVerifyChecking(true);
+    const granted = await VerificationService.checkAndGrantBasicVerification(currentUserProfile.id);
+    if (granted) {
+      const status = await VerificationService.getVerificationStatus(currentUserProfile.id);
+      setVerifyStatus(status);
+      await loadProfile();
+    } else {
+      const status = await VerificationService.getVerificationStatus(currentUserProfile.id);
+      setVerifyStatus(status);
+    }
+    setVerifyChecking(false);
+  };
+
+  const handlePurchasePremium = async () => {
     if (!currentUserProfile || !isOwnProfile) return;
     setPurchasingPremium(true);
-    const ok = await SocialService.purchasePremiumCertification(currentUserProfile.id, tier);
+    // In production: initiate a real Solana transaction here.
+    // The signature would be verified on-chain before activating.
+    const { success } = await VerificationService.activatePremium(currentUserProfile.id, selectedPremiumTier);
     setPurchasingPremium(false);
-    if (ok) {
+    if (success) {
       setPremiumDone(true);
       await loadProfile();
     }
@@ -460,8 +476,8 @@ export default function ProfileScreen() {
     ? `${profile.wallet_address.slice(0, 4)}...${profile.wallet_address.slice(-4)}`
     : '';
 
-  const bannerUrl = (profile as any)?.banner_url || DEFAULT_BANNER;
-  const isPremiumActive = profile ? SocialService.isPremiumActive(profile) : false;
+  const bannerUrl = profile?.banner_url || DEFAULT_BANNER;
+  const isPremiumActive = profile ? VerificationService.isPremiumActive(profile) : false;
 
   if (loading) {
     return (
@@ -555,7 +571,7 @@ export default function ProfileScreen() {
           <View style={styles.profileTitleBlock}>
             <View style={styles.nameVerifiedRow}>
               <Text style={styles.displayName}>{displayName}</Text>
-              {profile && <CertBadge profile={profile} />}
+              {profile && <VerificationBadge profile={profile} size="md" />}
             </View>
             <Text style={styles.handle}>
               @{profile?.username?.toLowerCase() || displayName.toLowerCase().replace(/\s/g, '')}
@@ -609,6 +625,16 @@ export default function ProfileScreen() {
             <TouchableOpacity style={[styles.actionBtn, { flex: 2 }]} onPress={openEditModal} activeOpacity={0.85}>
               <Text style={styles.actionBtnText}>Edit Profile</Text>
             </TouchableOpacity>
+            {!profile?.verified_basic && (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.verifyBtn]}
+                onPress={openVerifyModal}
+                activeOpacity={0.85}
+              >
+                <Shield size={14} color="#6366F1" strokeWidth={2} />
+                <Text style={styles.verifyBtnText}>Verify</Text>
+              </TouchableOpacity>
+            )}
             {!isPremiumActive && (
               <TouchableOpacity
                 style={[styles.actionBtn, styles.premiumBtn]}
@@ -754,87 +780,250 @@ export default function ProfileScreen() {
       {/* ── Premium Certification Modal ──────────────────────────────────── */}
       <Modal visible={showPremiumModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
+          <ScrollView style={styles.modalScroll} bounces={false}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              {!premiumDone ? (
+                <>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>Premium Badge</Text>
+                    <TouchableOpacity onPress={() => setShowPremiumModal(false)}>
+                      <X size={22} color={colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.premiumHeader}>
+                    <View style={styles.premiumBadgePreview}>
+                      <View style={styles.premiumBadgeGlow} />
+                      <View style={styles.premiumBadgeCircle}>
+                        <Check size={18} color="#fff" strokeWidth={3} />
+                      </View>
+                      <View style={styles.premiumStarWrap}>
+                        <Star size={12} color="#FBBF24" fill="#FBBF24" strokeWidth={0} />
+                      </View>
+                    </View>
+                    <Text style={styles.premiumTitle}>Dawen Premium</Text>
+                    <Text style={styles.premiumDesc}>
+                      Gold badge with star next to your name, everywhere on the platform. Subscription renews at the same price.
+                    </Text>
+                  </View>
+
+                  <Text style={styles.editLabel}>Select duration</Text>
+                  {PREMIUM_TIERS.map(tier => {
+                    const isSelected = selectedPremiumTier === tier.key;
+                    return (
+                      <TouchableOpacity
+                        key={tier.key}
+                        style={[styles.premiumTierRow, isSelected && styles.premiumTierRowSelected]}
+                        onPress={() => setSelectedPremiumTier(tier.key)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={styles.premiumTierLeft}>
+                          <Text style={[styles.premiumTierLabel, isSelected && styles.premiumTierLabelActive]}>
+                            {tier.label}
+                          </Text>
+                          <Text style={styles.premiumTierSub}>${(tier.usd / tier.months).toFixed(0)}/mo</Text>
+                        </View>
+                        <View style={styles.premiumTierRight}>
+                          <Text style={[styles.premiumTierPrice, isSelected && styles.premiumTierPriceActive]}>
+                            ${tier.usd}
+                          </Text>
+                          {isSelected && <Check size={16} color="#FBBF24" strokeWidth={3} />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+
+                  <TouchableOpacity
+                    style={[styles.premiumPayBtn, purchasingPremium && { opacity: 0.6 }]}
+                    onPress={handlePurchasePremium}
+                    disabled={purchasingPremium}
+                    activeOpacity={0.85}
+                  >
+                    {purchasingPremium
+                      ? <ActivityIndicator size="small" color={colors.white} />
+                      : <>
+                          <Wallet size={15} color={colors.white} strokeWidth={2} />
+                          <Text style={styles.premiumPayBtnText}>
+                            Pay ${PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)?.usd} with Connected Wallet
+                          </Text>
+                        </>
+                    }
+                  </TouchableOpacity>
+
+                  <Text style={styles.premiumNote}>
+                    Payment is processed via your connected Solana wallet. The transaction is verified on-chain before the badge is activated.
+                  </Text>
+                </>
+              ) : (
+                <View style={{ alignItems: 'center', paddingVertical: 48 }}>
+                  <View style={styles.premiumDoneIcon}>
+                    <View style={styles.premiumBadgeGlow} />
+                    <View style={[styles.premiumBadgeCircle, { width: 56, height: 56, borderRadius: 28 }]}>
+                      <Check size={28} color="#fff" strokeWidth={3} />
+                    </View>
+                    <View style={[styles.premiumStarWrap, { bottom: 2, right: 2 }]}>
+                      <Star size={18} color="#FBBF24" fill="#FBBF24" strokeWidth={0} />
+                    </View>
+                  </View>
+                  <Text style={[styles.modalTitle, { marginTop: spacing.lg }]}>Premium Active!</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: fontSize.md, marginTop: 8, textAlign: 'center' }}>
+                    Your gold badge is now visible everywhere on the platform.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.saveBtn, { marginTop: spacing.xl }]}
+                    onPress={() => setShowPremiumModal(false)}
+                  >
+                    <Text style={styles.saveBtnText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ── Basic Verification Modal ─────────────────────────────────────── */}
+      <Modal visible={showVerifyModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
-            {!premiumDone ? (
-              <>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Premium Certification</Text>
-                  <TouchableOpacity onPress={() => setShowPremiumModal(false)}>
-                    <X size={22} color={colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Get Verified</Text>
+              <TouchableOpacity onPress={() => setShowVerifyModal(false)}>
+                <X size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
 
-                <View style={styles.premiumHeader}>
-                  <View style={styles.premiumIconRow}>
-                    <BadgeCheck size={28} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-                    <Star size={16} color="#FBBF24" fill="#FBBF24" strokeWidth={0} />
-                  </View>
-                  <Text style={styles.premiumTitle}>Dawen Premium</Text>
-                  <Text style={styles.premiumDesc}>
-                    Get a purple badge + gold star next to your name. Valid for 1 year. Paid from your connected wallet.
-                  </Text>
-                </View>
-
-                <View style={styles.premiumTierCard}>
-                  <Text style={styles.premiumTierLabel}>Pay with SOL</Text>
-                  <Text style={styles.premiumTierPrice}>0.5 SOL / year</Text>
-                  <TouchableOpacity
-                    style={[styles.premiumPayBtn, purchasingPremium && { opacity: 0.6 }]}
-                    onPress={() => handlePurchasePremium('sol')}
-                    disabled={purchasingPremium}
-                    activeOpacity={0.85}
-                  >
-                    {purchasingPremium
-                      ? <ActivityIndicator size="small" color={colors.white} />
-                      : <>
-                          <Wallet size={15} color={colors.white} strokeWidth={2} />
-                          <Text style={styles.premiumPayBtnText}>Pay with SOL</Text>
-                        </>
-                    }
-                  </TouchableOpacity>
-                </View>
-
-                <View style={[styles.premiumTierCard, { marginTop: spacing.md }]}>
-                  <Text style={styles.premiumTierLabel}>Pay with DAWEN</Text>
-                  <Text style={styles.premiumTierPrice}>1000 DAWEN / year</Text>
-                  <TouchableOpacity
-                    style={[styles.premiumPayBtn, purchasingPremium && { opacity: 0.6 }]}
-                    onPress={() => handlePurchasePremium('dawen')}
-                    disabled={purchasingPremium}
-                    activeOpacity={0.85}
-                  >
-                    {purchasingPremium
-                      ? <ActivityIndicator size="small" color={colors.white} />
-                      : <>
-                          <Wallet size={15} color={colors.white} strokeWidth={2} />
-                          <Text style={styles.premiumPayBtnText}>Pay with DAWEN</Text>
-                        </>
-                    }
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.premiumNote}>
-                  * Payment processing via connected wallet will be fully activated in the next release. Certification is granted immediately upon purchase.
+            {verifyLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
+            ) : verifyStatus?.alreadyVerified ? (
+              <View style={{ alignItems: 'center', paddingVertical: 32, gap: spacing.md }}>
+                <VerificationBadge profile={{ is_verified: true, verified_basic: true } as any} size="lg" />
+                <Text style={[styles.modalTitle, { marginTop: spacing.md }]}>You are verified!</Text>
+                <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: fontSize.md, lineHeight: 22 }}>
+                  Your blue verification badge is active and visible across the platform.
                 </Text>
-              </>
-            ) : (
-              <View style={{ alignItems: 'center', paddingVertical: 48 }}>
-                <View style={styles.premiumDoneIcon}>
-                  <BadgeCheck size={36} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-                  <Star size={18} color="#FBBF24" fill="#FBBF24" strokeWidth={0} style={{ position: 'absolute', bottom: 0, right: 0 }} />
-                </View>
-                <Text style={styles.modalTitle}>Premium Active!</Text>
-                <Text style={{ color: colors.textMuted, fontSize: fontSize.md, marginTop: 8, textAlign: 'center' }}>
-                  Your premium badge is now visible on your profile.
-                </Text>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { marginTop: spacing.xl, paddingHorizontal: spacing.xxxl }]}
-                  onPress={() => setShowPremiumModal(false)}
-                >
-                  <Text style={styles.actionBtnText}>Done</Text>
+                <TouchableOpacity style={styles.saveBtn} onPress={() => setShowVerifyModal(false)}>
+                  <Text style={styles.saveBtnText}>Done</Text>
                 </TouchableOpacity>
               </View>
+            ) : (
+              <>
+                {/* Badge preview */}
+                <View style={styles.verifyBadgePreview}>
+                  <View style={styles.verifyBadgeGlow} />
+                  <View style={styles.verifyBadgeCircle}>
+                    <Check size={20} color="#fff" strokeWidth={3} />
+                  </View>
+                </View>
+                <Text style={styles.verifyTitle}>Free Verification Badge</Text>
+                <Text style={styles.verifyDesc}>
+                  Complete all 3 steps below to automatically receive your blue verification badge.
+                </Text>
+
+                <View style={styles.verifySteps}>
+                  {/* Step 1 */}
+                  <View style={styles.verifyStep}>
+                    <View style={[styles.verifyStepIcon, verifyStatus?.followsDecent && styles.verifyStepDone]}>
+                      {verifyStatus?.followsDecent
+                        ? <Check size={14} color="#fff" strokeWidth={3} />
+                        : <Text style={styles.verifyStepNum}>1</Text>
+                      }
+                    </View>
+                    <View style={styles.verifyStepInfo}>
+                      <Text style={styles.verifyStepTitle}>Follow @Decent</Text>
+                      <Text style={styles.verifyStepSub}>Follow the official Decent account</Text>
+                    </View>
+                    {verifyStatus?.decentId && (
+                      <TouchableOpacity
+                        style={styles.verifyActionBtn}
+                        onPress={() => {
+                          setShowVerifyModal(false);
+                          router.push(`/profile/${verifyStatus.decentId}` as any);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.verifyActionBtnText}>
+                          {verifyStatus?.followsDecent ? 'Done' : 'Follow'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {/* Step 2 */}
+                  <View style={styles.verifyStep}>
+                    <View style={[styles.verifyStepIcon, verifyStatus?.followsBadge && styles.verifyStepDone]}>
+                      {verifyStatus?.followsBadge
+                        ? <Check size={14} color="#fff" strokeWidth={3} />
+                        : <Text style={styles.verifyStepNum}>2</Text>
+                      }
+                    </View>
+                    <View style={styles.verifyStepInfo}>
+                      <Text style={styles.verifyStepTitle}>Follow @VerificationBadge</Text>
+                      <Text style={styles.verifyStepSub}>Follow the verification account</Text>
+                    </View>
+                    {verifyStatus?.badgeId && (
+                      <TouchableOpacity
+                        style={styles.verifyActionBtn}
+                        onPress={() => {
+                          setShowVerifyModal(false);
+                          router.push(`/profile/${verifyStatus.badgeId}` as any);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.verifyActionBtnText}>
+                          {verifyStatus?.followsBadge ? 'Done' : 'Follow'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {/* Step 3 */}
+                  <View style={styles.verifyStep}>
+                    <View style={[styles.verifyStepIcon, verifyStatus?.repliedToPost && styles.verifyStepDone]}>
+                      {verifyStatus?.repliedToPost
+                        ? <Check size={14} color="#fff" strokeWidth={3} />
+                        : <Text style={styles.verifyStepNum}>3</Text>
+                      }
+                    </View>
+                    <View style={styles.verifyStepInfo}>
+                      <Text style={styles.verifyStepTitle}>Reply to the pinned post</Text>
+                      <Text style={styles.verifyStepSub}>Comment on the "Get verified" post</Text>
+                    </View>
+                    {verifyStatus?.pinnedPostId && (
+                      <TouchableOpacity
+                        style={styles.verifyActionBtn}
+                        onPress={() => {
+                          setShowVerifyModal(false);
+                          router.push('/(tabs)/community' as any);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.verifyActionBtnText}>
+                          {verifyStatus?.repliedToPost ? 'Done' : 'Go'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtn,
+                    verifyChecking && { opacity: 0.6 },
+                    !(verifyStatus?.followsDecent && verifyStatus?.followsBadge && verifyStatus?.repliedToPost) && styles.saveBtnDisabled,
+                  ]}
+                  onPress={handleCheckVerification}
+                  disabled={verifyChecking}
+                  activeOpacity={0.85}
+                >
+                  {verifyChecking
+                    ? <ActivityIndicator size="small" color={colors.white} />
+                    : <><Shield size={16} color={colors.white} strokeWidth={2} /><Text style={styles.saveBtnText}>Check & Verify Me</Text></>
+                  }
+                </TouchableOpacity>
+              </>
             )}
           </View>
         </View>
@@ -1124,16 +1313,48 @@ const styles = StyleSheet.create({
   confirmDeleteBtn: { flex: 1, backgroundColor: '#ef4444', borderRadius: borderRadius.full, paddingVertical: 14, alignItems: 'center' },
   confirmDeleteText: { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
 
+  // Action buttons - verify
+  verifyBtn: { flex: 1, backgroundColor: 'rgba(99,102,241,0.12)', borderColor: '#6366F1', borderWidth: 1 },
+  verifyBtnText: { fontSize: fontSize.sm, fontWeight: '700', color: '#6366F1' },
+
   // Premium modal
   premiumHeader: { alignItems: 'center', marginBottom: spacing.xl, gap: spacing.sm },
   premiumIconRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
-  premiumTitle: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary },
+  premiumTitle: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary, textAlign: 'center' },
   premiumDesc: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: 'center', lineHeight: 22 },
-  premiumTierCard: { backgroundColor: '#1A1A28', borderRadius: borderRadius.md, padding: spacing.lg, borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)', gap: spacing.sm },
+  premiumBadgePreview: { width: 64, height: 64, alignItems: 'center', justifyContent: 'center', position: 'relative', marginBottom: spacing.sm },
+  premiumBadgeGlow: { position: 'absolute', width: 56, height: 56, borderRadius: 28, backgroundColor: '#D97706', opacity: 0.25, shadowColor: '#F59E0B', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 16, elevation: 8 },
+  premiumBadgeCircle: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#D97706', overflow: 'hidden' },
+  premiumStarWrap: { position: 'absolute', bottom: 4, right: 4 },
+  premiumTierRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A28', borderRadius: borderRadius.md, padding: spacing.lg, marginBottom: spacing.sm, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  premiumTierRowSelected: { borderColor: '#FBBF24', backgroundColor: 'rgba(251,191,36,0.06)' },
+  premiumTierLeft: { gap: 3 },
+  premiumTierRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   premiumTierLabel: { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary },
-  premiumTierPrice: { fontSize: fontSize.xl, fontWeight: '800', color: colors.primary },
-  premiumPayBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.full, paddingVertical: spacing.md, alignItems: 'center', flexDirection: 'row', gap: spacing.sm, justifyContent: 'center', marginTop: spacing.sm },
+  premiumTierLabelActive: { color: '#FBBF24' },
+  premiumTierSub: { fontSize: fontSize.xs, color: colors.textMuted },
+  premiumTierPrice: { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
+  premiumTierPriceActive: { color: '#FBBF24' },
+  premiumPayBtn: { backgroundColor: '#D97706', borderRadius: borderRadius.full, paddingVertical: spacing.md, alignItems: 'center', flexDirection: 'row', gap: spacing.sm, justifyContent: 'center', marginTop: spacing.lg },
   premiumPayBtnText: { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
-  premiumNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl, lineHeight: 18 },
-  premiumDoneIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.primaryMuted, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.lg, position: 'relative' },
+  premiumNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center', marginTop: spacing.lg, lineHeight: 18 },
+  premiumDoneIcon: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center', position: 'relative', marginBottom: spacing.sm },
+  saveBtnDisabled: { opacity: 0.5 },
+
+  // Basic verification modal
+  verifyBadgePreview: { width: 72, height: 72, alignSelf: 'center', alignItems: 'center', justifyContent: 'center', position: 'relative', marginBottom: spacing.sm },
+  verifyBadgeGlow: { position: 'absolute', width: 60, height: 60, borderRadius: 30, backgroundColor: '#6366F1', opacity: 0.2, shadowColor: '#6366F1', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 16, elevation: 8 },
+  verifyBadgeCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#6366F1', overflow: 'hidden' },
+  verifyTitle: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary, textAlign: 'center', marginBottom: spacing.sm },
+  verifyDesc: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: spacing.xl },
+  verifySteps: { gap: spacing.md, marginBottom: spacing.xl },
+  verifyStep: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: '#1A1A28', borderRadius: borderRadius.md, padding: spacing.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  verifyStepIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#2A2A3A', alignItems: 'center', justifyContent: 'center' },
+  verifyStepDone: { backgroundColor: '#6366F1' },
+  verifyStepNum: { fontSize: 13, fontWeight: '800', color: colors.textMuted },
+  verifyStepInfo: { flex: 1, gap: 2 },
+  verifyStepTitle: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  verifyStepSub: { fontSize: fontSize.xs, color: colors.textMuted },
+  verifyActionBtn: { backgroundColor: 'rgba(99,102,241,0.12)', borderRadius: borderRadius.full, paddingVertical: 7, paddingHorizontal: 14, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)' },
+  verifyActionBtnText: { fontSize: 12, fontWeight: '700', color: '#6366F1' },
 });

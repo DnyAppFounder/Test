@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
-import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, BadgeCheck, Trash2 } from 'lucide-react-native';
+import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2 } from 'lucide-react-native';
+import VerificationBadge from './VerificationBadge';
 import { useRouter } from 'expo-router';
 import { Post, UserProfile, SocialService } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -75,9 +76,7 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         <TouchableOpacity style={styles.authorInfo} onPress={handleProfilePress} activeOpacity={0.8}>
           <View style={styles.nameRow}>
             <Text style={styles.name}>{authorName}</Text>
-            {post.author?.is_verified && (
-              <BadgeCheck size={15} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-            )}
+            {post.author && <VerificationBadge profile={post.author} size="sm" />}
           </View>
           <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
         </TouchableOpacity>
