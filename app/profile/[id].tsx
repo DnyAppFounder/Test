@@ -11,6 +11,8 @@ import {
   Modal,
   RefreshControl,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -30,6 +32,8 @@ import {
   Star,
   Wallet,
   Shield,
+  Send,
+  Heart,
 } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
@@ -37,7 +41,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
-import { SocialService, UserProfile, Post, PROMOTE_TIERS } from '@/services/socialService';
+import { SocialService, UserProfile, Post, PostComment, PROMOTE_TIERS } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard from '@/components/PostCard';
 
@@ -174,6 +178,15 @@ export default function ProfileScreen() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Comment modal
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [comments, setComments] = useState<PostComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newCommentContent, setNewCommentContent] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [replyingToComment, setReplyingToComment] = useState<PostComment | null>(null);
 
   // Edit modal
   const [showEditModal, setShowEditModal] = useState(false);
@@ -394,6 +407,69 @@ export default function ProfileScreen() {
     loadTab(tab);
   };
 
+  const openCommentsModal = async (postId: string) => {
+    setCommentsPostId(postId);
+    setShowCommentsModal(true);
+    setCommentsLoading(true);
+    setComments([]);
+    setNewCommentContent('');
+    setReplyingToComment(null);
+    try {
+      setComments(await SocialService.getComments(postId, currentUserProfile?.id));
+    } catch (e) {
+      console.warn('[Profile] getComments error:', e);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  const closeCommentsModal = () => {
+    setShowCommentsModal(false);
+    setCommentsPostId(null);
+    setComments([]);
+    setNewCommentContent('');
+    setReplyingToComment(null);
+  };
+
+  const handleAddComment = async () => {
+    if (!newCommentContent.trim() || !currentUserProfile || !commentsPostId || submittingComment) return;
+    const parentId = replyingToComment?.id;
+    if (!parentId) {
+      const alreadyCommented = comments.some(c => c.author_id === currentUserProfile.id && !c.parent_comment_id);
+      if (alreadyCommented) return;
+    }
+    setSubmittingComment(true);
+    const text = newCommentContent.trim();
+    setNewCommentContent('');
+    setReplyingToComment(null);
+    try {
+      await SocialService.addComment(commentsPostId, currentUserProfile.id, text, parentId);
+      const updated = await SocialService.getComments(commentsPostId, currentUserProfile.id);
+      setComments(updated);
+      const inc = (list: Post[]) => list.map(p =>
+        p.id === commentsPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+      );
+      setPosts(inc);
+      setReplies(inc);
+      setMediaPosts(inc);
+      setLikedPosts(inc);
+    } catch (e) {
+      console.warn('[Profile] addComment error:', e);
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleCommentLike = async (commentId: string) => {
+    if (!currentUserProfile) return;
+    setComments(prev => prev.map(c =>
+      c.id === commentId
+        ? { ...c, liked_by_user: !c.liked_by_user, likes_count: c.liked_by_user ? Math.max(0, (c.likes_count || 0) - 1) : (c.likes_count || 0) + 1 }
+        : { ...c, replies: (c.replies || []).map(r => r.id === commentId ? { ...r, liked_by_user: !r.liked_by_user, likes_count: r.liked_by_user ? Math.max(0, (r.likes_count || 0) - 1) : (r.likes_count || 0) + 1 } : r) }
+    ));
+    await SocialService.toggleCommentLike(commentId, currentUserProfile.id);
+  };
+
   const handleLike = async (postId: string) => {
     if (!currentUserProfile) return;
     const update = (list: Post[]) => list.map(p =>
@@ -509,7 +585,7 @@ export default function ProfileScreen() {
             post={post}
             currentProfile={currentUserProfile}
             onLike={handleLike}
-            onComment={() => {}}
+            onComment={openCommentsModal}
             onRepost={handleRepost}
             onPromote={canDelete && isOwnProfile ? openPromoteModal : () => {}}
             onDelete={canDelete && isOwnProfile ? requestDeletePost : undefined}
@@ -1090,6 +1166,127 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
+      {/* ── Comments Modal ──────────────────────────────────────────────── */}
+      <Modal visible={showCommentsModal} animationType="slide" transparent onRequestClose={closeCommentsModal}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalSheet, { maxHeight: '85%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Comments</Text>
+              <TouchableOpacity onPress={closeCommentsModal}>
+                <X size={22} color={colors.textPrimary} strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+
+            {replyingToComment && (
+              <View style={profileCommentStyles.replyBanner}>
+                <Text style={profileCommentStyles.replyBannerText} numberOfLines={1}>
+                  Replying to {replyingToComment.author?.username || 'user'}
+                </Text>
+                <TouchableOpacity onPress={() => setReplyingToComment(null)}>
+                  <X size={14} color={colors.textMuted} strokeWidth={2} />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {commentsLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 32 }} />
+            ) : (
+              <FlatList
+                data={comments}
+                keyExtractor={c => c.id}
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: spacing.lg, paddingBottom: 8 }}
+                renderItem={({ item: c }) => (
+                  <View key={c.id}>
+                    <View style={profileCommentStyles.commentCard}>
+                      <View style={profileCommentStyles.commentAvatar}>
+                        {c.author?.avatar_url
+                          ? <Image source={{ uri: c.author.avatar_url }} style={profileCommentStyles.commentAvatarImg} />
+                          : <User size={14} color={colors.textMuted} />
+                        }
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <View style={profileCommentStyles.commentNameRow}>
+                          <Text style={profileCommentStyles.commentAuthor}>
+                            {c.author?.username || `${c.author?.wallet_address?.slice(0, 6)}...`}
+                          </Text>
+                          <VerificationBadge profile={c.author as any} size="sm" />
+                        </View>
+                        <Text style={profileCommentStyles.commentText}>{c.content}</Text>
+                        <View style={profileCommentStyles.commentActions}>
+                          <TouchableOpacity style={profileCommentStyles.commentAction} onPress={() => handleCommentLike(c.id)}>
+                            <Heart size={13} color={c.liked_by_user ? '#ef4444' : colors.textMuted} fill={c.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                            <Text style={profileCommentStyles.commentActionText}>{c.likes_count || 0}</Text>
+                          </TouchableOpacity>
+                          {currentUserProfile && (
+                            <TouchableOpacity style={profileCommentStyles.commentAction} onPress={() => setReplyingToComment(c)}>
+                              <MessageCircle size={13} color={colors.textMuted} strokeWidth={2} />
+                              <Text style={profileCommentStyles.commentActionText}>Reply</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        {(c.replies || []).map(r => (
+                          <View key={r.id} style={profileCommentStyles.replyCard}>
+                            <View style={profileCommentStyles.replyAvatar}>
+                              {r.author?.avatar_url
+                                ? <Image source={{ uri: r.author.avatar_url }} style={profileCommentStyles.replyAvatarImg} />
+                                : <User size={11} color={colors.textMuted} />
+                              }
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={profileCommentStyles.replyAuthor}>
+                                {r.author?.username || `${r.author?.wallet_address?.slice(0, 6)}...`}
+                              </Text>
+                              <Text style={profileCommentStyles.replyText}>{r.content}</Text>
+                              <TouchableOpacity style={profileCommentStyles.commentAction} onPress={() => handleCommentLike(r.id)}>
+                                <Heart size={11} color={r.liked_by_user ? '#ef4444' : colors.textMuted} fill={r.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
+                                <Text style={profileCommentStyles.commentActionText}>{r.likes_count || 0}</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                )}
+                ListEmptyComponent={
+                  <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                    <MessageCircle size={32} color={colors.textMuted} strokeWidth={1.5} />
+                    <Text style={{ color: colors.textMuted, marginTop: 8 }}>No comments yet</Text>
+                  </View>
+                }
+              />
+            )}
+
+            {currentUserProfile && (
+              <View style={profileCommentStyles.inputRow}>
+                <TextInput
+                  style={profileCommentStyles.input}
+                  placeholder={replyingToComment ? 'Write a reply...' : 'Add a comment...'}
+                  placeholderTextColor={colors.textMuted}
+                  value={newCommentContent}
+                  onChangeText={setNewCommentContent}
+                  multiline
+                  maxLength={500}
+                  editable={!submittingComment}
+                />
+                <TouchableOpacity
+                  style={[profileCommentStyles.sendBtn, (!newCommentContent.trim() || submittingComment) && profileCommentStyles.sendBtnDisabled]}
+                  onPress={handleAddComment}
+                  disabled={!newCommentContent.trim() || submittingComment}
+                >
+                  {submittingComment
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Send size={16} color="#fff" strokeWidth={2} />
+                  }
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* ── Promote Post Modal ───────────────────────────────────────────── */}
       <Modal visible={showPromoteModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
@@ -1357,4 +1554,58 @@ const styles = StyleSheet.create({
   verifyStepSub: { fontSize: fontSize.xs, color: colors.textMuted },
   verifyActionBtn: { backgroundColor: 'rgba(99,102,241,0.12)', borderRadius: borderRadius.full, paddingVertical: 7, paddingHorizontal: 14, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)' },
   verifyActionBtnText: { fontSize: 12, fontWeight: '700', color: '#6366F1' },
+});
+
+const profileCommentStyles = StyleSheet.create({
+  replyBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(139,92,246,0.12)', paddingHorizontal: spacing.lg, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.15)',
+  },
+  replyBannerText: { fontSize: fontSize.sm, color: colors.primary, fontWeight: '600', flex: 1 },
+  commentCard: {
+    flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md,
+    backgroundColor: '#12121E', borderRadius: 12, padding: spacing.md,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)',
+  },
+  commentAvatar: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: '#1E1E2E', justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
+  },
+  commentAvatarImg: { width: 30, height: 30, borderRadius: 15 },
+  commentNameRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
+  commentAuthor: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  commentText: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 19 },
+  commentActions: { flexDirection: 'row', gap: spacing.lg, marginTop: 6 },
+  commentAction: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  commentActionText: { fontSize: 11, color: colors.textMuted, fontWeight: '600' },
+  replyCard: {
+    flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm,
+    paddingLeft: spacing.md, paddingTop: spacing.sm,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)',
+  },
+  replyAvatar: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#1E1E2E', justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
+  },
+  replyAvatarImg: { width: 24, height: 24, borderRadius: 12 },
+  replyAuthor: { fontSize: 11, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
+  replyText: { fontSize: 12, color: colors.textSecondary, lineHeight: 17 },
+  inputRow: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: '#0A0A0F',
+  },
+  input: {
+    flex: 1, backgroundColor: '#1A1A28', borderRadius: 20,
+    paddingHorizontal: spacing.md, paddingVertical: 10,
+    fontSize: fontSize.md, color: colors.textPrimary, maxHeight: 100,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  sendBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  sendBtnDisabled: { backgroundColor: '#2A2A3A' },
 });

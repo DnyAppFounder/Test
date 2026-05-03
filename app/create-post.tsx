@@ -22,7 +22,7 @@ import {
   X, Check, ChevronDown, ChevronRight, Globe,
   ChartBar as BarChart2,
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
-  Search, Film,
+  Search, Film, Megaphone,
 } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
@@ -451,6 +451,13 @@ export default function CreatePostScreen() {
               <Text style={styles.qaLabel}>Media</Text>
             </TouchableOpacity>
 
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Promote', 'Post first, then promote from your profile or feed.')}>
+              <View style={[styles.qaIconWrap, { backgroundColor: '#f59e0b22' }]}>
+                <Megaphone size={20} color="#f59e0b" strokeWidth={2} />
+              </View>
+              <Text style={styles.qaLabel}>Promote</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Poll', 'Not configured yet')}>
               <View style={[styles.qaIconWrap, { backgroundColor: '#ef444422' }]}>
                 <BarChart2 size={20} color="#ef4444" strokeWidth={2} />
@@ -470,13 +477,6 @@ export default function CreatePostScreen() {
                 <View style={qaGifBox}><Text style={qaGifText}>GIF</Text></View>
               </View>
               <Text style={styles.qaLabel}>GIF</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Location', 'Not configured yet')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#06b6d422' }]}>
-                <MapPin size={20} color="#06b6d4" strokeWidth={2} />
-              </View>
-              <Text style={styles.qaLabel}>Location</Text>
             </TouchableOpacity>
           </View>
 

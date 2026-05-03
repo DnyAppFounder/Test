@@ -83,9 +83,14 @@ export default function TokenDetailScreen() {
   useEffect(() => {
     if (address) {
       loadTokenDetail(address);
-      checkWatchlistStatus();
     }
   }, [address]);
+
+  useEffect(() => {
+    if (address && profile?.id) {
+      checkWatchlistStatus();
+    }
+  }, [address, profile?.id]);
 
   useEffect(() => {
     if (activeBottomTab === 'holders' && holders.length === 0) {

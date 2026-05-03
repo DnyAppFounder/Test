@@ -14,8 +14,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Animated,
 } from 'react-native';
-import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail, Zap } from 'lucide-react-native';
+import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { TransactionManager } from '@/lib/wallet/TransactionManager';
@@ -83,6 +84,17 @@ export default function CommunityScreen() {
 
   // Timestamp set when notifications are cleared — hides older notifications locally
   const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
+
+  // Animated globe for feed tab icon
+  const feedGlobeRotate = useRef(new Animated.Value(0)).current;
+  const feedGlobeGlow = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(Animated.timing(feedGlobeRotate, { toValue: 1, duration: 6000, useNativeDriver: true })).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(feedGlobeGlow, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      Animated.timing(feedGlobeGlow, { toValue: 0, duration: 1500, useNativeDriver: true }),
+    ])).start();
+  }, []);
 
   // Followers / Following list modal
   const [followListType, setFollowListType] = useState<'followers' | 'following' | null>(null);
@@ -852,13 +864,25 @@ export default function CommunityScreen() {
 
       {/* Top tabs — icon-based */}
       <View style={styles.topTabs}>
-        {/* Feed */}
+        {/* Feed — animated globe */}
         <TouchableOpacity
           style={[styles.topTab, activeTab === 'feed' && styles.topTabActive]}
           onPress={() => setActiveTab('feed')}
           activeOpacity={0.8}
         >
-          <Home size={20} color={activeTab === 'feed' ? colors.white : colors.textMuted} strokeWidth={2} />
+          <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+            {activeTab === 'feed' && (
+              <Animated.View style={{
+                position: 'absolute',
+                width: 28, height: 28, borderRadius: 14,
+                backgroundColor: '#A855F7',
+                opacity: feedGlobeGlow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] }),
+              }} />
+            )}
+            <Animated.View style={{ transform: [{ rotate: activeTab === 'feed' ? feedGlobeRotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) : '0deg' }] }}>
+              <Globe size={20} color={activeTab === 'feed' ? '#A855F7' : colors.textMuted} strokeWidth={2} />
+            </Animated.View>
+          </View>
         </TouchableOpacity>
 
         {/* Profile — avatar bubble */}

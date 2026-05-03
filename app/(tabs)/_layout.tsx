@@ -6,9 +6,42 @@ import { colors } from '@/constants/theme';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useProfile } from '@/contexts/ProfileContext';
 
+function AnimatedTabIcon({
+  icon: Icon,
+  size,
+  color,
+}: {
+  icon: React.ComponentType<{ size: number; color: string; strokeWidth: number }>;
+  size: number;
+  color: string;
+}) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const isActive = color === colors.primary;
+  const prevActive = useRef(false);
+
+  useEffect(() => {
+    if (isActive && !prevActive.current) {
+      Animated.sequence([
+        Animated.spring(scaleAnim, { toValue: 1.25, useNativeDriver: true, speed: 30, bounciness: 12 }),
+        Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
+      ]).start();
+    }
+    prevActive.current = isActive;
+  }, [isActive]);
+
+  return (
+    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+      <Icon size={size} color={color} strokeWidth={2} />
+    </Animated.View>
+  );
+}
+
 function AnimatedGlobeIcon({ size, color, count }: { size: number; color: string; count: number }) {
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const isActive = color === colors.primary;
+  const prevActive = useRef(false);
 
   useEffect(() => {
     Animated.loop(
@@ -26,9 +59,18 @@ function AnimatedGlobeIcon({ size, color, count }: { size: number; color: string
     ).start();
   }, []);
 
+  useEffect(() => {
+    if (isActive && !prevActive.current) {
+      Animated.sequence([
+        Animated.spring(scaleAnim, { toValue: 1.25, useNativeDriver: true, speed: 30, bounciness: 12 }),
+        Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
+      ]).start();
+    }
+    prevActive.current = isActive;
+  }, [isActive]);
+
   const spin = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
   const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.5] });
-  const isActive = color === colors.primary;
   const globeColor = isActive ? '#A855F7' : color;
 
   return (
@@ -36,7 +78,7 @@ function AnimatedGlobeIcon({ size, color, count }: { size: number; color: string
       {isActive && (
         <Animated.View style={[badgeStyles.globeGlow, { opacity: glowOpacity }]} />
       )}
-      <Animated.View style={{ transform: [{ rotate: isActive ? spin : '0deg' }] }}>
+      <Animated.View style={{ transform: [{ rotate: isActive ? spin : '0deg' }, { scale: scaleAnim }] }}>
         <Globe size={size} color={globeColor} strokeWidth={2} />
       </Animated.View>
       {count > 0 && (
@@ -109,7 +151,7 @@ export default function TabLayout() {
         options={{
           title: t.tabs.wallet,
           tabBarIcon: ({ size, color }) => (
-            <Wallet size={size} color={color} />
+            <AnimatedTabIcon icon={Wallet} size={size} color={color} />
           ),
         }}
       />
@@ -127,7 +169,7 @@ export default function TabLayout() {
         options={{
           title: t.tabs.gaming,
           tabBarIcon: ({ size, color }) => (
-            <Gamepad2 size={size} color={color} />
+            <AnimatedTabIcon icon={Gamepad2} size={size} color={color} />
           ),
         }}
       />
@@ -136,7 +178,7 @@ export default function TabLayout() {
         options={{
           title: t.tabs.dapps,
           tabBarIcon: ({ size, color }) => (
-            <Compass size={size} color={color} />
+            <AnimatedTabIcon icon={Compass} size={size} color={color} />
           ),
         }}
       />
@@ -145,7 +187,7 @@ export default function TabLayout() {
         options={{
           title: t.tabs.settings,
           tabBarIcon: ({ size, color }) => (
-            <Settings size={size} color={color} />
+            <AnimatedTabIcon icon={Settings} size={size} color={color} />
           ),
         }}
       />
