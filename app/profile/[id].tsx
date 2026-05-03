@@ -13,6 +13,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,7 +35,11 @@ import {
   Shield,
   Send,
   Heart,
+  Twitter,
+  ExternalLink,
+  MessageSquare,
 } from 'lucide-react-native';
+import LinkText from '@/components/LinkText';
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
 import * as Clipboard from 'expo-clipboard';
@@ -194,6 +199,9 @@ export default function ProfileScreen() {
   const [editBio, setEditBio] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
   const [editBannerUrl, setEditBannerUrl] = useState('');
+  const [editTwitterUrl, setEditTwitterUrl] = useState('');
+  const [editTelegramUrl, setEditTelegramUrl] = useState('');
+  const [editDiscordUrl, setEditDiscordUrl] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Promote modal
@@ -288,6 +296,9 @@ export default function ProfileScreen() {
     setEditBio(profile.bio || '');
     setEditAvatarUrl(profile.avatar_url || '');
     setEditBannerUrl((profile as any).banner_url || '');
+    setEditTwitterUrl(profile.twitter_url || '');
+    setEditTelegramUrl(profile.telegram_url || '');
+    setEditDiscordUrl(profile.discord_url || '');
     setShowEditModal(true);
   };
 
@@ -347,10 +358,11 @@ export default function ProfileScreen() {
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
         avatar_url: avatarUrl,
+        banner_url: bannerUrl,
+        twitter_url: editTwitterUrl.trim() || null,
+        telegram_url: editTelegramUrl.trim() || null,
+        discord_url: editDiscordUrl.trim() || null,
       });
-      if (bannerUrl) {
-        await SocialService.updateProfile(profile.id, { banner_url: bannerUrl } as any);
-      }
       await loadProfile();
     } finally {
       setSaving(false);
@@ -672,9 +684,45 @@ export default function ProfileScreen() {
 
         {/* Bio */}
         {profile?.bio ? (
-          <Text style={styles.bio}>{profile.bio}</Text>
+          <LinkText text={profile.bio} style={styles.bio} />
         ) : (
           isOwnProfile && <Text style={styles.bioPlaceholder}>Building the future of trading.</Text>
+        )}
+
+        {/* Social links */}
+        {(profile?.twitter_url || profile?.telegram_url || profile?.discord_url) && (
+          <View style={styles.socialLinksRow}>
+            {profile.twitter_url ? (
+              <TouchableOpacity
+                style={styles.socialLinkBtn}
+                onPress={() => Linking.openURL(profile.twitter_url!.startsWith('http') ? profile.twitter_url! : 'https://' + profile.twitter_url!).catch(() => {})}
+                activeOpacity={0.75}
+              >
+                <Twitter size={15} color="#1DA1F2" strokeWidth={2} />
+                <Text style={[styles.socialLinkText, { color: '#1DA1F2' }]}>X</Text>
+              </TouchableOpacity>
+            ) : null}
+            {profile.telegram_url ? (
+              <TouchableOpacity
+                style={styles.socialLinkBtn}
+                onPress={() => Linking.openURL(profile.telegram_url!.startsWith('http') ? profile.telegram_url! : 'https://' + profile.telegram_url!).catch(() => {})}
+                activeOpacity={0.75}
+              >
+                <ExternalLink size={15} color="#26A5E4" strokeWidth={2} />
+                <Text style={[styles.socialLinkText, { color: '#26A5E4' }]}>Telegram</Text>
+              </TouchableOpacity>
+            ) : null}
+            {profile.discord_url ? (
+              <TouchableOpacity
+                style={styles.socialLinkBtn}
+                onPress={() => Linking.openURL(profile.discord_url!.startsWith('http') ? profile.discord_url! : 'https://' + profile.discord_url!).catch(() => {})}
+                activeOpacity={0.75}
+              >
+                <MessageSquare size={15} color="#5865F2" strokeWidth={2} />
+                <Text style={[styles.socialLinkText, { color: '#5865F2' }]}>Discord</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         )}
 
         {/* Stats — followers/following are clickable */}
@@ -1155,6 +1203,39 @@ export default function ProfileScreen() {
               />
               <Text style={styles.editCharCount}>{editBio.length}/160</Text>
 
+              <Text style={styles.editLabel}>X / Twitter</Text>
+              <TextInput
+                style={styles.editInput}
+                placeholder="https://x.com/yourhandle"
+                placeholderTextColor={colors.textMuted}
+                value={editTwitterUrl}
+                onChangeText={setEditTwitterUrl}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+
+              <Text style={styles.editLabel}>Telegram</Text>
+              <TextInput
+                style={styles.editInput}
+                placeholder="https://t.me/yourhandle"
+                placeholderTextColor={colors.textMuted}
+                value={editTelegramUrl}
+                onChangeText={setEditTelegramUrl}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+
+              <Text style={styles.editLabel}>Discord</Text>
+              <TextInput
+                style={styles.editInput}
+                placeholder="https://discord.gg/yourserver"
+                placeholderTextColor={colors.textMuted}
+                value={editDiscordUrl}
+                onChangeText={setEditDiscordUrl}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+
               <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile} disabled={saving}>
                 {saving
                   ? <ActivityIndicator size="small" color={colors.white} />
@@ -1423,8 +1504,11 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
   addrChipText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary, fontFamily: 'SpaceMono-Regular' },
-  bio: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
+  bio: { fontSize: fontSize.md, color: colors.textSecondary, lineHeight: 22, paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
   bioPlaceholder: { fontSize: fontSize.md, color: colors.textMuted, lineHeight: 22, paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
+  socialLinksRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.lg, gap: spacing.md, flexWrap: 'wrap' },
+  socialLinkBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: borderRadius.full, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  socialLinkText: { fontSize: fontSize.sm, fontWeight: '600' },
   statsRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
   stat: { flex: 1 },
   statValue: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.3 },

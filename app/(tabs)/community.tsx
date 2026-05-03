@@ -880,7 +880,7 @@ export default function CommunityScreen() {
               }} />
             )}
             <Animated.View style={{ transform: [{ rotate: activeTab === 'feed' ? feedGlobeRotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) : '0deg' }] }}>
-              <Globe size={20} color={activeTab === 'feed' ? '#A855F7' : colors.textMuted} strokeWidth={2} />
+              <Globe size={20} color={activeTab === 'feed' ? '#FFFFFF' : colors.textMuted} strokeWidth={2} />
             </Animated.View>
           </View>
         </TouchableOpacity>
