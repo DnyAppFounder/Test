@@ -309,9 +309,11 @@ export default function ProfileScreen() {
       allowsEditing: true,
       aspect: [3, 1],
       quality: 0.8,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      const uri = result.assets[0].uri;
+      const asset = result.assets[0];
+      const uri = asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri;
       setEditBannerUrl(uri);
       // Save immediately
       try {
@@ -336,8 +338,17 @@ export default function ProfileScreen() {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
+      base64: true,
     });
-    if (!result.canceled && result.assets[0]) setEditAvatarUrl(result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      if (asset.base64) {
+        const mime = asset.mimeType || 'image/jpeg';
+        setEditAvatarUrl(`data:${mime};base64,${asset.base64}`);
+      } else {
+        setEditAvatarUrl(asset.uri);
+      }
+    }
   };
 
   const handleSaveProfile = async () => {

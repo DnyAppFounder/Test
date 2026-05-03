@@ -109,11 +109,11 @@ export interface PostComment {
 }
 
 export const PROMOTE_TIERS = [
-  { key: '1h', label: '1 Hour', hours: 1, solPrice: 0.05 },
-  { key: '3h', label: '3 Hours', hours: 3, solPrice: 0.12 },
-  { key: '24h', label: '24 Hours', hours: 24, solPrice: 0.5 },
-  { key: '3d', label: '3 Days', hours: 72, solPrice: 1.0 },
-  { key: '7d', label: '7 Days', hours: 168, solPrice: 2.0 },
+  { key: '1h', label: '1H', hours: 1, usdPrice: 5 },
+  { key: '3h', label: '3H', hours: 3, usdPrice: 8 },
+  { key: '24h', label: '24H', hours: 24, usdPrice: 12 },
+  { key: '3d', label: '3D', hours: 72, usdPrice: 24 },
+  { key: '7d', label: '1W', hours: 168, usdPrice: 44 },
 ];
 
 export class SocialService {
@@ -179,15 +179,31 @@ export class SocialService {
     try {
       const fileName = `${walletAddress}/avatar_${Date.now()}.jpg`;
 
-      // Fetch the image data
-      const response = await fetch(imageUri);
-      const blob = await response.blob();
+      let blob: Blob;
+
+      if (imageUri.startsWith('data:')) {
+        // Base64 data URI — decode directly
+        const [header, base64] = imageUri.split(',');
+        const mime = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        blob = new Blob([bytes], { type: mime });
+      } else if (imageUri.startsWith('blob:') || imageUri.startsWith('http')) {
+        // blob: URIs and remote http(s) — fetch works
+        const response = await fetch(imageUri);
+        blob = await response.blob();
+      } else {
+        // file:// or unknown scheme on native — fetch directly
+        const response = await fetch(imageUri);
+        blob = await response.blob();
+      }
 
       // Upload to Supabase Storage
       const { data, error } = await supabase.storage
         .from('avatars')
         .upload(fileName, blob, {
-          contentType: 'image/jpeg',
+          contentType: blob.type || 'image/jpeg',
           upsert: true,
         });
 
