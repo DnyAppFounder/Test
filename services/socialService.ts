@@ -15,6 +15,9 @@ export interface UserProfile {
   premium_expiration?: string | null;
   premium_tier: 'sol' | 'dawen' | null;
   created_at: string;
+  twitter_url?: string | null;
+  telegram_url?: string | null;
+  discord_url?: string | null;
 }
 
 export interface Post {
@@ -144,7 +147,16 @@ export class SocialService {
 
   static async updateProfile(
     profileId: string,
-    updates: { username?: string; bio?: string; avatar_url?: string }
+    updates: {
+      username?: string;
+      bio?: string;
+      avatar_url?: string;
+      banner_url?: string;
+      twitter_url?: string | null;
+      telegram_url?: string | null;
+      discord_url?: string | null;
+      [key: string]: unknown;
+    }
   ): Promise<UserProfile | null> {
     const { data } = await supabase
       .from('user_profiles')
