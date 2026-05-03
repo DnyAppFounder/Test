@@ -307,7 +307,7 @@ export class SocialService {
     }));
   }
 
-  static async getUserPosts(authorId: string): Promise<Post[]> {
+  static async getUserPosts(authorId: string, currentUserId?: string): Promise<Post[]> {
     const { data } = await supabase
       .from('posts')
       .select('*')
@@ -323,9 +323,23 @@ export class SocialService {
       .in('id', authorIds);
     const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
 
+    let likedSet = new Set<string>();
+    let repostedSet = new Set<string>();
+    if (currentUserId && data.length > 0) {
+      const postIds = data.map((p: Post) => p.id);
+      const [likesRes, repostsRes] = await Promise.all([
+        supabase.from('post_likes').select('post_id').eq('user_id', currentUserId).in('post_id', postIds),
+        supabase.from('reposts').select('post_id').eq('user_id', currentUserId).in('post_id', postIds),
+      ]);
+      likedSet = new Set((likesRes.data || []).map((l: any) => l.post_id));
+      repostedSet = new Set((repostsRes.data || []).map((r: any) => r.post_id));
+    }
+
     return data.map((p: Post) => ({
       ...p,
       author: authorMap.get(p.author_id),
+      liked_by_user: likedSet.has(p.id),
+      reposted_by_user: repostedSet.has(p.id),
     }));
   }
 

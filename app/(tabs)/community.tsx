@@ -48,7 +48,10 @@ export default function CommunityScreen() {
   const [showPromoteModal, setShowPromoteModal] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [promoteStep, setPromoteStep] = useState<PromoteStep>('select');
-  const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
+  const [selectedTierKey, setSelectedTierKey] = useState<string | null>('1h');
+  const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  // DTEST token mint address (placeholder — replace with real mint when deployed)
+  const DTEST_MINT = 'So11111111111111111111111111111111111111112';
 
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -117,10 +120,27 @@ export default function CommunityScreen() {
   const [mentionResults, setMentionResults] = useState<any[]>([]);
   const [mentionLoading, setMentionLoading] = useState(false);
 
+  // Merges fresh feed data while preserving any optimistic liked/reposted state
+  // that may not yet be reflected in the DB (sub-second race window).
+  const mergeFeedState = (fresh: Post[], existing: Post[]): Post[] => {
+    const existingMap = new Map(existing.map(p => [p.id, p]));
+    return fresh.map(p => {
+      const prev = existingMap.get(p.id);
+      if (!prev) return p;
+      // Keep optimistic state only if the DB value is still 0/false and the user
+      // has already toggled it in this session (prev has the toggled value).
+      return {
+        ...p,
+        liked_by_user: p.liked_by_user || prev.liked_by_user,
+        reposted_by_user: p.reposted_by_user || prev.reposted_by_user,
+      };
+    });
+  };
+
   const loadFeed = useCallback(async () => {
     try {
       const feedData = await SocialService.getFeed(profile?.id);
-      setPosts(feedData);
+      setPosts(prev => mergeFeedState(feedData, prev));
     } catch (e) {
       console.warn('[Community] loadFeed error:', e);
     }
@@ -158,21 +178,31 @@ export default function CommunityScreen() {
     }
   }, [profile?.id]);
 
+  const profileIdRef = useRef<string | undefined>(undefined);
+
   const loadInitialFeed = useCallback(async () => {
-    setLoading(true);
+    // Only show the spinner on truly first load (no posts yet)
+    const isFirstLoad = profileIdRef.current === undefined;
+    if (isFirstLoad) setLoading(true);
+    profileIdRef.current = profile?.id;
     try {
       const feedData = await SocialService.getFeed(profile?.id);
-      setPosts(feedData);
+      // On first load replace; on subsequent reloads (profile just became ready) merge to preserve optimistic state
+      if (isFirstLoad) {
+        setPosts(feedData);
+      } else {
+        setPosts(prev => mergeFeedState(feedData, prev));
+      }
     } catch (e) {
       console.warn('[Community] loadInitialFeed error:', e);
     } finally {
-      setLoading(false);
+      if (isFirstLoad) setLoading(false);
     }
   }, [profile?.id]);
 
   useEffect(() => { loadInitialFeed(); }, [loadInitialFeed]);
 
-  // Reload conversations when screen regains focus (e.g. after returning from chat)
+  // Reload feed + conversations when screen regains focus (e.g. after returning from chat/profile)
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   useFocusEffect(
@@ -180,7 +210,11 @@ export default function CommunityScreen() {
       if (activeTabRef.current === 'messages' && profile?.id) {
         loadConversations();
       }
-    }, [profile?.id, loadConversations])
+      // Silent feed reload to restore liked/reposted state after navigation
+      if (profile?.id) {
+        loadFeed();
+      }
+    }, [profile?.id, loadConversations, loadFeed])
   );
 
   useEffect(() => {
@@ -189,7 +223,7 @@ export default function CommunityScreen() {
     if (activeTab === 'profile' && profile?.id) {
       setProfilePostsLoading(true);
       Promise.all([
-        SocialService.getUserPosts(profile.id),
+        SocialService.getUserPosts(profile.id, profile.id),
         SocialService.getFollowerCount(profile.id),
         SocialService.getFollowingCount(profile.id),
       ]).then(([posts, followers, following]) => {
@@ -272,27 +306,31 @@ export default function CommunityScreen() {
     }
   };
 
+  const togglePostLikeState = (list: Post[], postId: string): Post[] =>
+    list.map(p => p.id === postId ? {
+      ...p,
+      liked_by_user: !p.liked_by_user,
+      likes_count: p.liked_by_user ? Math.max(0, (p.likes_count || 0) - 1) : (p.likes_count || 0) + 1,
+    } : p);
+
+  const togglePostRepostState = (list: Post[], postId: string): Post[] =>
+    list.map(p => p.id === postId ? {
+      ...p,
+      reposted_by_user: !p.reposted_by_user,
+      reposts_count: p.reposted_by_user ? Math.max(0, (p.reposts_count || 0) - 1) : (p.reposts_count || 0) + 1,
+    } : p);
+
   const handleLike = async (postId: string) => {
     if (!profile) return;
-    setPosts(prev => prev.map(p =>
-      p.id === postId ? {
-        ...p,
-        liked_by_user: !p.liked_by_user,
-        likes_count: p.liked_by_user ? Math.max(0, (p.likes_count || 0) - 1) : (p.likes_count || 0) + 1,
-      } : p
-    ));
+    setPosts(prev => togglePostLikeState(prev, postId));
+    setProfilePosts(prev => togglePostLikeState(prev, postId));
     await SocialService.toggleLike(postId, profile.id);
   };
 
   const handleRepost = async (postId: string) => {
     if (!profile) return;
-    setPosts(prev => prev.map(p =>
-      p.id === postId ? {
-        ...p,
-        reposted_by_user: !p.reposted_by_user,
-        reposts_count: p.reposted_by_user ? Math.max(0, (p.reposts_count || 0) - 1) : (p.reposts_count || 0) + 1,
-      } : p
-    ));
+    setPosts(prev => togglePostRepostState(prev, postId));
+    setProfilePosts(prev => togglePostRepostState(prev, postId));
     await SocialService.toggleRepost(postId, profile.id);
   };
 
@@ -318,13 +356,13 @@ export default function CommunityScreen() {
   const openPromoteModal = (postId: string) => {
     setSelectedPostId(postId);
     setPromoteStep('select');
-    setSelectedTierKey(null);
+    setSelectedTierKey('1h');
+    setPromotePayWith('SOL');
     setShowPromoteModal(true);
   };
 
   const handleSelectTier = (tierKey: string) => {
     setSelectedTierKey(tierKey);
-    setPromoteStep('confirm');
   };
 
   // DAWEN treasury — receives promotion SOL payments
@@ -335,30 +373,42 @@ export default function CommunityScreen() {
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
     if (!tier) return;
 
-    const solAmount = usdToSol((tier as any).usdPrice);
+    const usdPrice = (tier as any).usdPrice as number;
+    const solAmount = usdToSol(usdPrice);
     setPromoteStep('processing');
     try {
       const txManager = TransactionManager.getInstance();
-      const result = await txManager.sendTransaction({
-        blockchain: 'solana',
-        to: DAWEN_TREASURY,
-        amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
-        accountIndex: 0,
-      });
+      let result;
+      if (promotePayWith === 'SOL') {
+        result = await txManager.sendTransaction({
+          blockchain: 'solana',
+          to: DAWEN_TREASURY,
+          amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
+          accountIndex: 0,
+        });
+      } else {
+        // DTEST SPL token payment
+        result = await txManager.sendTransaction({
+          blockchain: 'solana',
+          to: DAWEN_TREASURY,
+          amount: usdPrice.toFixed(6),
+          tokenMint: DTEST_MINT,
+          accountIndex: 0,
+        });
+      }
 
       if (!result.success) {
         throw new Error(result.error || 'Transaction failed');
       }
 
-      // Record promotion in DB after payment confirmed
       await SocialService.promotePost(selectedPostId, tier.key);
       setPosts(prev => prev.map(p =>
         p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
       ));
       setPromoteStep('done');
     } catch (err: any) {
-      setPromoteStep('confirm');
-      Alert.alert('Payment Failed', err?.message || 'Could not complete SOL payment. Make sure your wallet is unlocked and has sufficient balance.');
+      setPromoteStep('select');
+      Alert.alert('Payment Failed', err?.message || 'Could not complete payment. Make sure your wallet is unlocked and has sufficient balance.');
     }
   };
 
@@ -386,23 +436,31 @@ export default function CommunityScreen() {
   const handleAddComment = async () => {
     if (!newCommentContent.trim() || !profile || !selectedPostId || submittingComment) return;
     const commentText = newCommentContent.trim();
-    const parentId = replyingToComment?.id;
+    // Capture parentId BEFORE clearing state
+    const parentId = replyingToComment?.id ?? undefined;
+    const savedReplyTarget = replyingToComment;
 
     setSubmittingComment(true);
     setNewCommentContent('');
     setReplyingToComment(null);
     try {
-      await SocialService.addComment(selectedPostId, profile.id, commentText, parentId);
+      const result = await SocialService.addComment(selectedPostId, profile.id, commentText, parentId);
+      if (!result) throw new Error('Comment insert returned null');
       const updated = await SocialService.getComments(selectedPostId, profile.id);
       setComments(updated);
-      // Update comment count in both feed and profile posts
-      const increment = (list: Post[]) => list.map(p =>
-        p.id === selectedPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
-      );
-      setPosts(increment);
-      setProfilePosts(increment);
+      // Only increment count for top-level comments (replies don't increment post comment count)
+      if (!parentId) {
+        const increment = (list: Post[]) => list.map(p =>
+          p.id === selectedPostId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+        );
+        setPosts(increment);
+        setProfilePosts(increment);
+      }
     } catch (e) {
       console.warn('[Community] addComment error:', e);
+      // Restore input state on failure so user doesn't lose their reply
+      setNewCommentContent(commentText);
+      setReplyingToComment(savedReplyTarget);
     } finally {
       setSubmittingComment(false);
     }
@@ -1334,96 +1392,135 @@ export default function CommunityScreen() {
       {/* Promote Modal */}
       <Modal visible={showPromoteModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: 28 }]}>
             <View style={styles.modalHandle} />
 
-            {promoteStep === 'select' && (
-              <>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Promote Post</Text>
-                  <TouchableOpacity onPress={closePromoteModal}>
-                    <X size={22} color={colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.promoteDesc}>
-                  Boost your post to reach more users. Promoted posts appear at the top of the feed.
-                </Text>
-                {PROMOTE_TIERS.map(tier => (
-                  <TouchableOpacity key={tier.key} style={styles.tierCard} onPress={() => handleSelectTier(tier.key)}>
-                    <View style={styles.tierInfo}>
-                      <View style={styles.tierIcon}>
-                        <Clock size={16} color={colors.primary} />
+            {(promoteStep === 'select') && (() => {
+              const activeTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey) ?? PROMOTE_TIERS[0];
+              const usdPrice = (activeTier as any).usdPrice as number;
+              const displayAmt = promotePayWith === 'SOL'
+                ? (solUsdPrice > 0 ? `${usdToSol(usdPrice).toFixed(3)} SOL` : '... SOL')
+                : `${usdPrice} DTEST`;
+              return (
+                <>
+                  {/* Header */}
+                  <View style={styles.pmHeader}>
+                    <View style={styles.pmHeaderLeft}>
+                      <View style={styles.pmRocketWrap}>
+                        <Zap size={22} color="#fff" fill="#fff" />
                       </View>
                       <View>
-                        <Text style={styles.tierLabel}>{tier.label}</Text>
-                        <Text style={styles.tierSub}>{tier.hours}h visibility boost</Text>
+                        <Text style={styles.pmTitle}>Promote Post</Text>
+                        <Text style={styles.pmSubtitle}>Boost your post to reach more users.{'\n'}Payment in SOL or DTEST.</Text>
                       </View>
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[styles.tierPrice, { color: '#F59E0B' }]}>${(tier as any).usdPrice}</Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                        <Zap size={11} color={colors.textMuted} strokeWidth={2} />
-                        <Text style={styles.tierCurrency}>
-                          {solUsdPrice > 0 ? `${usdToSol((tier as any).usdPrice).toFixed(4)} SOL` : '... SOL'}
-                        </Text>
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </>
-            )}
+                    <TouchableOpacity style={styles.pmCloseBtn} onPress={closePromoteModal}>
+                      <X size={18} color="rgba(255,255,255,0.7)" />
+                    </TouchableOpacity>
+                  </View>
 
-            {promoteStep === 'confirm' && selectedTier && (
-              <>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Confirm Promotion</Text>
-                  <TouchableOpacity onPress={() => setPromoteStep('select')}>
-                    <X size={22} color={colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.confirmCard}>
-                  <View style={styles.confirmRow}>
-                    <Text style={styles.confirmLabel}>Duration</Text>
-                    <Text style={styles.confirmValue}>{selectedTier.label}</Text>
+                  {/* Pay with toggle */}
+                  <Text style={styles.pmPayLabel}>PAY WITH</Text>
+                  <View style={styles.pmToggleRow}>
+                    <TouchableOpacity
+                      style={[styles.pmToggleBtn, promotePayWith === 'SOL' && styles.pmToggleBtnActive]}
+                      onPress={() => setPromotePayWith('SOL')}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.pmToggleIcon}>
+                        <Text style={styles.pmToggleIconText}>◎</Text>
+                      </View>
+                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'SOL' && styles.pmToggleBtnTextActive]}>SOL</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.pmToggleBtn, promotePayWith === 'DTEST' && styles.pmToggleBtnActive]}
+                      onPress={() => setPromotePayWith('DTEST')}
+                      activeOpacity={0.8}
+                    >
+                      <View style={[styles.pmToggleIcon, { backgroundColor: 'rgba(139,92,246,0.3)' }]}>
+                        <Text style={styles.pmToggleIconText}>D</Text>
+                      </View>
+                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'DTEST' && styles.pmToggleBtnTextActive]}>DTEST</Text>
+                    </TouchableOpacity>
                   </View>
-                  <View style={styles.confirmDivider} />
-                  <View style={styles.confirmRow}>
-                    <Text style={styles.confirmLabel}>Price</Text>
-                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                      <Text style={[styles.confirmValue, { color: '#F59E0B' }]}>${(selectedTier as any).usdPrice}</Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                        <Zap size={11} color={colors.textMuted} strokeWidth={2} />
-                        <Text style={{ fontSize: 12, color: colors.textMuted }}>
-                          {solUsdPrice > 0 ? `${usdToSol((selectedTier as any).usdPrice).toFixed(4)} SOL` : '... SOL'}
-                        </Text>
+
+                  {/* Tier cards */}
+                  <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
+                    {PROMOTE_TIERS.map(tier => {
+                      const isSelected = selectedTierKey === tier.key;
+                      const tUsd = (tier as any).usdPrice as number;
+                      const tAmt = promotePayWith === 'SOL'
+                        ? (solUsdPrice > 0 ? `≈ ${usdToSol(tUsd).toFixed(3)} SOL` : '... SOL')
+                        : `≈ ${tUsd} DTEST`;
+                      const isQuick = tier.key === '1h';
+                      return (
+                        <TouchableOpacity
+                          key={tier.key}
+                          style={[styles.pmTierCard, isSelected && styles.pmTierCardActive]}
+                          onPress={() => handleSelectTier(tier.key)}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.pmTierIconWrap, isSelected && styles.pmTierIconWrapActive]}>
+                            <Clock size={18} color={isSelected ? '#fff' : colors.primary} />
+                          </View>
+                          <View style={styles.pmTierInfo}>
+                            <Text style={styles.pmTierLabel}>{tier.label}</Text>
+                            <Text style={styles.pmTierSub}>{tier.hours}h visibility boost</Text>
+                            {isQuick && (
+                              <View style={styles.pmQuickBadge}>
+                                <Zap size={10} color={colors.primary} fill={colors.primary} />
+                                <Text style={styles.pmQuickBadgeText}>Quick boost</Text>
+                              </View>
+                            )}
+                          </View>
+                          <View style={styles.pmTierRight}>
+                            <Text style={styles.pmTierUsd}>${tUsd}</Text>
+                            <Text style={styles.pmTierAmt}>{tAmt}</Text>
+                          </View>
+                          {isSelected && (
+                            <View style={styles.pmCheckWrap}>
+                              <Check size={14} color="#fff" strokeWidth={3} />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  {/* Summary card */}
+                  <View style={styles.pmSummaryCard}>
+                    <View style={styles.pmSummaryIconWrap}>
+                      <Clock size={18} color={colors.primary} />
+                    </View>
+                    <View style={styles.pmSummaryCol}>
+                      <Text style={styles.pmSummaryPlanLabel}>SELECTED PLAN</Text>
+                      <Text style={styles.pmSummaryPlanName}>{activeTier.label} Boost</Text>
+                      <Text style={styles.pmSummaryPlanSub}>
+                        {'\u23F0'} {activeTier.hours}h visibility boost
+                      </Text>
+                    </View>
+                    <View style={styles.pmSummaryCol}>
+                      <Text style={styles.pmSummaryPayLabel}>YOU WILL PAY</Text>
+                      <Text style={styles.pmSummaryPayAmt}>${usdPrice}</Text>
+                      <Text style={styles.pmSummaryPaySub}>{displayAmt}</Text>
+                    </View>
+                    <View style={styles.pmSummaryCol}>
+                      <Text style={styles.pmSummaryNetLabel}>NETWORK</Text>
+                      <View style={styles.pmSummaryNetRow}>
+                        <Text style={{ fontSize: 14 }}>◎</Text>
+                        <Text style={styles.pmSummaryNetName}>Solana</Text>
                       </View>
                     </View>
                   </View>
-                  <View style={styles.confirmDivider} />
-                  <View style={styles.confirmRow}>
-                    <Text style={styles.confirmLabel}>Payment</Text>
-                    <View style={styles.paymentBadge}>
-                      <Wallet size={13} color={colors.primary} />
-                      <Text style={styles.paymentBadgeText}>Solana Wallet</Text>
-                    </View>
-                  </View>
-                </View>
-                <View style={styles.mockNotice}>
-                  <CircleAlert size={14} color={colors.warning} />
-                  <Text style={styles.mockNoticeText}>
-                    Real SOL transaction. Make sure your wallet is unlocked and has enough balance.
-                  </Text>
-                </View>
-                <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirmPromotion}>
-                  <Text style={styles.confirmBtnText}>
-                    Pay {solUsdPrice > 0 ? `${usdToSol((selectedTier as any).usdPrice).toFixed(4)} SOL` : `$${(selectedTier as any).usdPrice}`} & Promote
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.cancelLink} onPress={() => setPromoteStep('select')}>
-                  <Text style={styles.cancelLinkText}>Go back</Text>
-                </TouchableOpacity>
-              </>
-            )}
+
+                  {/* Confirm button */}
+                  <TouchableOpacity style={styles.pmConfirmBtn} onPress={handleConfirmPromotion} activeOpacity={0.88}>
+                    <Zap size={18} color="#fff" fill="#fff" />
+                    <Text style={styles.pmConfirmBtnText}>CONFIRM PROMOTION</Text>
+                  </TouchableOpacity>
+                </>
+              );
+            })()}
 
             {promoteStep === 'processing' && (
               <View style={styles.processingWrap}>
@@ -1438,9 +1535,9 @@ export default function CommunityScreen() {
                 <View style={styles.doneIcon}>
                   <Check size={30} color={colors.success} />
                 </View>
-                <Text style={styles.processingTitle}>Promotion Active</Text>
+                <Text style={styles.processingTitle}>Promotion Active!</Text>
                 <Text style={styles.processingSubtitle}>
-                  Your post appears at the top for {selectedTier?.label}
+                  Your post is now boosted for {PROMOTE_TIERS.find(t => t.key === selectedTierKey)?.label}
                 </Text>
                 <TouchableOpacity style={styles.doneBtn} onPress={closePromoteModal}>
                   <Text style={styles.doneBtnText}>Done</Text>
@@ -2777,5 +2874,288 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: 'rgba(196,196,212,0.5)',
     fontWeight: '600',
+  },
+
+  // ── Promote modal (pm*) ──
+  pmHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: spacing.lg,
+  },
+  pmHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+  },
+  pmRocketWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: 'rgba(139,92,246,0.6)',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 12,
+  },
+  pmTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    letterSpacing: -0.2,
+  },
+  pmSubtitle: {
+    fontSize: fontSize.xs,
+    color: 'rgba(196,196,212,0.55)',
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  pmCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pmPayLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(196,196,212,0.4)',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: spacing.sm,
+  },
+  pmToggleRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  pmToggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    borderRadius: 12,
+    backgroundColor: G.glass,
+    borderWidth: 1.5,
+    borderColor: G.glassBorder,
+  },
+  pmToggleBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.18)',
+    borderColor: 'rgba(139,92,246,0.55)',
+    shadowColor: 'rgba(139,92,246,0.35)',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+  },
+  pmToggleIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(245,158,11,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pmToggleIconText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#F59E0B',
+  },
+  pmToggleBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: 'rgba(196,196,212,0.45)',
+  },
+  pmToggleBtnTextActive: {
+    color: colors.textPrimary,
+  },
+  pmTierCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: G.glass,
+    borderWidth: 1.5,
+    borderColor: G.glassBorder,
+    borderRadius: 14,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    position: 'relative',
+  },
+  pmTierCardActive: {
+    backgroundColor: 'rgba(139,92,246,0.14)',
+    borderColor: 'rgba(139,92,246,0.55)',
+    shadowColor: 'rgba(139,92,246,0.3)',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+  },
+  pmTierIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pmTierIconWrapActive: {
+    backgroundColor: colors.primary,
+    borderColor: 'rgba(139,92,246,0.6)',
+  },
+  pmTierInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  pmTierLabel: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  pmTierSub: {
+    fontSize: fontSize.xs,
+    color: 'rgba(196,196,212,0.45)',
+  },
+  pmQuickBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 3,
+  },
+  pmQuickBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.primary,
+    letterSpacing: 0.2,
+  },
+  pmTierRight: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  pmTierUsd: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: '#F59E0B',
+  },
+  pmTierAmt: {
+    fontSize: 11,
+    color: 'rgba(196,196,212,0.45)',
+    fontWeight: '500',
+  },
+  pmCheckWrap: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(16,8,36,0.9)',
+  },
+  pmSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.22)',
+    borderRadius: 14,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  pmSummaryIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  pmSummaryCol: {
+    flex: 1,
+    gap: 2,
+  },
+  pmSummaryPlanLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: 'rgba(196,196,212,0.4)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  pmSummaryPlanName: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  pmSummaryPlanSub: {
+    fontSize: 10,
+    color: 'rgba(196,196,212,0.45)',
+  },
+  pmSummaryPayLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: 'rgba(196,196,212,0.4)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  pmSummaryPayAmt: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: '#F59E0B',
+  },
+  pmSummaryPaySub: {
+    fontSize: 10,
+    color: 'rgba(196,196,212,0.45)',
+  },
+  pmSummaryNetLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: 'rgba(196,196,212,0.4)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  pmSummaryNetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 2,
+  },
+  pmSummaryNetName: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  pmConfirmBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#7C3AED',
+    borderRadius: borderRadius.full,
+    paddingVertical: spacing.lg,
+    shadowColor: 'rgba(124,58,237,0.55)',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 1,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  pmConfirmBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.5,
   },
 });
