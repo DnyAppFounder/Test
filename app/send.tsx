@@ -31,6 +31,7 @@ import {
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { spacing, borderRadius, fontSize } from '@/constants/theme';
+import { burnSplToken, PayStatus as BurnStatus } from '@/services/treasuryService';
 import {
   PublicKey,
   SystemProgram,
@@ -95,6 +96,13 @@ export default function SendScreen() {
   const [showRecent, setShowRecent] = useState(false);
   const [logoErrors, setLogoErrors] = useState<Record<string, boolean>>({});
 
+  // Burn
+  const [burnAmount, setBurnAmount] = useState('');
+  const [burnStatus, setBurnStatus] = useState<BurnStatus>('idle');
+  const [burnError, setBurnError] = useState<string | null>(null);
+  const [burnSig, setBurnSig] = useState<string | null>(null);
+  const [showBurnPanel, setShowBurnPanel] = useState(false);
+
   useEffect(() => {
     loadRecentRecipients().then(setRecentRecipients);
   }, []);
@@ -135,6 +143,33 @@ export default function SendScreen() {
       const text = await Clipboard.getString();
       if (text?.trim()) { setRecipient(text.trim()); setError(null); }
     } catch {}
+  };
+
+  const handleBurn = async () => {
+    setBurnError(null);
+    if (!activeAddress || !selectedAsset || selectedAsset.isNative) { setBurnError('Select a SPL token to burn.'); return; }
+    const burnAmt = parseFloat(burnAmount);
+    if (isNaN(burnAmt) || burnAmt <= 0) { setBurnError('Enter a valid burn amount.'); return; }
+    if (burnAmt > currentBalance) { setBurnError('Amount exceeds balance.'); return; }
+
+    const result = await burnSplToken({
+      fromAddress: activeAddress,
+      tokenMint: selectedAsset.address,
+      amount: burnAmt,
+      decimals: selectedAsset.decimals,
+      connectedWalletId: connectedWallet?.id ?? null,
+      internalAccountIndex: selectedAccount?.accountIndex ?? 0,
+      onStatus: setBurnStatus,
+    });
+
+    if (!result.success) {
+      setBurnError(result.error || 'Burn failed');
+      setBurnStatus('idle');
+    } else {
+      setBurnSig(result.signature ?? null);
+      setBurnAmount('');
+      if (refreshWallet) await refreshWallet();
+    }
   };
 
   const handleSend = async () => {
@@ -494,6 +529,71 @@ export default function SendScreen() {
             <View style={styles.errorBox}>
               <AlertCircle size={15} color="#ef4444" />
               <Text style={styles.errorText}>{error || 'Amount exceeds balance'}</Text>
+            </View>
+          )}
+
+          {/* Burn Panel */}
+          {selectedAsset && !selectedAsset.isNative && (
+            <View style={styles.burnPanel}>
+              <TouchableOpacity style={styles.burnHeader} onPress={() => setShowBurnPanel(p => !p)} activeOpacity={0.8}>
+                <View style={styles.burnHeaderLeft}>
+                  <View style={styles.burnIconWrap}>
+                    <Text style={{ fontSize: 16 }}>🔥</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.burnTitle}>Burn Tokens</Text>
+                    <Text style={styles.burnSub}>Permanently destroy {selectedAsset.symbol}</Text>
+                  </View>
+                </View>
+                {showBurnPanel ? <ChevronDown size={16} color={PURPLE} /> : <X size={16} color="rgba(255,255,255,0.3)" />}
+              </TouchableOpacity>
+
+              {showBurnPanel && (
+                <View style={styles.burnBody}>
+                  <View style={styles.burnWarning}>
+                    <AlertCircle size={14} color="#f59e0b" />
+                    <Text style={styles.burnWarningText}>This action is permanent and cannot be undone.</Text>
+                  </View>
+                  <View style={styles.burnInputRow}>
+                    <TextInput
+                      style={styles.burnInput}
+                      placeholder="Amount to burn"
+                      placeholderTextColor="rgba(255,255,255,0.25)"
+                      value={burnAmount}
+                      onChangeText={t => { setBurnAmount(t); setBurnError(null); setBurnSig(null); }}
+                      keyboardType="decimal-pad"
+                    />
+                    <TouchableOpacity style={styles.burnMaxBtn} onPress={() => setBurnAmount(currentBalance.toFixed(4))} activeOpacity={0.8}>
+                      <Text style={styles.burnMaxText}>MAX</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {burnError && (
+                    <View style={styles.errorBox}>
+                      <AlertCircle size={14} color="#ef4444" />
+                      <Text style={styles.errorText}>{burnError}</Text>
+                    </View>
+                  )}
+                  {burnSig && (
+                    <Text style={{ fontSize: 11, color: '#10b981', fontWeight: '600', marginBottom: 8 }} numberOfLines={1} ellipsizeMode="middle">
+                      Burned! {burnSig}
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.burnBtn, (burnStatus === 'preparing' || burnStatus === 'signing' || burnStatus === 'sending') && styles.sendBtnDisabled]}
+                    onPress={handleBurn}
+                    disabled={burnStatus === 'preparing' || burnStatus === 'signing' || burnStatus === 'sending'}
+                    activeOpacity={0.85}
+                  >
+                    {(burnStatus === 'preparing' || burnStatus === 'signing' || burnStatus === 'sending') ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: '#fff' }}>
+                        {burnStatus === 'idle' || burnStatus === 'failed' || burnStatus === 'confirmed' ? `BURN ${selectedAsset.symbol}` : 'Processing...'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
 
@@ -975,4 +1075,52 @@ const styles = StyleSheet.create({
   assetValueCol: { alignItems: 'flex-end', gap: 4 },
   assetValue: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
   noAssetsText: { fontSize: 14, color: 'rgba(255,255,255,0.35)', textAlign: 'center', paddingVertical: 32 },
+  // Burn
+  burnPanel: {
+    backgroundColor: GLASS,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  burnHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+  },
+  burnHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  burnIconWrap: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  burnTitle: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  burnSub: { fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
+  burnBody: { paddingHorizontal: 14, paddingBottom: 14, gap: 10 },
+  burnWarning: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(245,158,11,0.1)',
+    borderRadius: 8, padding: 10,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)',
+  },
+  burnWarningText: { fontSize: 12, color: '#f59e0b', flex: 1 },
+  burnInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  burnInput: {
+    flex: 1, backgroundColor: GLASS, borderWidth: 1, borderColor: GLASS_BORDER,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+    color: '#fff', fontSize: 16, fontWeight: '600',
+  },
+  burnMaxBtn: {
+    backgroundColor: 'rgba(239,68,68,0.15)', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)',
+  },
+  burnMaxText: { fontSize: 13, fontWeight: '800', color: '#ef4444' },
+  burnBtn: {
+    backgroundColor: '#ef4444', borderRadius: 10,
+    paddingVertical: 13, alignItems: 'center',
+    flexDirection: 'row', justifyContent: 'center', gap: 8,
+  },
 });

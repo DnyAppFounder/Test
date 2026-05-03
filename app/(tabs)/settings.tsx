@@ -11,6 +11,7 @@ import {
   Share,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera } from 'lucide-react-native';
@@ -25,9 +26,11 @@ import { Language, languageNames } from '@/constants/i18n';
 import { SocialService, UserProfile, NotificationSettings } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
+import { payToTreasury, TREASURY_WALLET, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
-type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | null;
+type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'certification' | null;
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -45,6 +48,62 @@ export default function SettingsScreen() {
   const [notifSettings, setNotifSettings] = useState<NotificationSettings | null>(null);
   const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+
+  // Premium Certification
+  const [certPlan, setCertPlan] = useState<'basic' | 'premium'>('basic');
+  const [certPayWith, setCertPayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  const [certPayStatus, setCertPayStatus] = useState<PayStatus>('idle');
+  const [certTxSig, setCertTxSig] = useState<string | null>(null);
+  const [certDone, setCertDone] = useState(false);
+  const [solUsdPrice, setSolUsdPrice] = useState(0);
+
+  useEffect(() => {
+    const svc = new SolanaPriceService();
+    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+  }, []);
+
+  const CERT_PLANS = [
+    { key: 'basic' as const, label: 'Basic Verification', usdPrice: 9.99, desc: 'Blue checkmark • Verified badge on profile and posts' },
+    { key: 'premium' as const, label: 'Premium Certification', usdPrice: 29.99, desc: 'Gold badge • Priority visibility • Exclusive features' },
+  ];
+
+  const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : 0;
+
+  const handleConfirmCertification = async () => {
+    if (!profile || !activeAddress) return;
+    const plan = CERT_PLANS.find(p => p.key === certPlan)!;
+    const solAmt = usdToSol(plan.usdPrice);
+    setCertPayStatus('preparing');
+
+    const result = await payToTreasury({
+      fromAddress: activeAddress,
+      amountSol: certPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
+      amountToken: certPayWith === 'DTEST' ? plan.usdPrice : undefined,
+      tokenMint: certPayWith === 'DTEST' ? DTEST_MINT : undefined,
+      connectedWalletId: connectedWallet?.id ?? null,
+      internalAccountIndex: selectedAccount?.accountIndex ?? 0,
+      onStatus: setCertPayStatus,
+    });
+
+    if (!result.success) {
+      setCertPayStatus('idle');
+      Alert.alert('Payment Failed', result.error || 'Could not complete payment.');
+      return;
+    }
+
+    setCertTxSig(result.signature ?? null);
+
+    try {
+      if (certPlan === 'basic') {
+        await SocialService.updateProfile(profile.id, { verified_basic: true } as any);
+      } else {
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        await SocialService.updateProfile(profile.id, { premium_expiration: expiresAt } as any);
+      }
+      await refreshProfile();
+    } catch {}
+    setCertDone(true);
+  };
 
   const rawWalletAddress = activeAddress || selectedAccount?.address || '';
   const walletAddress = rawWalletAddress
@@ -198,6 +257,12 @@ export default function SettingsScreen() {
           icon: <Gift size={20} color={colors.primary} />,
           label: 'Rewards & Referrals',
           onPress: () => router.push('/rewards' as any),
+        },
+        {
+          icon: <Shield size={20} color="#f59e0b" />,
+          label: 'Premium Certification',
+          value: profile?.is_verified ? 'Active' : (profile as any)?.verified_basic ? 'Basic' : undefined,
+          onPress: () => { setCertDone(false); setCertPayStatus('idle'); setCertTxSig(null); setActiveModal('certification'); },
         },
       ],
     },
@@ -689,6 +754,137 @@ export default function SettingsScreen() {
                 <Text style={styles.comingSoonText}>Coming Soon</Text>
               </View>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Premium Certification Modal */}
+      <Modal visible={activeModal === 'certification'} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: 32 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Premium Certification</Text>
+              <TouchableOpacity onPress={() => { setActiveModal(null); setCertDone(false); setCertPayStatus('idle'); }}>
+                <X size={24} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            {certDone ? (
+              <View style={{ alignItems: 'center', gap: 16, paddingVertical: 24 }}>
+                <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(16,185,129,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                  <Check size={36} color="#10b981" />
+                </View>
+                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.textPrimary }}>Certification Active!</Text>
+                <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center' }}>
+                  Your {CERT_PLANS.find(p => p.key === certPlan)?.label} is now active.
+                </Text>
+                {certTxSig && (
+                  <Text style={{ fontSize: 11, color: colors.primary, textAlign: 'center', fontWeight: '600' }} numberOfLines={1} ellipsizeMode="middle">
+                    {certTxSig}
+                  </Text>
+                )}
+                <TouchableOpacity style={{ backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 50, marginTop: 8 }} onPress={() => { setActiveModal(null); setCertDone(false); }}>
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            ) : certPayStatus === 'preparing' || certPayStatus === 'signing' || certPayStatus === 'sending' ? (
+              <View style={{ alignItems: 'center', gap: 16, paddingVertical: 32 }}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }}>
+                  {certPayStatus === 'signing' ? 'Confirm in wallet...' :
+                   certPayStatus === 'sending' ? 'Transaction pending...' :
+                   'Preparing transaction...'}
+                </Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Plan selection */}
+                <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 10, marginTop: 4 }}>SELECT PLAN</Text>
+                {CERT_PLANS.map(plan => {
+                  const isSelected = certPlan === plan.key;
+                  const solAmt = usdToSol(plan.usdPrice);
+                  const dispAmt = certPayWith === 'SOL'
+                    ? (solUsdPrice > 0 ? `≈ ${solAmt.toFixed(3)} SOL` : '... SOL')
+                    : `≈ ${plan.usdPrice} DTEST`;
+                  return (
+                    <TouchableOpacity
+                      key={plan.key}
+                      style={{ backgroundColor: isSelected ? 'rgba(245,158,11,0.1)' : colors.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: isSelected ? '#f59e0b' : colors.surfaceBorder, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                      onPress={() => setCertPlan(plan.key)}
+                      activeOpacity={0.8}
+                    >
+                      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: isSelected ? '#f59e0b' : 'rgba(245,158,11,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                        <Shield size={20} color={isSelected ? '#fff' : '#f59e0b'} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 15, fontWeight: '700', color: colors.textPrimary }}>{plan.label}</Text>
+                        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>{plan.desc}</Text>
+                        <Text style={{ fontSize: 12, color: '#f59e0b', fontWeight: '600', marginTop: 3 }}>{dispAmt}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                        <Text style={{ fontSize: 18, fontWeight: '900', color: colors.textPrimary }}>${plan.usdPrice}</Text>
+                        {isSelected && <Check size={16} color="#f59e0b" strokeWidth={3} />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {/* Pay with */}
+                <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 10, marginTop: 6 }}>PAY WITH</Text>
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+                  {(['SOL', 'DTEST'] as const).map(method => (
+                    <TouchableOpacity
+                      key={method}
+                      style={{ flex: 1, backgroundColor: certPayWith === method ? 'rgba(139,92,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: certPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
+                      onPress={() => setCertPayWith(method)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={{ fontSize: 16 }}>{method === 'SOL' ? '◎' : 'D'}</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: certPayWith === method ? colors.primary : colors.textPrimary }}>{method}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Summary */}
+                {(() => {
+                  const plan = CERT_PLANS.find(p => p.key === certPlan)!;
+                  const solAmt = usdToSol(plan.usdPrice);
+                  const dispAmt = certPayWith === 'SOL' ? (solUsdPrice > 0 ? `${solAmt.toFixed(4)} SOL` : '... SOL') : `${plan.usdPrice} DTEST`;
+                  return (
+                    <View style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: colors.surfaceBorder, gap: 10 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 13, color: colors.textMuted }}>Selected Plan</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>{plan.label}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 13, color: colors.textMuted }}>USD Price</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>${plan.usdPrice}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 13, color: colors.textMuted }}>You Pay</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.primary }}>{dispAmt}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 13, color: colors.textMuted }}>Network</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>Solana</Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                <TouchableOpacity
+                  style={{ backgroundColor: '#f59e0b', borderRadius: 14, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+                  onPress={handleConfirmCertification}
+                  activeOpacity={0.88}
+                >
+                  <Shield size={18} color="#fff" />
+                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: 1 }}>CONFIRM CERTIFICATION</Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 10 }}>
+                  Payment goes directly to DAWEN treasury on Solana. Non-refundable.
+                </Text>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
