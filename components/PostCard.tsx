@@ -181,17 +181,25 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#12121A',
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    shadowColor: 'rgba(139,92,246,0.08)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 12,
   },
   cardPromoted: {
-    borderColor: 'rgba(245,158,11,0.4)',
+    borderColor: 'rgba(245,158,11,0.45)',
     borderWidth: 1.5,
+    shadowColor: 'rgba(245,158,11,0.15)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 16,
   },
   header: {
     flexDirection: 'row',
@@ -202,7 +210,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#1E1E2E',
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -234,12 +244,12 @@ const styles = StyleSheet.create({
   },
   walletAddr: {
     fontSize: 10,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.35)',
     fontFamily: 'SpaceMono-Regular',
   },
   time: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.35)',
     fontWeight: '500',
   },
   moreBtn: {
@@ -260,14 +270,14 @@ const styles = StyleSheet.create({
     height: 210,
     borderRadius: borderRadius.md,
     marginBottom: spacing.md,
-    backgroundColor: '#1A1A28',
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   mentionText: {
-    color: '#8B5CF6',
+    color: '#A78BFA',
     fontWeight: '700',
   },
   linkText: {
-    color: '#3B82F6',
+    color: '#60A5FA',
     fontWeight: '500',
     textDecorationLine: 'underline',
   },
@@ -277,7 +287,7 @@ const styles = StyleSheet.create({
     gap: spacing.xxl,
     paddingTop: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.05)',
+    borderTopColor: 'rgba(255,255,255,0.06)',
   },
   action: {
     flexDirection: 'row',
@@ -286,7 +296,7 @@ const styles = StyleSheet.create({
   },
   actionCount: {
     fontSize: fontSize.sm,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.4)',
     fontWeight: '600',
   },
   actionCountLiked: {

@@ -16,6 +16,7 @@ import {
   Alert,
   Animated,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
@@ -834,6 +835,18 @@ export default function CommunityScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Nebula background gradient */}
+      <LinearGradient
+        colors={['#0D0618', '#130A24', '#0A0A14', '#0D0618']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      {/* Glow blobs for depth */}
+      <View style={styles.glowBlob1} pointerEvents="none" />
+      <View style={styles.glowBlob2} pointerEvents="none" />
+      <View style={styles.glowBlob3} pointerEvents="none" />
+
       {/* Header */}
       {activeTab === 'messages' ? (
         <View style={styles.msgHeader}>
@@ -843,7 +856,7 @@ export default function CommunityScreen() {
             activeOpacity={0.85}
             onPress={() => { setComposeSearch(''); setComposeResults([]); setShowComposeModal(true); }}
           >
-            <Plus size={22} color={colors.white} strokeWidth={2.5} />
+            <Send size={18} color={colors.white} strokeWidth={2.5} />
           </TouchableOpacity>
         </View>
       ) : activeTab === 'notifications' ? (
@@ -859,19 +872,23 @@ export default function CommunityScreen() {
         </View>
       ) : (
         <View style={styles.header}>
-          <View>
-            <Text style={styles.headerTitle}>Dawen Pulse</Text>
-            <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
+          {/* Glass container behind header content */}
+          <View style={styles.headerGlass}>
+            <View style={styles.headerTitleWrap}>
+              <View style={styles.headerGlow} />
+              <Text style={styles.headerTitle}>Dawen Pulse</Text>
+              <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
+            </View>
+            {activeTab === 'feed' && (
+              <TouchableOpacity style={styles.composeBtn} onPress={() => router.push('/create-post')} activeOpacity={0.85}>
+                <Send size={18} color={colors.white} strokeWidth={2.5} />
+              </TouchableOpacity>
+            )}
           </View>
-          {activeTab === 'feed' && (
-            <TouchableOpacity style={styles.composeBtn} onPress={() => router.push('/create-post')} activeOpacity={0.85}>
-              <Send size={20} color={colors.white} strokeWidth={2.5} />
-            </TouchableOpacity>
-          )}
         </View>
       )}
 
-      {/* Top tabs — icon-based */}
+      {/* Top tabs — glass icon-based */}
       <View style={styles.topTabs}>
         {/* Feed — animated globe */}
         <TouchableOpacity
@@ -879,17 +896,18 @@ export default function CommunityScreen() {
           onPress={() => setActiveTab('feed')}
           activeOpacity={0.8}
         >
+          {activeTab === 'feed' && <View style={styles.topTabActiveGlow} />}
           <View style={{ alignItems: 'center', justifyContent: 'center' }}>
             {activeTab === 'feed' && (
               <Animated.View style={{
                 position: 'absolute',
                 width: 28, height: 28, borderRadius: 14,
                 backgroundColor: '#A855F7',
-                opacity: feedGlobeGlow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] }),
+                opacity: feedGlobeGlow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.3] }),
               }} />
             )}
             <Animated.View style={{ transform: [{ rotate: activeTab === 'feed' ? feedGlobeRotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) : '0deg' }] }}>
-              <Globe size={20} color={activeTab === 'feed' ? '#FFFFFF' : colors.textMuted} strokeWidth={2} />
+              <Globe size={20} color={activeTab === 'feed' ? '#FFFFFF' : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
             </Animated.View>
           </View>
         </TouchableOpacity>
@@ -906,6 +924,7 @@ export default function CommunityScreen() {
           }}
           activeOpacity={0.8}
         >
+          {activeTab === 'profile' && <View style={styles.topTabActiveGlow} />}
           <View style={styles.topTabAvatarWrap}>
             {profile?.avatar_url ? (
               <Image
@@ -913,7 +932,7 @@ export default function CommunityScreen() {
                 style={[styles.topTabAvatar, activeTab === 'profile' && styles.topTabAvatarActive]}
               />
             ) : (
-              <User size={20} color={activeTab === 'profile' ? colors.white : colors.textMuted} strokeWidth={2} />
+              <User size={20} color={activeTab === 'profile' ? colors.white : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
             )}
           </View>
         </TouchableOpacity>
@@ -924,7 +943,8 @@ export default function CommunityScreen() {
           onPress={() => setActiveTab('messages')}
           activeOpacity={0.8}
         >
-          <Mail size={20} color={activeTab === 'messages' ? colors.white : colors.textMuted} strokeWidth={2} />
+          {activeTab === 'messages' && <View style={styles.topTabActiveGlow} />}
+          <Mail size={20} color={activeTab === 'messages' ? colors.white : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
         </TouchableOpacity>
 
         {/* Alerts / Notifications */}
@@ -933,8 +953,9 @@ export default function CommunityScreen() {
           onPress={() => setActiveTab('notifications')}
           activeOpacity={0.8}
         >
+          {activeTab === 'notifications' && <View style={styles.topTabActiveGlow} />}
           <View style={styles.topTabInner}>
-            <Bell size={20} color={activeTab === 'notifications' ? colors.white : colors.textMuted} strokeWidth={2} />
+            <Bell size={20} color={activeTab === 'notifications' ? colors.white : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
             {unreadNotifCount > 0 && (
               <View style={styles.topTabBadge}>
                 <Text style={styles.topTabBadgeText}>{unreadNotifCount > 99 ? '99+' : unreadNotifCount}</Text>
@@ -952,7 +973,7 @@ export default function CommunityScreen() {
       {/* Delete Confirmation Modal */}
       <Modal visible={deleteConfirmId !== null} animationType="fade" transparent>
         <View style={styles.deleteOverlay}>
-          <View style={styles.deleteModal}>
+          <View style={styles.glassCard}>
             <View style={styles.deleteIconWrap}>
               <Trash2 size={28} color="#ef4444" strokeWidth={2} />
             </View>
@@ -1487,64 +1508,149 @@ export default function CommunityScreen() {
   );
 }
 
+const G = {
+  glass: 'rgba(255,255,255,0.04)',
+  glassBorder: 'rgba(255,255,255,0.08)',
+  glassBorderActive: 'rgba(139,92,246,0.45)',
+  glassActive: 'rgba(139,92,246,0.18)',
+  glassInput: 'rgba(255,255,255,0.05)',
+  purpleGlow: 'rgba(139,92,246,0.25)',
+  purpleGlowStrong: 'rgba(139,92,246,0.45)',
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0A0F',
+    backgroundColor: '#0D0618',
   },
+
+  // ── Nebula background blobs ──
+  glowBlob1: {
+    position: 'absolute',
+    top: -60,
+    left: -80,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    transform: [{ scaleX: 1.4 }],
+  },
+  glowBlob2: {
+    position: 'absolute',
+    top: 120,
+    right: -100,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(167,139,250,0.07)',
+  },
+  glowBlob3: {
+    position: 'absolute',
+    bottom: 100,
+    left: -60,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(109,40,217,0.08)',
+  },
+
+  // ── Header ──
   header: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: 56,
+    paddingBottom: spacing.md,
+  },
+  headerGlass: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.xxl,
-    paddingTop: 56,
-    paddingBottom: spacing.lg,
-    backgroundColor: '#0A0A0F',
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
+    borderRadius: 20,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
+    overflow: 'hidden',
+  },
+  headerTitleWrap: {
+    position: 'relative',
+  },
+  headerGlow: {
+    position: 'absolute',
+    top: -20,
+    left: -30,
+    width: 120,
+    height: 80,
+    borderRadius: 60,
+    backgroundColor: 'rgba(139,92,246,0.2)',
   },
   headerTitle: {
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '900',
-    color: colors.textPrimary,
+    color: '#FFFFFF',
     letterSpacing: -0.5,
-    marginBottom: 3,
+    marginBottom: 2,
+    textShadowColor: 'rgba(167,139,250,0.5)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
   },
   headerSubtitle: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontWeight: '500',
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.6)',
+    letterSpacing: 0.3,
   },
   composeBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    ...elevation.lg,
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.4)',
   },
+
+  // ── Nav tabs ──
   topTabs: {
     flexDirection: 'row',
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
+    paddingTop: spacing.xs,
     gap: spacing.xs,
-    backgroundColor: '#0A0A0F',
-    minHeight: 52,
+    minHeight: 56,
   },
   topTab: {
     flex: 1,
-    height: 44,
+    height: 46,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: borderRadius.md,
-    backgroundColor: '#12121A',
+    borderRadius: 14,
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
+    position: 'relative',
+    overflow: 'hidden',
   },
   topTabActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: 'rgba(139,92,246,0.22)',
+    borderColor: G.glassBorderActive,
+  },
+  topTabActiveGlow: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderRadius: 14,
   },
   topTabText: {
     fontSize: 12,
     fontWeight: '700',
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.35)',
   },
   topTabTextActive: {
     color: colors.white,
@@ -1556,13 +1662,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   topTabAvatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    opacity: 0.6,
   },
   topTabAvatarActive: {
     borderWidth: 2,
-    borderColor: colors.white,
+    borderColor: colors.primaryLight,
+    opacity: 1,
   },
   tabContent: {
     flex: 1,
@@ -1573,7 +1681,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   feedList: {
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
     paddingBottom: 100,
   },
   emptyList: {
@@ -1592,7 +1700,9 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: colors.primaryMuted,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderWidth: 1,
+    borderColor: G.glassBorder,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.sm,
@@ -1604,7 +1714,7 @@ const styles = StyleSheet.create({
   },
   emptySubtitle: {
     fontSize: fontSize.md,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.55)',
     textAlign: 'center',
     maxWidth: 260,
     lineHeight: 22,
@@ -1615,30 +1725,56 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxxl,
     borderRadius: borderRadius.full,
     marginTop: spacing.md,
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.7,
+    shadowRadius: 12,
   },
   emptyBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
   },
-  // Modal
+
+  // ── Glass card (shared) ──
+  glassCard: {
+    backgroundColor: 'rgba(20,10,40,0.75)',
+    borderWidth: 1,
+    borderColor: G.glassBorder,
+    borderRadius: 20,
+    padding: spacing.xxl,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    gap: spacing.md,
+    shadowColor: G.purpleGlow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+  },
+
+  // ── Modals ──
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(5,3,15,0.85)',
     justifyContent: 'flex-end',
   },
   modalSheet: {
-    backgroundColor: '#12121A',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: 'rgba(16,8,36,0.96)',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: G.glassBorder,
     padding: spacing.xxl,
     maxHeight: '85%',
   },
   modalHandle: {
-    width: 36,
+    width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#2A2A3A',
+    backgroundColor: 'rgba(139,92,246,0.3)',
     alignSelf: 'center',
     marginBottom: spacing.lg,
   },
@@ -1650,8 +1786,9 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: fontSize.lg,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.textPrimary,
+    letterSpacing: -0.2,
   },
   createAuthorRow: {
     flexDirection: 'row',
@@ -1663,7 +1800,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#1E1E2E',
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -1684,18 +1823,19 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: 'top',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     borderRadius: borderRadius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
+    backgroundColor: G.glassInput,
   },
   imageUrlRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: '#1A1A28',
+    backgroundColor: G.glassInput,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
@@ -1720,32 +1860,37 @@ const styles = StyleSheet.create({
   },
   charCount: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
   },
   postBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxl,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.full,
     alignItems: 'center',
     minWidth: 90,
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
   },
   postBtnDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
   postBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
   },
-  // Comments
+
+  // ── Comments ──
   commentPostPreview: {
-    backgroundColor: '#1A1A28',
+    backgroundColor: G.glass,
     borderRadius: borderRadius.md,
     padding: spacing.md,
     marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
   },
   commentPreviewHeader: {
     flexDirection: 'row',
@@ -1760,11 +1905,11 @@ const styles = StyleSheet.create({
   },
   commentPreviewTime: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.5)',
   },
   commentPreviewText: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.75)',
     lineHeight: 20,
   },
   noComments: {
@@ -1773,7 +1918,7 @@ const styles = StyleSheet.create({
   },
   noCommentsText: {
     fontSize: fontSize.sm,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
   },
   commentItem: {
     flexDirection: 'row',
@@ -1784,7 +1929,9 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#1E1E2E',
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -1805,35 +1952,35 @@ const styles = StyleSheet.create({
   },
   commentAuthor: {
     fontSize: fontSize.sm,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.textPrimary,
   },
   commentTime: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.4)',
   },
   commentText: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.85)',
     lineHeight: 20,
   },
   replyBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(139,92,246,0.08)',
+    backgroundColor: 'rgba(139,92,246,0.1)',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(139,92,246,0.15)',
+    borderTopColor: 'rgba(139,92,246,0.2)',
   },
   replyBannerText: {
     fontSize: 13,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.65)',
   },
   replyBannerName: {
     fontWeight: '700',
-    color: colors.primary,
+    color: colors.primaryLight,
   },
   commentActions: {
     flexDirection: 'row',
@@ -1848,7 +1995,7 @@ const styles = StyleSheet.create({
   },
   commentActionText: {
     fontSize: 12,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
     fontWeight: '600',
   },
   replyItem: {
@@ -1861,7 +2008,9 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: '#1E1E2E',
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -1876,7 +2025,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.surfaceBorder,
+    borderTopColor: 'rgba(139,92,246,0.1)',
     paddingTop: spacing.md,
     marginTop: spacing.sm,
   },
@@ -1884,8 +2033,10 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: fontSize.sm,
     color: colors.textPrimary,
-    backgroundColor: '#1A1A28',
+    backgroundColor: G.glassInput,
     borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
     maxHeight: 80,
@@ -1897,15 +2048,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: G.purpleGlow,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
   },
   commentSendBtnDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
-  // @mention dropdown
+
+  // ── @mention dropdown ──
   mentionDropdown: {
-    backgroundColor: '#1A1A28',
+    backgroundColor: 'rgba(16,8,36,0.96)',
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     borderRadius: borderRadius.md,
     marginBottom: spacing.sm,
     overflow: 'hidden',
@@ -1925,7 +2081,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
   },
   mentionAvatarFallback: {
-    backgroundColor: '#2A2A3A',
+    backgroundColor: G.glass,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1936,13 +2092,14 @@ const styles = StyleSheet.create({
   },
   mentionAddr: {
     fontSize: 10,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.4)',
     fontFamily: 'SpaceMono-Regular',
   },
-  // Promote
+
+  // ── Promote ──
   promoteDesc: {
     fontSize: fontSize.md,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.65)',
     marginBottom: spacing.xl,
     lineHeight: 22,
   },
@@ -1950,10 +2107,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#1A1A28',
+    backgroundColor: G.glass,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
+    borderColor: G.glassBorder,
+    borderRadius: 14,
     padding: spacing.lg,
     marginBottom: spacing.md,
   },
@@ -1966,35 +2123,37 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.primaryMuted,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   tierLabel: {
     fontSize: fontSize.md,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.textPrimary,
   },
   tierSub: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
     marginTop: 2,
   },
   tierPrice: {
     fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: colors.primary,
+    fontWeight: '800',
+    color: '#F59E0B',
     textAlign: 'right',
   },
   tierCurrency: {
     fontSize: fontSize.xs,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
     textAlign: 'right',
   },
   confirmCard: {
-    backgroundColor: '#1A1A28',
+    backgroundColor: G.glass,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     marginBottom: spacing.lg,
@@ -2007,7 +2166,7 @@ const styles = StyleSheet.create({
   },
   confirmLabel: {
     fontSize: fontSize.md,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.55)',
   },
   confirmValue: {
     fontSize: fontSize.md,
@@ -2016,28 +2175,32 @@ const styles = StyleSheet.create({
   },
   confirmDivider: {
     height: 1,
-    backgroundColor: colors.surfaceBorder,
+    backgroundColor: G.glassBorder,
   },
   paymentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    backgroundColor: colors.primaryMuted,
+    backgroundColor: 'rgba(139,92,246,0.15)',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
   },
   paymentBadgeText: {
     fontSize: fontSize.sm,
     fontWeight: '600',
-    color: colors.primary,
+    color: colors.primaryLight,
   },
   mockNotice: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.sm,
-    backgroundColor: colors.warningMuted,
+    backgroundColor: 'rgba(245,158,11,0.08)',
     borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.2)',
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
@@ -2050,9 +2213,13 @@ const styles = StyleSheet.create({
   confirmBtn: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.lg,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.full,
     alignItems: 'center',
     marginBottom: spacing.md,
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.7,
+    shadowRadius: 12,
   },
   confirmBtnText: {
     fontSize: fontSize.md,
@@ -2065,7 +2232,7 @@ const styles = StyleSheet.create({
   },
   cancelLinkText: {
     fontSize: fontSize.sm,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
   },
   processingWrap: {
     alignItems: 'center',
@@ -2079,14 +2246,16 @@ const styles = StyleSheet.create({
   },
   processingSubtitle: {
     fontSize: fontSize.md,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.6)',
     textAlign: 'center',
   },
   doneIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: colors.successMuted,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.25)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2094,8 +2263,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxxl,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.full,
     marginTop: spacing.lg,
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
   },
   doneBtnText: {
     fontSize: fontSize.md,
@@ -2103,7 +2276,7 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
-  // Messages
+  // ── Messages ──
   msgHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2111,7 +2284,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxl,
     paddingTop: 56,
     paddingBottom: spacing.lg,
-    backgroundColor: '#0A0A0F',
   },
   msgHeaderTitle: {
     fontSize: 26,
@@ -2123,15 +2295,14 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: colors.primaryMuted,
+    backgroundColor: G.glass,
     borderWidth: 1,
-    borderColor: colors.surfaceBorderLight,
+    borderColor: G.glassBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
   msgContainer: {
     flex: 1,
-    backgroundColor: '#0A0A0F',
   },
   msgContent: {
     paddingBottom: 40,
@@ -2139,7 +2310,7 @@ const styles = StyleSheet.create({
   msgSearchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#12121A',
+    backgroundColor: G.glassInput,
     borderRadius: 14,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.lg,
@@ -2147,7 +2318,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
   },
   msgSearchInput: {
     flex: 1,
@@ -2156,10 +2327,10 @@ const styles = StyleSheet.create({
   },
   msgList: {
     marginHorizontal: spacing.lg,
-    backgroundColor: '#12121A',
-    borderRadius: 16,
+    backgroundColor: G.glass,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     overflow: 'hidden',
   },
   convRow: {
@@ -2171,7 +2342,7 @@ const styles = StyleSheet.create({
   },
   convRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(139,92,246,0.07)',
+    borderBottomColor: 'rgba(139,92,246,0.06)',
   },
   convAvatarWrap: {
     position: 'relative',
@@ -2180,7 +2351,9 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
   },
   convBody: {
     flex: 1,
@@ -2206,7 +2379,7 @@ const styles = StyleSheet.create({
   },
   convLastMsg: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.55)',
   },
   convMeta: {
     alignItems: 'flex-end',
@@ -2214,20 +2387,23 @@ const styles = StyleSheet.create({
   },
   convTime: {
     fontSize: 12,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.4)',
     fontWeight: '500',
   },
   unreadDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.primary,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.primaryLight,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
   },
 
-  // Notifications
+  // ── Notifications ──
   notifContainer: {
     flex: 1,
-    backgroundColor: '#0A0A0F',
   },
   notifContent: {
     paddingBottom: 40,
@@ -2242,31 +2418,35 @@ const styles = StyleSheet.create({
     paddingBottom: 2,
   },
   notifFilterTab: {
-    paddingVertical: 9,
+    paddingVertical: 8,
     paddingHorizontal: spacing.md,
     borderRadius: 20,
-    backgroundColor: '#12121A',
+    backgroundColor: G.glass,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
   },
   notifFilterTabActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    backgroundColor: 'rgba(139,92,246,0.25)',
+    borderColor: G.glassBorderActive,
+    shadowColor: G.purpleGlow,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
   },
   notifFilterText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.45)',
   },
   notifFilterTextActive: {
     color: colors.white,
   },
   notifList: {
     marginHorizontal: spacing.lg,
-    backgroundColor: '#12121A',
-    borderRadius: 16,
+    backgroundColor: G.glass,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     overflow: 'hidden',
   },
   notifRow: {
@@ -2278,7 +2458,7 @@ const styles = StyleSheet.create({
   },
   notifRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(139,92,246,0.07)',
+    borderBottomColor: 'rgba(139,92,246,0.06)',
   },
   notifIconWrap: {
     width: 32,
@@ -2286,10 +2466,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   notifAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: colors.surfaceElevated,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: G.glass,
+    borderWidth: 1,
+    borderColor: G.glassBorder,
   },
   notifBody: {
     flex: 1,
@@ -2305,24 +2487,24 @@ const styles = StyleSheet.create({
   },
   notifAction: {
     fontWeight: '400',
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.7)',
   },
   notifTime: {
     fontSize: 12,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.4)',
     fontWeight: '500',
     marginTop: 1,
   },
   notifPreview: {
     fontSize: 13,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.4)',
     marginTop: 3,
   },
   notifRowUnread: {
-    backgroundColor: 'rgba(139,92,246,0.05)',
+    backgroundColor: 'rgba(139,92,246,0.06)',
   },
   notifAvatarFallback: {
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: G.glass,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2339,7 +2521,7 @@ const styles = StyleSheet.create({
   markReadText: {
     fontSize: 12,
     fontWeight: '600',
-    color: colors.primary,
+    color: colors.primaryLight,
   },
   notifActions: {
     flexDirection: 'row',
@@ -2352,7 +2534,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   unreadBadge: {
-    backgroundColor: colors.primary,
+    backgroundColor: 'rgba(139,92,246,0.25)',
+    borderWidth: 1,
+    borderColor: G.glassBorderActive,
     borderRadius: borderRadius.full,
     minWidth: 22,
     height: 22,
@@ -2363,23 +2547,27 @@ const styles = StyleSheet.create({
   unreadBadgeText: {
     fontSize: 11,
     fontWeight: '800',
-    color: colors.white,
+    color: colors.primaryLight,
   },
   convAvatarFallback: {
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: G.glass,
     justifyContent: 'center',
     alignItems: 'center',
   },
 
-  // Inline profile tab
+  // ── Profile card (inline) ──
   profileCard: {
     margin: spacing.lg,
-    backgroundColor: '#12121A',
-    borderRadius: 20,
+    backgroundColor: G.glass,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: G.glassBorder,
     padding: spacing.lg,
     gap: spacing.lg,
+    shadowColor: G.purpleGlow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
   },
   profileCardTop: {
     flexDirection: 'row',
@@ -2387,21 +2575,27 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   profileAvatarLg: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'rgba(139,92,246,0.4)',
+    shadowColor: G.purpleGlow,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 12,
   },
   profileAvatarLgImg: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
   },
   profileAvatarLgFallback: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.surfaceElevated,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: G.glass,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2413,15 +2607,16 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
     fontWeight: '800',
     color: colors.textPrimary,
+    letterSpacing: -0.3,
   },
   profileCardAddr: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontFamily: 'monospace',
+    fontSize: 11,
+    color: 'rgba(196,196,212,0.45)',
+    fontFamily: 'SpaceMono-Regular',
   },
   profileCardBio: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.7)',
     lineHeight: 18,
   },
   profileCardStats: {
@@ -2429,9 +2624,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.surfaceBorder,
+    borderTopColor: G.glassBorder,
     borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
+    borderBottomColor: G.glassBorder,
   },
   profileCardStat: {
     flex: 1,
@@ -2444,36 +2639,42 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   profileCardStatLabel: {
-    fontSize: 11,
-    color: colors.textMuted,
+    fontSize: 10,
+    color: 'rgba(196,196,212,0.45)',
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   statLabelTappable: {
-    color: colors.primary,
+    color: colors.primaryLight,
   },
   profileCardStatDivider: {
     width: 1,
     height: 32,
-    backgroundColor: colors.surfaceBorder,
+    backgroundColor: G.glassBorder,
   },
   viewFullProfileBtn: {
-    backgroundColor: colors.primary,
+    backgroundColor: 'rgba(139,92,246,0.25)',
+    borderWidth: 1,
+    borderColor: G.glassBorderActive,
     paddingVertical: spacing.md,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.full,
     alignItems: 'center',
+    shadowColor: G.purpleGlowStrong,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
   },
   viewFullProfileBtnText: {
     fontSize: fontSize.md,
     fontWeight: '700',
-    color: colors.white,
+    color: '#FFFFFF',
   },
   profileSectionHeader: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
+    borderBottomColor: G.glassBorder,
   },
   profileSectionTitle: {
     fontSize: fontSize.md,
@@ -2481,7 +2682,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Top tab badge
+  // ── Top tab badge ──
   topTabInner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2505,16 +2706,16 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
-  // Delete confirmation
+  // ── Delete confirmation ──
   deleteOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(5,3,15,0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.xxl,
   },
   deleteModal: {
-    backgroundColor: '#12121A',
+    backgroundColor: G.glass,
     borderRadius: 20,
     padding: spacing.xxl,
     width: '100%',
@@ -2528,7 +2729,9 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: 'rgba(239,68,68,0.12)',
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.sm,
@@ -2540,19 +2743,21 @@ const styles = StyleSheet.create({
   },
   deleteSubtitle: {
     fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    color: 'rgba(196,196,212,0.6)',
     textAlign: 'center',
     lineHeight: 20,
   },
   deleteConfirmBtn: {
-    backgroundColor: '#ef4444',
+    backgroundColor: 'rgba(239,68,68,0.85)',
     paddingVertical: spacing.md,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.full,
     alignItems: 'center',
     width: '100%',
     marginTop: spacing.sm,
     minHeight: 46,
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.4)',
   },
   deleteConfirmBtnText: {
     fontSize: fontSize.md,
@@ -2566,7 +2771,7 @@ const styles = StyleSheet.create({
   },
   deleteCancelBtnText: {
     fontSize: fontSize.md,
-    color: colors.textMuted,
+    color: 'rgba(196,196,212,0.5)',
     fontWeight: '600',
   },
 });
