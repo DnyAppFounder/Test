@@ -376,12 +376,6 @@ export default function CommunityScreen() {
     const commentText = newCommentContent.trim();
     const parentId = replyingToComment?.id;
 
-    // Limit: one top-level comment per user per post
-    if (!parentId) {
-      const alreadyCommented = comments.some(c => c.author_id === profile.id && !c.parent_comment_id);
-      if (alreadyCommented) return;
-    }
-
     setSubmittingComment(true);
     setNewCommentContent('');
     setReplyingToComment(null);
@@ -565,7 +559,12 @@ export default function CommunityScreen() {
               }
             </View>
             <View style={styles.profileCardInfo}>
-              <Text style={styles.profileCardName} numberOfLines={1}>{displayName}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                <Text style={styles.profileCardName} numberOfLines={1}>{displayName}</Text>
+                {(profile.is_verified || (profile as any).verified_basic || (profile as any).premium_expiration) && (
+                  <VerificationBadge profile={profile as any} size="sm" />
+                )}
+              </View>
               {profile.wallet_address ? (
                 <Text style={styles.profileCardAddr} numberOfLines={1}>
                   {profile.wallet_address.slice(0, 6)}...{profile.wallet_address.slice(-4)}
@@ -1024,7 +1023,10 @@ export default function CommunityScreen() {
                         }
                       </View>
                       <View style={styles.convBody}>
-                        <Text style={styles.convUsername}>{name}</Text>
+                        <View style={styles.convNameRow}>
+                          <Text style={styles.convUsername}>{name}</Text>
+                          <VerificationBadge profile={user} size="sm" />
+                        </View>
                         {user.bio ? <Text style={styles.convLastMsg} numberOfLines={1}>{user.bio}</Text> : null}
                       </View>
                     </TouchableOpacity>
@@ -1140,6 +1142,9 @@ export default function CommunityScreen() {
                     <Text style={styles.commentPreviewAuthor}>
                       {selectedPost.author?.username || `${selectedPost.author?.wallet_address?.slice(0, 6)}...`}
                     </Text>
+                    {selectedPost.author && (selectedPost.author.is_verified || (selectedPost.author as any).verified_basic || (selectedPost.author as any).premium_expiration) && (
+                      <VerificationBadge profile={selectedPost.author as any} size="sm" />
+                    )}
                     <Text style={styles.commentPreviewTime}>{timeAgo(selectedPost.created_at)}</Text>
                   </View>
                   <Text style={styles.commentPreviewText} numberOfLines={3}>{selectedPost.content}</Text>
@@ -1171,6 +1176,9 @@ export default function CommunityScreen() {
                             <Text style={styles.commentAuthor}>
                               {item.author?.username || `${item.author?.wallet_address?.slice(0, 6)}...`}
                             </Text>
+                            {item.author && (item.author.is_verified || (item.author as any).verified_basic || (item.author as any).premium_expiration) && (
+                              <VerificationBadge profile={item.author as any} size="sm" />
+                            )}
                             <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
                           </View>
                           <Text style={styles.commentText}>{item.content}</Text>
@@ -1202,6 +1210,9 @@ export default function CommunityScreen() {
                               <Text style={styles.commentAuthor}>
                                 {reply.author?.username || `${reply.author?.wallet_address?.slice(0, 6)}...`}
                               </Text>
+                              {reply.author && (reply.author.is_verified || (reply.author as any).verified_basic || (reply.author as any).premium_expiration) && (
+                                <VerificationBadge profile={reply.author as any} size="sm" />
+                              )}
                               <Text style={styles.commentTime}>{timeAgo(reply.created_at)}</Text>
                             </View>
                             <Text style={styles.commentText}>{reply.content}</Text>

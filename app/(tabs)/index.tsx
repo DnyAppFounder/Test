@@ -13,6 +13,7 @@ import {
   Modal,
   Pressable,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -187,11 +188,20 @@ export default function WalletHome() {
     loadWatchlist();
   }, [loadWatchlist]);
 
+  // Reload watchlist whenever the screen gains focus (e.g. after adding from token-detail)
+  useFocusEffect(
+    useCallback(() => {
+      loadWatchlist();
+      if (activeAddress) loadWalletAssets();
+    }, [loadWatchlist, loadWalletAssets, activeAddress])
+  );
+
+  // Load NFTs when assets tab is active
   useEffect(() => {
-    if (activeTab === 'assets' && assetSubTab === 'nfts') {
+    if (activeTab === 'assets' && activeAddress) {
       loadNFTs();
     }
-  }, [activeTab, assetSubTab, loadNFTs]);
+  }, [activeTab, activeAddress, loadNFTs]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -432,7 +442,7 @@ export default function WalletHome() {
               </View>
               <TouchableOpacity
                 style={styles.manageBtn}
-                onPress={() => router.push('/nft-gallery' as any)}
+                onPress={() => setActiveTab('watchlist')}
                 activeOpacity={0.8}
               >
                 <Text style={styles.manageBtnText}>Manage</Text>
@@ -504,7 +514,10 @@ export default function WalletHome() {
             <TouchableOpacity
               style={styles.viewAllBtn}
               activeOpacity={0.8}
-              onPress={() => router.push('/nft-gallery' as any)}
+              onPress={() => {
+                // Show all SPL tokens: scroll to top of assets tab which already shows all tokens
+                setActiveTab('assets');
+              }}
             >
               <Text style={styles.viewAllText}>View all assets</Text>
               <ChevronRight size={16} color={colors.primary} strokeWidth={2.5} />
@@ -539,17 +552,17 @@ export default function WalletHome() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-            ) : (
+            ) : !nftsLoading && activeAddress ? (
               <View style={styles.nftEmpty}>
                 <View style={styles.nftEmptyIcon}>
                   <ImageIcon size={22} color={colors.primary} strokeWidth={1.5} />
                 </View>
                 <View>
-                  <Text style={styles.nftEmptyTitle}>You don't have any NFTs yet</Text>
+                  <Text style={styles.nftEmptyTitle}>No NFTs found</Text>
                   <Text style={styles.nftEmptySubtitle}>Your NFTs will appear here</Text>
                 </View>
               </View>
-            )}
+            ) : null}
           </View>
         </>
       )}

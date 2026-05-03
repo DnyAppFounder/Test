@@ -139,8 +139,11 @@ export default function TokenDetailScreen() {
 
   const toggleWatchlist = async () => {
     if (!token || !profile?.id) return;
+    const wasWatchlisted = isWatchlisted;
     const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name, profile.id).catch(() => false);
-    if (success) setIsWatchlisted(w => !w);
+    if (success) {
+      setIsWatchlisted(!wasWatchlisted);
+    }
   };
 
   const loadHolders = async () => {

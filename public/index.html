@@ -19,6 +19,31 @@
         flex: 1;
       }
     </style>
+    <style id="dawen-focus-reset">
+      /* Remove default browser blue outline on all interactive elements */
+      *,
+      *:focus,
+      *:focus-visible {
+        outline: none !important;
+        -webkit-tap-highlight-color: transparent !important;
+      }
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.35) !important;
+        border-color: rgba(139, 92, 246, 0.7) !important;
+      }
+      button:focus,
+      [role="button"]:focus {
+        outline: none !important;
+      }
+      /* Remove iOS tap flash */
+      * {
+        -webkit-tap-highlight-color: rgba(0,0,0,0) !important;
+        -webkit-touch-callout: none;
+      }
+    </style>
     <script>
       // Must run before the main bundle to prevent process.version/nextTick crashes
       (function() {

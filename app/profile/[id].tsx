@@ -347,18 +347,20 @@ export default function ProfileScreen() {
       let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
       if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
         const uploaded = await uploadGlobalAvatar(avatarUrl);
-        if (uploaded) avatarUrl = uploaded;
+        // Never persist local URI — use uploaded permanent URL or keep existing
+        avatarUrl = uploaded ?? profile.avatar_url ?? undefined;
       }
       let bannerUrl: string | undefined = editBannerUrl.trim() || undefined;
       if (bannerUrl && (bannerUrl.startsWith('file://') || bannerUrl.startsWith('blob:') || bannerUrl.startsWith('data:'))) {
         const uploaded = await SocialService.uploadAvatar(profile.wallet_address, bannerUrl, profile.id + '_banner');
         if (uploaded) bannerUrl = uploaded;
+        else bannerUrl = (profile as any).banner_url ?? undefined;
       }
       await updateGlobalProfile({
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
-        avatar_url: avatarUrl,
-        banner_url: bannerUrl,
+        avatar_url: avatarUrl && avatarUrl.startsWith('http') ? avatarUrl : profile.avatar_url ?? undefined,
+        banner_url: bannerUrl && bannerUrl.startsWith('http') ? bannerUrl : (profile as any).banner_url ?? undefined,
         twitter_url: editTwitterUrl.trim() || null,
         telegram_url: editTelegramUrl.trim() || null,
         discord_url: editDiscordUrl.trim() || null,
@@ -446,10 +448,6 @@ export default function ProfileScreen() {
   const handleAddComment = async () => {
     if (!newCommentContent.trim() || !currentUserProfile || !commentsPostId || submittingComment) return;
     const parentId = replyingToComment?.id;
-    if (!parentId) {
-      const alreadyCommented = comments.some(c => c.author_id === currentUserProfile.id && !c.parent_comment_id);
-      if (alreadyCommented) return;
-    }
     setSubmittingComment(true);
     const text = newCommentContent.trim();
     setNewCommentContent('');

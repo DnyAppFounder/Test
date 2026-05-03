@@ -84,13 +84,15 @@ export default function SettingsScreen() {
     try {
       let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
       if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
+        // Upload to Supabase storage; use permanent URL only, never persist local URI
         const uploaded = await uploadGlobalAvatar(avatarUrl);
-        if (uploaded) avatarUrl = uploaded;
+        avatarUrl = uploaded ?? profile.avatar_url ?? undefined;
       }
       await updateGlobalProfile({
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
-        avatar_url: avatarUrl,
+        // Only set avatar_url if it's a real remote URL
+        avatar_url: avatarUrl && avatarUrl.startsWith('http') ? avatarUrl : profile.avatar_url ?? undefined,
       });
     } catch (err) {
       console.error('[Settings] handleSaveProfile error:', err);
