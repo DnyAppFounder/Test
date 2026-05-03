@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Linking } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2 } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
+import LinkText, { extractUrls } from './LinkText';
+import LinkPreview from './LinkPreview';
 import { useRouter } from 'expo-router';
 import { Post, UserProfile, SocialService } from '@/services/socialService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -101,37 +103,22 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       </View>
 
       {/* Content with clickable @mentions and links */}
-      <Text style={styles.content}>
-        {post.content.split(/(@\w+|https?:\/\/[^\s]+)/g).map((part, i) => {
-          if (/^@\w+$/.test(part)) {
-            return (
-              <Text
-                key={i}
-                style={styles.mentionText}
-                onPress={() => {
-                  SocialService.searchUsers(part.slice(1)).then(results => {
-                    if (results[0]?.id) router.push(`/profile/${results[0].id}` as any);
-                  }).catch(() => {});
-                }}
-              >
-                {part}
-              </Text>
-            );
-          }
-          if (/^https?:\/\//.test(part)) {
-            return (
-              <Text
-                key={i}
-                style={styles.linkText}
-                onPress={() => Linking.openURL(part).catch(() => {})}
-              >
-                {part}
-              </Text>
-            );
-          }
-          return <Text key={i}>{part}</Text>;
-        })}
-      </Text>
+      <LinkText
+        text={post.content}
+        style={styles.content}
+        onMentionPress={(username) => {
+          SocialService.searchUsers(username).then(results => {
+            if (results[0]?.id) router.push(`/profile/${results[0].id}` as any);
+          }).catch(() => {});
+        }}
+      />
+
+      {/* Link preview card — first URL found in post */}
+      {(() => {
+        const urls = extractUrls(post.content);
+        if (urls.length === 0) return null;
+        return <LinkPreview url={urls[0]} />;
+      })()}
 
       {/* Image — prefer media_url, fallback to image_url */}
       {(post.media_url || post.image_url) && !imageError && (
