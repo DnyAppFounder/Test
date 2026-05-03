@@ -20,9 +20,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
-import { TransactionManager } from '@/lib/wallet/TransactionManager';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { SolanaPriceService } from '@/services/solana/priceService';
+import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
@@ -33,7 +33,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 
 export default function CommunityScreen() {
   const router = useRouter();
-  const { activeAddress } = useWallet();
+  const { activeAddress, connectedWallet, selectedAccount } = useWallet();
   const { profile, refreshProfile, clearUnreadNotifCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
@@ -50,8 +50,8 @@ export default function CommunityScreen() {
   const [promoteStep, setPromoteStep] = useState<PromoteStep>('select');
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>('1h');
   const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DTEST'>('SOL');
-  // DTEST token mint address (placeholder — replace with real mint when deployed)
-  const DTEST_MINT = 'So11111111111111111111111111111111111111112';
+  const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
+  const DTEST_MINT = DTEST_MINT_ADDR;
 
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -365,51 +365,40 @@ export default function CommunityScreen() {
     setSelectedTierKey(tierKey);
   };
 
-  // DAWEN treasury — receives promotion SOL payments
-  const DAWEN_TREASURY = 'DawEn7h3sMhW5RjNfUeDmPT5yVFiRgXwemRZy2f8DrUq';
-
   const handleConfirmPromotion = async () => {
-    if (!selectedTierKey || !selectedPostId || !profile) return;
+    if (!selectedTierKey || !selectedPostId || !profile || !activeAddress) return;
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
     if (!tier) return;
 
     const usdPrice = (tier as any).usdPrice as number;
     const solAmount = usdToSol(usdPrice);
     setPromoteStep('processing');
+    setPromotePayStatus('preparing');
+
+    const result = await payToTreasury({
+      fromAddress: activeAddress,
+      amountSol: promotePayWith === 'SOL' ? (solAmount > 0 ? solAmount : 0.001) : undefined,
+      amountToken: promotePayWith === 'DTEST' ? usdPrice : undefined,
+      tokenMint: promotePayWith === 'DTEST' ? DTEST_MINT : undefined,
+      connectedWalletId: connectedWallet?.id ?? null,
+      internalAccountIndex: selectedAccount?.accountIndex ?? 0,
+      onStatus: setPromotePayStatus,
+    });
+
+    if (!result.success) {
+      setPromoteStep('select');
+      setPromotePayStatus('idle');
+      Alert.alert('Payment Failed', result.error || 'Could not complete payment. Make sure your wallet is unlocked and has sufficient balance.');
+      return;
+    }
+
     try {
-      const txManager = TransactionManager.getInstance();
-      let result;
-      if (promotePayWith === 'SOL') {
-        result = await txManager.sendTransaction({
-          blockchain: 'solana',
-          to: DAWEN_TREASURY,
-          amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
-          accountIndex: 0,
-        });
-      } else {
-        // DTEST SPL token payment
-        result = await txManager.sendTransaction({
-          blockchain: 'solana',
-          to: DAWEN_TREASURY,
-          amount: usdPrice.toFixed(6),
-          tokenMint: DTEST_MINT,
-          accountIndex: 0,
-        });
-      }
-
-      if (!result.success) {
-        throw new Error(result.error || 'Transaction failed');
-      }
-
       await SocialService.promotePost(selectedPostId, tier.key);
       setPosts(prev => prev.map(p =>
         p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
       ));
-      setPromoteStep('done');
-    } catch (err: any) {
-      setPromoteStep('select');
-      Alert.alert('Payment Failed', err?.message || 'Could not complete payment. Make sure your wallet is unlocked and has sufficient balance.');
-    }
+    } catch {}
+    setPromoteStep('done');
   };
 
   const closePromoteModal = () => {
@@ -1525,8 +1514,16 @@ export default function CommunityScreen() {
             {promoteStep === 'processing' && (
               <View style={styles.processingWrap}>
                 <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.processingTitle}>Processing...</Text>
-                <Text style={styles.processingSubtitle}>Activating promotion</Text>
+                <Text style={styles.processingTitle}>
+                  {promotePayStatus === 'signing' ? 'Confirm in wallet...' :
+                   promotePayStatus === 'sending' ? 'Transaction pending...' :
+                   'Preparing transaction...'}
+                </Text>
+                <Text style={styles.processingSubtitle}>
+                  {promotePayStatus === 'signing' ? 'Please approve in your wallet' :
+                   promotePayStatus === 'sending' ? 'Broadcasting to Solana...' :
+                   'Building payment transaction'}
+                </Text>
               </View>
             )}
 
