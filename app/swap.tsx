@@ -16,7 +16,7 @@ import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartp
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService';
-import { jupiterTokenListService, JupiterToken } from '@/services/jupiter/tokenListService';
+import { mergedTokenListService as jupiterTokenListService, JupiterToken } from '@/services/tokenListService';
 import { useWallet } from '@/contexts/WalletContext';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -73,7 +73,8 @@ export default function SwapScreen() {
 
       const dawen = allTokens.find(t => t.address === DAWEN_MINT) ?? {
         address: DAWEN_MINT, chainId: 101, decimals: 6,
-        name: 'DAWEN', symbol: 'DAWEN', logoURI: undefined,
+        name: 'Dawen Testnet', symbol: 'DTEST', logoURI: undefined,
+        tags: ['community'],
       };
       setToToken(dawen);
     } catch (e) {

@@ -309,20 +309,16 @@ export default function ProfileScreen() {
       allowsEditing: true,
       aspect: [3, 1],
       quality: 0.8,
-      base64: true,
+      base64: false,
     });
     if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      const uri = asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri;
+      const uri = result.assets[0].uri;
       setEditBannerUrl(uri);
       // Save immediately
       try {
-        let bannerUrl: string | undefined = uri;
-        if (uri.startsWith('file://') || uri.startsWith('blob:') || uri.startsWith('data:')) {
-          const uploaded = await SocialService.uploadAvatar(profile.wallet_address, uri, profile.id + '_banner');
-          if (uploaded) bannerUrl = uploaded;
-        }
-        if (bannerUrl) {
+        const uploaded = await SocialService.uploadAvatar(profile.wallet_address, uri, profile.id + '_banner');
+        const bannerUrl = uploaded || uri;
+        if (bannerUrl.startsWith('http')) {
           await SocialService.updateProfile(profile.id, { banner_url: bannerUrl } as any);
           await loadProfile();
         }
@@ -338,16 +334,10 @@ export default function ProfileScreen() {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
-      base64: true,
+      base64: false,
     });
     if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      if (asset.base64) {
-        const mime = asset.mimeType || 'image/jpeg';
-        setEditAvatarUrl(`data:${mime};base64,${asset.base64}`);
-      } else {
-        setEditAvatarUrl(asset.uri);
-      }
+      setEditAvatarUrl(result.assets[0].uri);
     }
   };
 

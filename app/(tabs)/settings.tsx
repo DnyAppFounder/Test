@@ -108,18 +108,11 @@ export default function SettingsScreen() {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
-      base64: true,
+      base64: false,
     });
 
     if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      // On web, prefer base64 data URI to avoid fetch(blob:) issues
-      if (asset.base64) {
-        const mime = asset.mimeType || 'image/jpeg';
-        setEditAvatarUrl(`data:${mime};base64,${asset.base64}`);
-      } else {
-        setEditAvatarUrl(asset.uri);
-      }
+      setEditAvatarUrl(result.assets[0].uri);
     }
   };
 

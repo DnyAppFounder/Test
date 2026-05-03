@@ -539,12 +539,15 @@ export class SocialService {
 
     const commentIds = comments.map((c: any) => c.id);
 
-    // Load replies for all top-level comments
-    const { data: replies } = await supabase
-      .from('post_comments')
-      .select('*')
-      .in('parent_comment_id', commentIds)
-      .order('created_at', { ascending: true });
+    // Load replies for all top-level comments (guard against empty array)
+    const repliesQuery = commentIds.length > 0
+      ? await supabase
+          .from('post_comments')
+          .select('*')
+          .in('parent_comment_id', commentIds)
+          .order('created_at', { ascending: true })
+      : { data: [] };
+    const { data: replies } = repliesQuery;
 
     const allComments = [...comments, ...(replies || [])];
     const authorIds = [...new Set(allComments.map((c: any) => c.author_id))];
@@ -559,12 +562,14 @@ export class SocialService {
     let likedSet = new Set<string>();
     if (currentUserId && allComments.length > 0) {
       const allIds = allComments.map((c: any) => c.id);
-      const { data: liked } = await supabase
-        .from('comment_likes')
-        .select('comment_id')
-        .eq('user_id', currentUserId)
-        .in('comment_id', allIds);
-      likedSet = new Set((liked || []).map((l: any) => l.comment_id));
+      if (allIds.length > 0) {
+        const { data: liked } = await supabase
+          .from('comment_likes')
+          .select('comment_id')
+          .eq('user_id', currentUserId)
+          .in('comment_id', allIds);
+        likedSet = new Set((liked || []).map((l: any) => l.comment_id));
+      }
     }
 
     const replyMap = new Map<string, PostComment[]>();
