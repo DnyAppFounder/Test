@@ -60,9 +60,10 @@ class ChartDataService {
 
   async getOHLCVData(
     tokenAddress: string,
-    timeFrame: TimeFrame = '1H'
+    timeFrame: TimeFrame = '1H',
+    limitOverride?: number
   ): Promise<CandleData[]> {
-    const cacheKey = `${tokenAddress}:${timeFrame}`;
+    const cacheKey = `${tokenAddress}:${timeFrame}:${limitOverride ?? ''}`;
     const cached = this.cache.get(cacheKey);
 
     if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
@@ -76,7 +77,8 @@ class ChartDataService {
       }
 
       const { aggregate, timeframe, limit } = GECKO_TIMEFRAME_MAP[timeFrame];
-      const url = `${GECKO_TERMINAL_API}/networks/solana/pools/${pairAddress}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}&currency=usd&token=base`;
+      const effectiveLimit = limitOverride ?? limit;
+      const url = `${GECKO_TERMINAL_API}/networks/solana/pools/${pairAddress}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${effectiveLimit}&currency=usd&token=base`;
 
       const response = await fetch(url, {
         headers: { Accept: 'application/json;version=20230302' },

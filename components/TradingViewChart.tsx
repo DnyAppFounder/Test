@@ -6,10 +6,11 @@ import {
   Text,
   TouchableOpacity,
   Image,
-  Modal,
   useWindowDimensions,
   Animated,
   ScrollView,
+  PanResponder,
+  GestureResponderEvent,
 } from 'react-native';
 import Svg, {
   Path,
@@ -21,10 +22,21 @@ import Svg, {
   Stop,
   G,
   Circle,
-  Polyline,
 } from 'react-native-svg';
 import * as Clipboard from 'expo-clipboard';
-import { TrendingUp, TrendingDown, ChartBar as BarChart2, Activity, ChartLine as LineChart, ChartCandlestick as CandlestickChart, ChartArea as AreaChart, Copy, CircleCheck as CheckCircle2, ChevronDown } from 'lucide-react-native';
+import {
+  TrendingUp,
+  TrendingDown,
+  ChartBar as BarChart2,
+  Activity,
+  ChartLine as LineChart,
+  ChartCandlestick as CandlestickChart,
+  ChartArea as AreaChart,
+  Copy,
+  CircleCheck as CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
 
@@ -50,61 +62,62 @@ interface TradingViewChartProps {
   tokenMint?: string;
 }
 
-const ALL_TIMEFRAMES: { key: TimeFrame; label: string }[] = [
-  { key: '1m', label: '1m' },
-  { key: '5m', label: '5m' },
+const ALL_TIMEFRAMES: { key: TimeFrame | 'ALL'; label: string }[] = [
+  { key: '1m',  label: '1m' },
+  { key: '5m',  label: '5m' },
   { key: '15m', label: '15m' },
-  { key: '1H', label: '1h' },
-  { key: '4H', label: '4h' },
-  { key: '1D', label: '1d' },
-  { key: '1W', label: '1w' },
-  { key: '1M', label: '1M' },
+  { key: '1H',  label: '1H' },
+  { key: '4H',  label: '4H' },
+  { key: '1D',  label: '1D' },
+  { key: '1W',  label: '1W' },
+  { key: '1M',  label: '1M' },
+  { key: 'ALL', label: 'ALL' },
 ];
 
-// Chart mode config with icons (lucide component refs) and labels
 const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
-  { key: 'area',        icon: AreaChart,          label: 'Area' },
-  { key: 'line',        icon: LineChart,           label: 'Line' },
-  { key: 'candlestick', icon: CandlestickChart,    label: 'Candles' },
-  { key: 'bar',         icon: BarChart2,           label: 'Bar' },
-  { key: 'mountain',    icon: Activity,            label: 'Mountain' },
-  { key: 'bonding',     icon: TrendingUp,          label: 'Bonding' },
+  { key: 'area',        icon: AreaChart,       label: 'Area' },
+  { key: 'line',        icon: LineChart,        label: 'Line' },
+  { key: 'candlestick', icon: CandlestickChart, label: 'Candles' },
+  { key: 'bar',         icon: BarChart2,        label: 'Bars' },
+  { key: 'mountain',    icon: Activity,         label: 'Mountain' },
+  { key: 'bonding',     icon: TrendingUp,       label: 'Bonding' },
 ];
 
-const CHART_H = 230;
-const VOL_H = 44;
-const PAD = { top: 18, right: 60, bottom: 22, left: 4 };
+// Layout constants
+const CHART_H = 220;
+const VOL_H   = 40;
+const TIME_H  = 18;
+const PAD     = { top: 16, right: 58, bottom: 4, left: 4 };
 
+// ─── helpers ──────────────────────────────────────────────────────────────────
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
   if (p >= 10000) return p.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (p >= 1) return p.toFixed(4);
+  if (p >= 1)     return p.toFixed(4);
   if (p >= 0.001) return p.toFixed(6);
   if (p >= 0.000001) return p.toFixed(8);
   return p.toExponential(3);
 }
-
 function fmtMcap(v: number): string {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
   if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
   if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
   return `$${v.toFixed(0)}`;
 }
-
-function fmtTime(ts: number, tf: TimeFrame): string {
+function fmtTime(ts: number, tf: TimeFrame | 'ALL'): string {
   const d = new Date(ts);
-  if (tf === '1D' || tf === '1W' || tf === '1M') {
+  if (tf === '1D' || tf === '1W' || tf === '1M' || tf === 'ALL') {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
-
-function bondingX(i: number, n: number, plotW: number, padLeft: number): number {
-  if (n <= 1) return padLeft + plotW / 2;
-  const t = i / (n - 1);
-  return padLeft + Math.sqrt(t) * plotW;
+function fmtDateTime(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+// ─── Main component ───────────────────────────────────────────────────────────
 export function TradingViewChart({
   tokenInfo,
   symbol,
@@ -116,81 +129,82 @@ export function TradingViewChart({
   const chartWidth = Math.min(screenWidth - 32, 600);
 
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
-    name: symbol,
-    symbol: symbol,
-    price: currentPrice ?? 0,
-    priceChange24h: 0,
-    pairAddress,
+    name: symbol, symbol, price: currentPrice ?? 0, priceChange24h: 0, pairAddress,
   } : undefined);
 
   const [candles, setCandles] = useState<CandleData[]>([]);
-  const [timeframe, setTimeframe] = useState<TimeFrame>('1H');
+  const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
   const [valueMode, setValueMode] = useState<ValueMode>('mcap');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [showModeDropdown, setShowModeDropdown] = useState(false);
+  const [showModePanel, setShowModePanel] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
 
-  // Animated live dot pulse
-  const dotPulse = useRef(new Animated.Value(1)).current;
-  // Animated volume bar highlight for last bar
-  const volHighlight = useRef(new Animated.Value(0)).current;
+  // Crosshair state
+  const [crosshair, setCrosshair] = useState<{
+    x: number; y: number; idx: number; price: number; ts: number; pct: number;
+  } | null>(null);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  // Animated values
+  const dotPulse = useRef(new Animated.Value(1)).current;
+  const priceLineFlash = useRef(new Animated.Value(0)).current;
+
+  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef       = useRef<WebSocket | null>(null);
   const livePriceRef = useRef<number | null>(null);
   const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const svgContainerRef = useRef<View>(null);
+  const svgOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const candlesRef = useRef<CandleData[]>([]);
 
   useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
+  useEffect(() => { candlesRef.current = candles; }, [candles]);
 
-  // Pulse animation for live dot
+  // Pulse live dot
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(dotPulse, { toValue: 1.8, duration: 700, useNativeDriver: true }),
-        Animated.timing(dotPulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-      ])
-    );
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(dotPulse, { toValue: 2.2, duration: 600, useNativeDriver: true }),
+      Animated.timing(dotPulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+    ]));
     loop.start();
     return () => loop.stop();
   }, []);
 
-  // Highlight last volume bar when price updates
-  const triggerVolHighlight = useCallback(() => {
+  // Flash price line on update
+  const flashPriceLine = useCallback(() => {
     Animated.sequence([
-      Animated.timing(volHighlight, { toValue: 1, duration: 150, useNativeDriver: true }),
-      Animated.timing(volHighlight, { toValue: 0, duration: 500, useNativeDriver: true }),
+      Animated.timing(priceLineFlash, { toValue: 1, duration: 100, useNativeDriver: false }),
+      Animated.timing(priceLineFlash, { toValue: 0, duration: 600, useNativeDriver: false }),
     ]).start();
-  }, []);
+  }, [priceLineFlash]);
 
-  const loadData = useCallback(async (tf: TimeFrame, silent = false) => {
+  const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
     if (!tokenMint) { setLoading(false); return; }
     if (!silent) setLoading(true);
     try {
-      const data = await chartDataService.getOHLCVData(tokenMint, tf);
+      const effectiveTf: TimeFrame = tf === 'ALL' ? '1D' : tf;
+      const limitOverride = tf === 'ALL' ? 365 : undefined;
+      const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
       if (data && data.length > 0) {
         setCandles(prev => {
           if (!silent) return data;
           if (prev.length === 0) return data;
-          const currentLivePrice = livePriceRef.current;
-          if (currentLivePrice == null) return data;
+          const lp = livePriceRef.current;
+          if (lp == null) return data;
           const merged = [...data];
           const last = { ...merged[merged.length - 1] };
-          last.close = currentLivePrice;
-          last.high = Math.max(last.high, currentLivePrice);
-          last.low = Math.min(last.low, currentLivePrice);
+          last.close = lp;
+          last.high  = Math.max(last.high, lp);
+          last.low   = Math.min(last.low, lp);
           merged[merged.length - 1] = last;
           return merged;
         });
         setHasData(true);
       } else {
-        if (!silent) {
-          // Even with no chart data, show price line if we have price
-          setHasData(false);
-        }
+        if (!silent) setHasData(false);
       }
     } catch {
       if (!silent) setHasData(false);
@@ -201,45 +215,39 @@ export function TradingViewChart({
 
   const connectWebSocket = useCallback(() => {
     if (!tokenMint || typeof WebSocket === 'undefined') return;
-    if (wsRef.current) {
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
     try {
       const ws = new WebSocket('wss://io.dexscreener.com/dex/screener/pair/solana/' + tokenMint);
       wsRef.current = ws;
       ws.onopen = () => setWsConnected(true);
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data?.pair?.priceUsd) {
-            const newPrice = parseFloat(data.pair.priceUsd);
-            if (!isNaN(newPrice) && newPrice > 0) {
-              livePriceRef.current = newPrice;
-              if (wsDebounceRef.current) return;
-              wsDebounceRef.current = setTimeout(() => {
-                wsDebounceRef.current = null;
-                const price = livePriceRef.current;
-                if (price == null) return;
-                setLivePrice(price);
-                triggerVolHighlight();
-                setCandles(prev => {
-                  if (prev.length === 0) return prev;
-                  const last = prev[prev.length - 1];
-                  if (last.close === price) return prev;
-                  const updated = [...prev];
-                  updated[updated.length - 1] = {
-                    ...last,
-                    close: price,
-                    high: Math.max(last.high, price),
-                    low: Math.min(last.low, price),
-                  };
-                  return updated;
-                });
-              }, 800);
-            }
-          }
+          const msg = JSON.parse(event.data);
+          const np = msg?.pair?.priceUsd ? parseFloat(msg.pair.priceUsd) : null;
+          if (!np || isNaN(np) || np <= 0) return;
+          livePriceRef.current = np;
+          if (wsDebounceRef.current) return;
+          wsDebounceRef.current = setTimeout(() => {
+            wsDebounceRef.current = null;
+            const price = livePriceRef.current;
+            if (!price) return;
+            setLivePrice(price);
+            flashPriceLine();
+            // Update last candle close/high/low in-place — no new candle needed
+            setCandles(prev => {
+              if (!prev.length) return prev;
+              const last = prev[prev.length - 1];
+              if (last.close === price) return prev;
+              const updated = [...prev];
+              updated[updated.length - 1] = {
+                ...last,
+                close: price,
+                high:  Math.max(last.high, price),
+                low:   Math.min(last.low, price),
+              };
+              return updated;
+            });
+          }, 600);
         } catch {}
       };
       ws.onerror = () => setWsConnected(false);
@@ -248,19 +256,18 @@ export function TradingViewChart({
         wsRef.current = null;
         setTimeout(() => { if (tokenMint) connectWebSocket(); }, 5000);
       };
-    } catch {
-      setWsConnected(false);
-    }
-  }, [tokenMint, triggerVolHighlight]);
+    } catch { setWsConnected(false); }
+  }, [tokenMint, flashPriceLine]);
 
   useEffect(() => {
     setLivePrice(null);
+    setCrosshair(null);
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
+  // Silent refresh every 60s
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    // Silent refresh every 60s to keep chart data fresh
     timerRef.current = setInterval(() => loadData(timeframe, true), 60000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [tokenMint, timeframe]);
@@ -268,21 +275,86 @@ export function TradingViewChart({
   useEffect(() => {
     connectWebSocket();
     return () => {
-      if (wsDebounceRef.current) { clearTimeout(wsDebounceRef.current); wsDebounceRef.current = null; }
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      setWsConnected(false);
+      if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
+      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
     };
   }, [tokenMint]);
 
-  const sym = resolvedInfo?.symbol ?? 'TOKEN';
-  const contractAddr = resolvedInfo?.address ?? tokenMint ?? '';
-  const shortContractAddr = contractAddr
-    ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}`
-    : '';
+  // ── chart geometry ────────────────────────────────────────────────────────
+  const plotW = chartWidth - PAD.left - PAD.right;
+  const plotH = CHART_H - PAD.top - PAD.bottom;
+  const n     = candles.length;
+
+  const highs  = n > 0 ? candles.map(c => c.high)   : [0];
+  const lows   = n > 0 ? candles.map(c => c.low)    : [0];
+  const maxP   = Math.max(...highs);
+  const minP   = Math.min(...lows);
+  const priceRange = (maxP - minP) || maxP * 0.01 || 1;
+  const maxVol = n > 0 ? Math.max(...candles.map(c => c.volume)) || 1 : 1;
+  const barW   = Math.max(1.5, (plotW / Math.max(n, 1)) * 0.55);
+  const candleW = Math.max(2,  (plotW / Math.max(n, 1)) * 0.6);
+
+  function xOf(i: number) { return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1)); }
+  function yOf(price: number) { return PAD.top + plotH - ((price - minP) / priceRange) * plotH; }
+  function volBarH(vol: number) { return Math.max(2, (vol / maxVol) * (VOL_H - 6)); }
+  function bondingX(i: number) {
+    if (n <= 1) return PAD.left + plotW / 2;
+    return PAD.left + Math.sqrt(i / (n - 1)) * plotW;
+  }
+  const xFn = mode === 'bonding' ? bondingX : xOf;
+
+  const totalH = CHART_H + VOL_H + TIME_H;
+
+  // ── crosshair pan responder ───────────────────────────────────────────────
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => handleTouchMove(e),
+      onPanResponderMove: (e) => handleTouchMove(e),
+      onPanResponderRelease: () => {
+        // Keep crosshair until next touch
+      },
+    })
+  ).current;
+
+  const handleTouchMove = (e: GestureResponderEvent) => {
+    svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
+      svgOffsetRef.current = { x: px, y: py };
+    });
+    const touchX = e.nativeEvent.pageX - svgOffsetRef.current.x;
+    const touchY = e.nativeEvent.pageY - svgOffsetRef.current.y;
+    const cands = candlesRef.current;
+    if (!cands.length) return;
+    const nn = cands.length;
+    const step = plotW / nn;
+    const rawIdx = Math.round((touchX - PAD.left) / step - 0.5);
+    const idx = Math.max(0, Math.min(nn - 1, rawIdx));
+    const c = cands[idx];
+    const cx = xOf(idx);
+    const cy = yOf(c.close);
+    const firstClose = cands[0].close;
+    const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
+    setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
+  };
+
+  const dismissCrosshair = () => setCrosshair(null);
+
+  // ── derived display values ────────────────────────────────────────────────
+  const sym              = resolvedInfo?.symbol ?? 'TOKEN';
+  const contractAddr     = resolvedInfo?.address ?? tokenMint ?? '';
+  const shortContractAddr = contractAddr ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}` : '';
+  const displayPriceVal  = livePrice ?? (currentPrice != null && currentPrice > 0 ? currentPrice
+    : (candles.length > 0 ? candles[candles.length - 1].close : 0));
+  const mcapVal    = resolvedInfo?.marketCap ?? null;
+  const change24h  = resolvedInfo?.priceChange24h ?? 0;
+  const isUp       = change24h >= 0;
+  const changeColor = isUp ? '#10b981' : '#ef4444';
+  const headerValue = valueMode === 'mcap' && mcapVal != null && mcapVal > 0
+    ? fmtMcap(mcapVal)
+    : `$${fmtPrice(displayPriceVal)}`;
+  const currentModeConfig = CHART_MODES.find(m => m.key === mode) ?? CHART_MODES[0];
+  const ModeIcon = currentModeConfig.icon;
 
   const handleCopyAddr = async () => {
     if (!contractAddr) return;
@@ -291,21 +363,10 @@ export function TradingViewChart({
     setTimeout(() => setCopiedAddr(false), 2000);
   };
 
-  const displayPriceVal = livePrice ?? (currentPrice != null && currentPrice > 0 ? currentPrice : (candles.length > 0 ? candles[candles.length - 1].close : 0));
-  const mcapVal = resolvedInfo?.marketCap ?? null;
-  const change24h = resolvedInfo?.priceChange24h ?? 0;
-  const isUp = change24h >= 0;
-  const changeColor = isUp ? '#10b981' : '#ef4444';
-
-  const headerValue = valueMode === 'mcap' && mcapVal != null && mcapVal > 0
-    ? fmtMcap(mcapVal)
-    : `$${fmtPrice(displayPriceVal)}`;
-
-  const currentModeConfig = CHART_MODES.find(m => m.key === mode) ?? CHART_MODES[0];
-
+  // ── chart header ──────────────────────────────────────────────────────────
   const header = (
     <View style={styles.chartHeader}>
-      {/* Row 1: Token logo + name + contract addr + value */}
+      {/* Row 1: logo + name + value */}
       <View style={styles.headerRow1}>
         <View style={styles.tokenInfoGroup}>
           {resolvedInfo?.image ? (
@@ -328,8 +389,7 @@ export function TradingViewChart({
                 <Text style={styles.addrText}>{shortContractAddr}</Text>
                 {copiedAddr
                   ? <CheckCircle2 size={10} color={colors.success} strokeWidth={2} />
-                  : <Copy size={10} color={colors.textMuted} strokeWidth={2} />
-                }
+                  : <Copy size={10} color={colors.textMuted} strokeWidth={2} />}
               </TouchableOpacity>
             ) : null}
           </View>
@@ -340,8 +400,7 @@ export function TradingViewChart({
           <View style={styles.headerChangeRow}>
             {isUp
               ? <TrendingUp size={11} color={changeColor} strokeWidth={2.5} />
-              : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />
-            }
+              : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
             <Text style={[styles.headerChangePct, { color: changeColor }]}>
               {isUp ? '+' : ''}{change24h.toFixed(2)}%
             </Text>
@@ -349,49 +408,56 @@ export function TradingViewChart({
         </View>
       </View>
 
-      {/* Row 2: MCAP/PRICE toggle + Chart type icons */}
+      {/* Row 2: MCAP/PRICE toggle + chart type button */}
       <View style={styles.headerRow2}>
         <View style={styles.valueModeToggle}>
           <TouchableOpacity
             style={[styles.vmBtn, valueMode === 'mcap' && styles.vmBtnActive]}
-            onPress={() => setValueMode('mcap')}
-            activeOpacity={0.8}
-          >
+            onPress={() => setValueMode('mcap')} activeOpacity={0.8}>
             <Text style={[styles.vmText, valueMode === 'mcap' && styles.vmTextActive]}>MCAP</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.vmBtn, valueMode === 'price' && styles.vmBtnActive]}
-            onPress={() => setValueMode('price')}
-            activeOpacity={0.8}
-          >
+            onPress={() => setValueMode('price')} activeOpacity={0.8}>
             <Text style={[styles.vmText, valueMode === 'price' && styles.vmTextActive]}>PRICE</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Chart type icons row */}
-        <View style={styles.chartModeIcons}>
+        {/* Single chart type button */}
+        <TouchableOpacity
+          style={styles.chartTypeBtn}
+          onPress={() => setShowModePanel(p => !p)}
+          activeOpacity={0.8}
+        >
+          <ModeIcon size={14} color="#fff" strokeWidth={2} />
+          {showModePanel
+            ? <ChevronUp size={11} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+            : <ChevronDown size={11} color="rgba(255,255,255,0.5)" strokeWidth={2} />}
+        </TouchableOpacity>
+      </View>
+
+      {/* Chart type panel (shown when button clicked) */}
+      {showModePanel && (
+        <View style={styles.modePanelRow}>
           {CHART_MODES.map(m => {
             const IconComp = m.icon;
-            const active = mode === m.key;
+            const active   = mode === m.key;
             return (
               <TouchableOpacity
                 key={m.key}
-                style={[styles.modeIconBtn, active && styles.modeIconBtnActive]}
-                onPress={() => setMode(m.key)}
+                style={[styles.modePanelItem, active && styles.modePanelItemActive]}
+                onPress={() => { setMode(m.key); setShowModePanel(false); }}
                 activeOpacity={0.75}
               >
-                <IconComp
-                  size={15}
-                  color={active ? '#fff' : 'rgba(255,255,255,0.3)'}
-                  strokeWidth={active ? 2.5 : 2}
-                />
+                <IconComp size={14} color={active ? '#fff' : 'rgba(255,255,255,0.45)'} strokeWidth={active ? 2.5 : 2} />
+                <Text style={[styles.modePanelLabel, active && styles.modePanelLabelActive]}>{m.label}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
-      </View>
+      )}
 
-      {/* Row 3: Timeframes + ALL */}
+      {/* Row 3: Timeframes */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tfRowContent}>
         {ALL_TIMEFRAMES.map(tf => (
           <TouchableOpacity
@@ -413,13 +479,12 @@ export function TradingViewChart({
         {header}
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={styles.loadingSubText}>Loading chart data...</Text>
+          <Text style={styles.loadingSubText}>Loading chart…</Text>
         </View>
       </View>
     );
   }
 
-  // If no candle data but we have a price, show a flat price line
   if (!hasData || candles.length < 2) {
     return (
       <View style={styles.container}>
@@ -428,7 +493,7 @@ export function TradingViewChart({
           {displayPriceVal > 0 ? (
             <>
               <Text style={styles.priceFallback}>${fmtPrice(displayPriceVal)}</Text>
-              <Text style={styles.unavailableText}>Live price · Chart data loading...</Text>
+              <Text style={styles.unavailableText}>Chart data loading…</Text>
             </>
           ) : (
             <Text style={styles.unavailableText}>Chart data unavailable</Text>
@@ -438,245 +503,333 @@ export function TradingViewChart({
     );
   }
 
-  // Chart geometry
-  const plotW = chartWidth - PAD.left - PAD.right;
-  const plotH = CHART_H - PAD.top - PAD.bottom;
-  const n = candles.length;
-
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
-  const maxP = Math.max(...highs);
-  const minP = Math.min(...lows);
-  const priceRange = maxP - minP || maxP * 0.01 || 1;
-  const maxVol = Math.max(...candles.map(c => c.volume)) || 1;
-  const barW = Math.max(1.5, (plotW / n) * 0.6);
-  const candleW = Math.max(2, (plotW / n) * 0.65);
-
-  function xOf(i: number) { return PAD.left + (i + 0.5) * (plotW / n); }
-  function xBonding(i: number) { return bondingX(i, n, plotW, PAD.left); }
-  function yOf(price: number) { return PAD.top + plotH - ((price - minP) / priceRange) * plotH; }
-  function volBarH(vol: number) { return Math.max(2, (vol / maxVol) * (VOL_H - 8)); }
-
-  const xFn = mode === 'bonding' ? xBonding : xOf;
-  const linePts = candles.map((c, i) => `${i === 0 ? 'M' : 'L'}${xFn(i).toFixed(1)},${yOf(c.close).toFixed(1)}`).join(' ');
+  // ── build paths ───────────────────────────────────────────────────────────
+  const linePts = candles
+    .map((c, i) => `${i === 0 ? 'M' : 'L'}${xFn(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
+    .join(' ');
   const bottomY = (PAD.top + plotH).toFixed(1);
-  const areaPath = `${linePts} L${xFn(n - 1).toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
+  const areaPath = `${linePts} L${xFn(n-1).toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
 
   const bondingPath = candles.map((c, i) => {
-    const x = xBonding(i).toFixed(1);
-    const y = yOf(c.close).toFixed(1);
+    const x  = bondingX(i).toFixed(1);
+    const y  = yOf(c.close).toFixed(1);
     if (i === 0) return `M${x},${y}`;
-    const px = xBonding(i - 1);
+    const px = bondingX(i - 1);
     const py = yOf(candles[i - 1].close);
     const cx = ((px + parseFloat(x)) / 2).toFixed(1);
     return `C${cx},${py.toFixed(1)} ${cx},${y} ${x},${y}`;
   }).join(' ');
-  const bondingArea = `${bondingPath} L${xBonding(n - 1).toFixed(1)},${bottomY} L${xBonding(0).toFixed(1)},${bottomY} Z`;
+  const bondingArea = `${bondingPath} L${bondingX(n-1).toFixed(1)},${bottomY} L${bondingX(0).toFixed(1)},${bottomY} Z`;
 
+  // Grid
   const gridLevels = 5;
   const priceGridLines = Array.from({ length: gridLevels }, (_, i) => {
-    const frac = i / (gridLevels - 1);
+    const frac  = i / (gridLevels - 1);
     const price = minP + priceRange * frac;
     return { price, y: yOf(price) };
   });
 
-  const timeLabelCount = Math.min(5, n);
-  const timeLabelIndices = Array.from({ length: timeLabelCount }, (_, i) =>
-    Math.round(i * (n - 1) / (timeLabelCount - 1))
-  );
+  // Time labels — evenly distributed, avoid edges crowding
+  const timeLabelCount = Math.min(6, n);
+  const timeLabelIndices = timeLabelCount <= 1
+    ? [0]
+    : Array.from({ length: timeLabelCount }, (_, i) =>
+        Math.round(i * (n - 1) / (timeLabelCount - 1))
+      );
 
-  const clampedPrice = displayPriceVal > maxP ? maxP : displayPriceVal < minP ? minP : displayPriceVal;
-  const currentY = Math.max(PAD.top + 10, Math.min(PAD.top + plotH - 10, yOf(clampedPrice)));
-  const totalH = CHART_H + VOL_H;
+  // Live price line
+  const clampedLive = displayPriceVal > maxP ? maxP : displayPriceVal < minP ? minP : displayPriceVal;
+  const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
 
-  // Mountain chart: stepped area
-  const mountainPath = candles.map((c, i) => {
-    const x = xOf(i).toFixed(1);
-    const y = yOf(c.close).toFixed(1);
-    if (i === 0) return `M${x},${y}`;
-    const prevX = xOf(i - 1).toFixed(1);
-    return `L${x},${prevX !== x ? yOf(candles[i - 1].close).toFixed(1) : y} L${x},${y}`;
-  }).join(' ');
-  const mountainArea = `${mountainPath} L${xOf(n - 1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`;
-
+  // Last candle point for animated dot
   const lastCandle = candles[n - 1];
-  const lastX = xOf(n - 1);
-  const lastY = yOf(lastCandle.close);
+  const lastX      = xOf(n - 1);
+  const lastY      = yOf(lastCandle.close);
+
+  // Crosshair display values
+  const chPrice = crosshair ? crosshair.price : null;
+  const chPct   = crosshair ? crosshair.pct   : null;
+
+  // Vol bar positions — placed between chart and time labels
+  const volBaseY = CHART_H + VOL_H - 2;
 
   return (
     <View style={styles.container}>
       {header}
 
-      <View style={styles.svgWrap}>
+      {/* Crosshair info bar */}
+      {crosshair && (
+        <View style={styles.crosshairBar}>
+          <Text style={styles.crosshairDate}>{fmtDateTime(crosshair.ts)}</Text>
+          <Text style={styles.crosshairPrice}>${fmtPrice(crosshair.price)}</Text>
+          <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#10b981' : '#ef4444' }]}>
+            {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%
+          </Text>
+          <TouchableOpacity onPress={dismissCrosshair} style={styles.crosshairClose}>
+            <Text style={styles.crosshairCloseText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View
+        ref={svgContainerRef}
+        style={styles.svgWrap}
+        {...panResponder.panHandlers}
+        onLayout={() => {
+          svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
+            svgOffsetRef.current = { x: px, y: py };
+          });
+        }}
+      >
         <Svg width={chartWidth} height={totalH}>
           <Defs>
             <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.45" />
-              <Stop offset="55%" stopColor="#8B5CF6" stopOpacity="0.12" />
+              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.5" />
+              <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.1" />
               <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
             </SvgLinearGradient>
             <SvgLinearGradient id="mountainGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%" stopColor="#10b981" stopOpacity="0.5" />
-              <Stop offset="60%" stopColor="#10b981" stopOpacity="0.1" />
+              <Stop offset="0%"   stopColor="#10b981" stopOpacity="0.55" />
+              <Stop offset="60%"  stopColor="#10b981" stopOpacity="0.08" />
               <Stop offset="100%" stopColor="#10b981" stopOpacity="0" />
             </SvgLinearGradient>
             <SvgLinearGradient id="bondingGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%" stopColor="#A78BFA" stopOpacity="0.45" />
-              <Stop offset="50%" stopColor="#7C3AED" stopOpacity="0.2" />
+              <Stop offset="0%"   stopColor="#A78BFA" stopOpacity="0.45" />
+              <Stop offset="50%"  stopColor="#7C3AED" stopOpacity="0.2" />
               <Stop offset="100%" stopColor="#4C1D95" stopOpacity="0" />
+            </SvgLinearGradient>
+            <SvgLinearGradient id="volGradGreen" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%"   stopColor="#10b981" stopOpacity="0.7" />
+              <Stop offset="100%" stopColor="#10b981" stopOpacity="0.2" />
+            </SvgLinearGradient>
+            <SvgLinearGradient id="volGradRed" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%"   stopColor="#ef4444" stopOpacity="0.7" />
+              <Stop offset="100%" stopColor="#ef4444" stopOpacity="0.2" />
             </SvgLinearGradient>
           </Defs>
 
-          {/* Grid lines */}
+          {/* ── Chart area background ──────────────────────────────────────── */}
+          <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH}
+            fill="rgba(255,255,255,0.01)" />
+
+          {/* ── Horizontal grid lines + price labels ──────────────────────── */}
           {priceGridLines.map(({ price, y }, i) => (
             <G key={`g${i}`}>
-              <Line x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
-                stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
-              <SvgText x={chartWidth - PAD.right + 4} y={y + 4} fontSize={8.5}
-                fill="rgba(255,255,255,0.28)" textAnchor="start">
+              <Line
+                x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
+                stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
+              <SvgText
+                x={chartWidth - PAD.right + 4} y={y + 3.5}
+                fontSize={8.5} fill="rgba(255,255,255,0.3)" textAnchor="start">
                 {fmtPrice(price)}
               </SvgText>
             </G>
           ))}
 
-          {/* AREA */}
+          {/* ── Right-edge border ─────────────────────────────────────────── */}
+          <Line x1={chartWidth - PAD.right} y1={PAD.top} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
+            stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+
+          {/* ── Bottom border of chart area ───────────────────────────────── */}
+          <Line x1={PAD.left} y1={PAD.top + plotH} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
+            stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+
+          {/* ── AREA ──────────────────────────────────────────────────────── */}
           {mode === 'area' && (
             <>
               <Path d={areaPath} fill="url(#areaGrad)" />
-              <Path d={linePts} stroke="rgba(139,92,246,0.3)" strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
               <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </>
           )}
 
-          {/* LINE */}
+          {/* ── LINE ──────────────────────────────────────────────────────── */}
           {mode === 'line' && (
             <>
-              <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
               <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={8} fill="#8B5CF6" opacity={0.2} />
-              <Circle cx={lastX} cy={lastY} r={4} fill="#A78BFA" opacity={0.95} />
+              <Circle cx={lastX} cy={lastY} r={5} fill="#8B5CF6" opacity={0.18} />
+              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
             </>
           )}
 
-          {/* MOUNTAIN */}
+          {/* ── MOUNTAIN ──────────────────────────────────────────────────── */}
           {mode === 'mountain' && (
             <>
-              <Path d={mountainArea} fill="url(#mountainGrad)" />
-              <Path d={linePts} stroke="rgba(16,185,129,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              {/* stepped fill */}
+              <Path
+                d={candles.map((c, i) => {
+                  const x  = xOf(i).toFixed(1);
+                  const y  = yOf(c.close).toFixed(1);
+                  if (i === 0) return `M${x},${y}`;
+                  const prevX = xOf(i - 1).toFixed(1);
+                  return `L${x},${yOf(candles[i - 1].close).toFixed(1)} L${x},${y}`;
+                }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
+                fill="url(#mountainGrad)" />
               <Path d={linePts} stroke="#10b981" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={4} fill="#10b981" opacity={0.9} />
+              <Circle cx={lastX} cy={lastY} r={3} fill="#10b981" />
             </>
           )}
 
-          {/* BONDING */}
+          {/* ── BONDING ───────────────────────────────────────────────────── */}
           {mode === 'bonding' && (
             <>
               <Path d={bondingArea} fill="url(#bondingGrad)" />
-              <Path d={bondingPath} stroke="rgba(167,139,250,0.2)" strokeWidth={8} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d={bondingPath} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
               <Path d={bondingPath} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              {[0, Math.floor(n * 0.33), Math.floor(n * 0.66), n - 1].map((i) => {
+              {[0, Math.floor(n * 0.33), Math.floor(n * 0.66), n - 1].map(i => {
                 if (i >= n) return null;
+                const isLast = i === n - 1;
                 return (
-                  <Circle key={`dot${i}`} cx={xBonding(i)} cy={yOf(candles[i].close)}
-                    r={i === n - 1 ? 5 : 3}
-                    fill={i === n - 1 ? '#A78BFA' : 'rgba(167,139,250,0.55)'}
-                    stroke={i === n - 1 ? '#fff' : 'none'} strokeWidth={i === n - 1 ? 1 : 0} />
+                  <Circle key={`bd${i}`}
+                    cx={bondingX(i)} cy={yOf(candles[i].close)}
+                    r={isLast ? 5 : 3}
+                    fill={isLast ? '#A78BFA' : 'rgba(167,139,250,0.5)'}
+                    stroke={isLast ? '#fff' : 'none'} strokeWidth={isLast ? 1 : 0} />
                 );
               })}
             </>
           )}
 
-          {/* BAR chart */}
+          {/* ── BAR ───────────────────────────────────────────────────────── */}
           {mode === 'bar' && candles.map((c, i) => {
-            const isUpBar = c.close >= c.open;
-            const col = isUpBar ? '#10b981' : '#ef4444';
-            const openY = yOf(c.open);
-            const closeY = yOf(c.close);
-            const cx = xOf(i);
-            const bw = Math.max(2.5, (plotW / n) * 0.55);
+            const up   = c.close >= c.open;
+            const col  = up ? '#10b981' : '#ef4444';
+            const cx   = xOf(i);
+            const bw   = Math.max(2, (plotW / n) * 0.5);
             return (
               <G key={`bar${i}`}>
                 <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={1} opacity={0.7} />
-                <Line x1={cx - bw / 2} y1={openY} x2={cx} y2={openY} stroke={col} strokeWidth={1.5} opacity={0.9} />
-                <Line x1={cx} y1={closeY} x2={cx + bw / 2} y2={closeY} stroke={col} strokeWidth={1.5} opacity={0.9} />
+                <Line x1={cx - bw / 2} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={1.5} />
+                <Line x1={cx}          y1={yOf(c.close)} x2={cx + bw / 2} y2={yOf(c.close)} stroke={col} strokeWidth={1.5} />
               </G>
             );
           })}
 
-          {/* CANDLESTICK */}
+          {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
           {mode === 'candlestick' && candles.map((c, i) => {
-            const isUpCandle = c.close >= c.open;
-            const col = isUpCandle ? '#10b981' : '#ef4444';
-            const bodyTop = yOf(Math.max(c.open, c.close));
-            const bodyBot = yOf(Math.min(c.open, c.close));
-            const bodyH = Math.max(1.5, bodyBot - bodyTop);
-            const cx = xOf(i);
-            const isLast = i === n - 1;
+            const up       = c.close >= c.open;
+            const col      = up ? '#10b981' : '#ef4444';
+            const bodyTop  = yOf(Math.max(c.open, c.close));
+            const bodyBot  = yOf(Math.min(c.open, c.close));
+            const bodyH    = Math.max(1.5, bodyBot - bodyTop);
+            const cx       = xOf(i);
             return (
-              <G key={`c${i}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={1} opacity={isLast ? 1 : 0.8} />
+              <G key={`cs${i}`}>
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={1} opacity={0.8} />
                 <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
-                  fill={col} opacity={isLast ? 1 : 0.85} rx={1} />
+                  fill={col} opacity={0.9} rx={1} />
               </G>
             );
           })}
 
-          {/* Live price dashed line */}
-          <Line x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
-            stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={1} strokeDasharray="5,3" opacity={0.55} />
-          <Rect x={chartWidth - PAD.right + 1} y={currentY - 9} width={PAD.right - 2} height={18}
+          {/* ── Live price dashed horizontal line ─────────────────────────── */}
+          <Line
+            x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
+            stroke={isUp ? '#10b981' : '#ef4444'}
+            strokeWidth={1} strokeDasharray="4,3" opacity={0.6} />
+          {/* Price pill on right edge */}
+          <Rect
+            x={chartWidth - PAD.right + 1} y={currentY - 9}
+            width={PAD.right - 2} height={18}
             fill={isUp ? '#059669' : '#dc2626'} rx={3} />
-          <SvgText x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4}
-            fontSize={8} fill="#fff" textAnchor="middle" fontWeight="700">
+          <SvgText
+            x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
+            fontSize={7.5} fill="#fff" textAnchor="middle" fontWeight="700">
             {fmtPrice(displayPriceVal)}
           </SvgText>
 
-          {/* Live endpoint dot — animated via parent Animated.View overlay */}
-          {(mode === 'area' || mode === 'line' || mode === 'mountain') && (
-            <Circle cx={lastX} cy={lastY} r={3} fill={mode === 'mountain' ? '#10b981' : '#A78BFA'} opacity={1} />
+          {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
+          {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+            <Circle cx={lastX} cy={lastY} r={3}
+              fill={mode === 'mountain' ? '#10b981' : '#A78BFA'} opacity={1} />
           )}
 
-          {/* Volume bars */}
+          {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
           {candles.map((c, i) => {
-            const h = volBarH(c.volume);
-            const vx = xOf(i);
-            const col = c.close >= c.open ? '#10b981' : '#ef4444';
+            const h     = volBarH(c.volume);
+            const vx    = xOf(i);
+            const isUp  = c.close >= c.open;
             const isLast = i === n - 1;
             return (
               <Rect key={`v${i}`}
                 x={vx - barW / 2}
-                y={CHART_H + VOL_H - h - 2}
-                width={barW}
+                y={CHART_H + (VOL_H - h - 2)}
+                width={Math.max(barW, 1.5)}
                 height={h}
-                fill={col}
-                opacity={isLast ? 0.7 : 0.35}
-                rx={1}
-              />
+                fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
+                opacity={isLast ? 0.9 : 0.45}
+                rx={1} />
             );
           })}
 
-          {/* X-axis time labels */}
+          {/* ── Volume area separator line ────────────────────────────────── */}
+          <Line
+            x1={PAD.left} y1={CHART_H}
+            x2={chartWidth - PAD.right} y2={CHART_H}
+            stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
+
+          {/* ── Time labels — below volume bars ───────────────────────────── */}
           {timeLabelIndices.map(i => {
             if (i >= n) return null;
+            const labelX = xOf(i);
+            // clamp to avoid clipping at edges
+            const clampedX = Math.max(PAD.left + 18, Math.min(chartWidth - PAD.right - 18, labelX));
             return (
-              <SvgText key={`t${i}`} x={xOf(i)} y={totalH - 1} fontSize={8.5}
-                fill="rgba(255,255,255,0.3)" textAnchor="middle">
+              <SvgText
+                key={`tl${i}`}
+                x={clampedX}
+                y={CHART_H + VOL_H + TIME_H - 3}
+                fontSize={9}
+                fill="rgba(255,255,255,0.35)"
+                textAnchor="middle">
                 {fmtTime(candles[i].timestamp, timeframe)}
               </SvgText>
             );
           })}
+
+          {/* ── Crosshair lines ───────────────────────────────────────────── */}
+          {crosshair && (
+            <G>
+              {/* Vertical line */}
+              <Line
+                x1={crosshair.x} y1={PAD.top}
+                x2={crosshair.x} y2={CHART_H + VOL_H}
+                stroke="rgba(255,255,255,0.3)" strokeWidth={1} strokeDasharray="3,3" />
+              {/* Horizontal line */}
+              <Line
+                x1={PAD.left} y1={crosshair.y}
+                x2={chartWidth - PAD.right} y2={crosshair.y}
+                stroke="rgba(255,255,255,0.25)" strokeWidth={1} strokeDasharray="3,3" />
+              {/* Crosshair dot */}
+              <Circle cx={crosshair.x} cy={crosshair.y} r={5}
+                fill="#8B5CF6" stroke="#fff" strokeWidth={1.5} opacity={0.95} />
+              {/* Price label on right axis */}
+              <Rect
+                x={chartWidth - PAD.right + 1} y={crosshair.y - 9}
+                width={PAD.right - 2} height={18}
+                fill="#8B5CF6" rx={3} />
+              <SvgText
+                x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={crosshair.y + 4.5}
+                fontSize={7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+                {fmtPrice(crosshair.price)}
+              </SvgText>
+            </G>
+          )}
         </Svg>
 
-        {/* Animated live pulse overlay at last candle point */}
-        {wsConnected && (mode === 'area' || mode === 'line' || mode === 'mountain') && (
+        {/* Animated live pulse ring overlay */}
+        {wsConnected && !crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
           <Animated.View
             style={[
               styles.livePulse,
               {
-                left: lastX - 8,
-                top: lastY - 8,
+                left: lastX - 10,
+                top:  lastY - 10,
                 transform: [{ scale: dotPulse }],
-                backgroundColor: mode === 'mountain' ? 'rgba(16,185,129,0.25)' : 'rgba(167,139,250,0.25)',
+                backgroundColor: mode === 'mountain'
+                  ? 'rgba(16,185,129,0.22)'
+                  : 'rgba(167,139,250,0.22)',
               },
             ]}
             pointerEvents="none"
@@ -696,7 +849,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(139,92,246,0.15)',
   },
-
   chartHeader: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
@@ -717,190 +869,96 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerLogo: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#1A1A28',
-    marginTop: 2,
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: '#1A1A28', marginTop: 2,
   },
   headerLogoFallback: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 38, height: 38, borderRadius: 19,
     backgroundColor: '#1A1A28',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.2)',
-    marginTop: 2,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)', marginTop: 2,
   },
-  headerLogoText: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: colors.primary,
-  },
-  headerTextCol: {
-    gap: 2,
-    flex: 1,
-  },
-  headerNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  headerName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    letterSpacing: -0.2,
-  },
-  headerSymbol: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textMuted,
-    letterSpacing: 0.3,
-  },
-  addrRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 1,
-  },
-  addrText: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontFamily: 'SpaceMono-Regular',
-  },
+  headerLogoText: { fontSize: 12, fontWeight: '900', color: colors.primary },
+  headerTextCol: { gap: 2, flex: 1 },
+  headerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerName: { fontSize: 15, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.2 },
+  headerSymbol: { fontSize: 11, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.3 },
+  addrRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  addrText: { fontSize: 10, color: colors.textMuted, fontFamily: 'SpaceMono-Regular' },
   liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#10b981',
+    width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#10b981',
   },
-  headerValueGroup: {
-    alignItems: 'flex-end',
-    gap: 3,
-  },
-  headerBigValue: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: colors.textPrimary,
-    letterSpacing: -0.5,
-  },
-  headerChangeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  headerChangePct: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  headerValueGroup: { alignItems: 'flex-end', gap: 3 },
+  headerBigValue: { fontSize: 18, fontWeight: '900', color: colors.textPrimary, letterSpacing: -0.5 },
+  headerChangeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  headerChangePct: { fontSize: 12, fontWeight: '700' },
   headerRow2: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   valueModeToggle: {
-    flexDirection: 'row',
+    flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: borderRadius.sm, padding: 2, gap: 2,
+  },
+  vmBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6 },
+  vmBtnActive: { backgroundColor: colors.primary },
+  vmText: { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.35)', letterSpacing: 0.5 },
+  vmTextActive: { color: '#fff' },
+  // Chart type button (single)
+  chartTypeBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
+  },
+  // Mode panel
+  modePanelRow: {
+    flexDirection: 'row', gap: 4, flexWrap: 'wrap',
     backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: borderRadius.sm,
-    padding: 2,
-    gap: 2,
+    borderRadius: 10, padding: 6,
   },
-  vmBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 6,
+  modePanelItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: 7, flex: 1, justifyContent: 'center',
+    minWidth: 70,
   },
-  vmBtnActive: {
-    backgroundColor: colors.primary,
-  },
-  vmText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.35)',
-    letterSpacing: 0.5,
-  },
-  vmTextActive: {
-    color: '#fff',
-  },
-  chartModeIcons: {
-    flexDirection: 'row',
-    gap: 3,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 8,
-    padding: 3,
-  },
-  modeIconBtn: {
-    width: 30,
-    height: 28,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modeIconBtnActive: {
-    backgroundColor: colors.primary,
-  },
-  tfRowContent: {
-    gap: 3,
-    paddingVertical: 2,
-  },
+  modePanelItemActive: { backgroundColor: colors.primary },
+  modePanelLabel: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
+  modePanelLabelActive: { color: '#fff' },
+  // Timeframes
+  tfRowContent: { gap: 3, paddingVertical: 2 },
   tfBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    alignItems: 'center',
-    borderRadius: borderRadius.sm,
+    paddingHorizontal: 11, paddingVertical: 7,
+    alignItems: 'center', borderRadius: borderRadius.sm,
     backgroundColor: 'rgba(255,255,255,0.03)',
   },
-  tfBtnActive: {
-    backgroundColor: colors.primary,
+  tfBtnActive: { backgroundColor: colors.primary },
+  tfText:       { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.35)' },
+  tfTextActive: { color: '#fff' },
+  // Crosshair info bar
+  crosshairBar: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.lg, paddingVertical: 7,
+    backgroundColor: 'rgba(139,92,246,0.1)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.12)',
+    gap: spacing.md,
   },
-  tfText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.35)',
-  },
-  tfTextActive: {
-    color: '#fff',
-  },
-  svgWrap: {
-    paddingBottom: 2,
-    paddingTop: spacing.sm,
-    position: 'relative',
-  },
-  loadingWrap: {
-    height: 220,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  loadingSubText: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontWeight: '500',
-  },
-  unavailableWrap: {
-    height: 160,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  unavailableText: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontWeight: '500',
-  },
-  priceFallback: {
-    fontSize: fontSize.xxl ?? 24,
-    fontWeight: '900',
-    color: colors.primary,
-  },
+  crosshairDate:  { fontSize: 10, color: colors.textMuted, fontWeight: '600', flex: 1 },
+  crosshairPrice: { fontSize: 11, color: colors.textPrimary, fontWeight: '800' },
+  crosshairPct:   { fontSize: 11, fontWeight: '700', minWidth: 52, textAlign: 'right' },
+  crosshairClose: { padding: 4 },
+  crosshairCloseText: { fontSize: 11, color: colors.textMuted },
+  // Chart SVG wrapper
+  svgWrap: { paddingTop: spacing.sm, paddingBottom: 2, position: 'relative' },
+  // Loading / unavailable
+  loadingWrap:     { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
+  loadingSubText:  { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
+  unavailableWrap: { height: 160, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
+  unavailableText: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
+  priceFallback:   { fontSize: 24, fontWeight: '900', color: colors.primary },
+  // Live pulse
   livePulse: {
-    position: 'absolute',
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    position: 'absolute', width: 20, height: 20, borderRadius: 10,
     pointerEvents: 'none',
   },
 });
