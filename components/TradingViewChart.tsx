@@ -324,11 +324,15 @@ export function TradingViewChart({
     });
     const touchX = e.nativeEvent.pageX - svgOffsetRef.current.x;
     const touchY = e.nativeEvent.pageY - svgOffsetRef.current.y;
+    updateCrosshairAt(touchX, touchY);
+  };
+
+  const updateCrosshairAt = (localX: number, _localY: number) => {
     const cands = candlesRef.current;
     if (!cands.length) return;
     const nn = cands.length;
     const step = plotW / nn;
-    const rawIdx = Math.round((touchX - PAD.left) / step - 0.5);
+    const rawIdx = Math.round((localX - PAD.left) / step - 0.5);
     const idx = Math.max(0, Math.min(nn - 1, rawIdx));
     const c = cands[idx];
     const cx = xOf(idx);
@@ -337,6 +341,27 @@ export function TradingViewChart({
     const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
     setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
   };
+
+  // Web mouse event handlers for crosshair
+  const webMouseHandlers = Platform.OS === 'web' ? {
+    onMouseMove: (e: any) => {
+      const rect = e.currentTarget?.getBoundingClientRect?.();
+      if (!rect) return;
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
+      updateCrosshairAt(localX, localY);
+    },
+    onMouseDown: (e: any) => {
+      const rect = e.currentTarget?.getBoundingClientRect?.();
+      if (!rect) return;
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
+      updateCrosshairAt(localX, localY);
+    },
+    onMouseLeave: () => {
+      // keep crosshair visible after leaving
+    },
+  } : {};
 
   const dismissCrosshair = () => setCrosshair(null);
 
@@ -575,6 +600,7 @@ export function TradingViewChart({
         ref={svgContainerRef}
         style={styles.svgWrap}
         {...panResponder.panHandlers}
+        {...(webMouseHandlers as any)}
         onLayout={() => {
           svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
             svgOffsetRef.current = { x: px, y: py };

@@ -56,6 +56,7 @@ export default function CommunityScreen() {
   const [newCommentContent, setNewCommentContent] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [replyingToComment, setReplyingToComment] = useState<PostComment | null>(null);
+  const commentInputRef = useRef<any>(null);
 
   // Messages state
   const [msgSearch, setMsgSearch] = useState('');
@@ -484,7 +485,9 @@ export default function CommunityScreen() {
     }
   };
 
-  const selectedPost = posts.find(p => p.id === selectedPostId);
+  const selectedPost = selectedPostId
+    ? (posts.find(p => p.id === selectedPostId) || profilePosts.find(p => p.id === selectedPostId) || null)
+    : null;
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
 
   // Top tabs — icon-based
@@ -1218,7 +1221,7 @@ export default function CommunityScreen() {
                               <Heart size={13} color={item.liked_by_user ? '#ef4444' : colors.textMuted} fill={item.liked_by_user ? '#ef4444' : 'none'} strokeWidth={2} />
                               {(item.likes_count || 0) > 0 && <Text style={[styles.commentActionText, item.liked_by_user && { color: '#ef4444' }]}>{item.likes_count}</Text>}
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => setReplyingToComment(item)} activeOpacity={0.7}>
+                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => { setReplyingToComment(item); setTimeout(() => commentInputRef.current?.focus(), 100); }} activeOpacity={0.7}>
                               <MessageCircle size={13} color={colors.textMuted} strokeWidth={2} />
                               <Text style={styles.commentActionText}>Reply</Text>
                             </TouchableOpacity>
@@ -1305,6 +1308,7 @@ export default function CommunityScreen() {
 
             <View style={styles.commentInputRow}>
               <TextInput
+                ref={commentInputRef}
                 style={styles.commentInput}
                 placeholder={replyingToComment ? `Reply to ${replyingToComment.author?.username || 'user'}...` : 'Add a comment... (@mention)'}
                 placeholderTextColor={colors.textMuted}

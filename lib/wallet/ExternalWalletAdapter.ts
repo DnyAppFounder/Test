@@ -153,7 +153,8 @@ export class ExternalWalletAdapter {
       const timer = setTimeout(() => {
         reject(new Error('Connection timed out. Please try again and approve the request in your wallet.'));
       }, 30000);
-      provider.connect().then(res => { clearTimeout(timer); resolve(res); }).catch(err => { clearTimeout(timer); reject(err); });
+      // Pass { onlyIfTrusted: false } explicitly so Solflare always shows the approval popup
+      provider.connect({ onlyIfTrusted: false }).then(res => { clearTimeout(timer); resolve(res); }).catch(err => { clearTimeout(timer); reject(err); });
     });
 
     const result = await connectWithTimeout;
@@ -191,11 +192,26 @@ export class ExternalWalletAdapter {
 
   /**
    * Restore a previously connected wallet from storage.
+   * Also handles Solflare's auto-connect where publicKey is already set.
    */
   static async restoreSession(): Promise<ConnectedExternalWallet | null> {
     try {
       const stored = await AsyncStorage.getItem(CONNECTED_WALLET_KEY);
-      if (!stored) return null;
+      if (!stored) {
+        // Check if Solflare is already connected (auto-connect)
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const w = window as WindowWithWallets;
+          if (w.solflare?.isSolflare && w.solflare.publicKey) {
+            const address = w.solflare.publicKey.toBase58();
+            const balance = await this.getBalance(address);
+            const info = SUPPORTED_WALLETS.find(x => x.id === 'solflare')!;
+            const wallet: ConnectedExternalWallet = { id: 'solflare', name: info.name, address, publicKey: address, balance, icon: info.icon };
+            await AsyncStorage.setItem(CONNECTED_WALLET_KEY, JSON.stringify(wallet));
+            return wallet;
+          }
+        }
+        return null;
+      }
 
       const wallet: ConnectedExternalWallet = JSON.parse(stored);
 
@@ -205,6 +221,11 @@ export class ExternalWalletAdapter {
         if (!provider) {
           await AsyncStorage.removeItem(CONNECTED_WALLET_KEY);
           return null;
+        }
+        // Verify publicKey still matches (wallet may have changed accounts)
+        if (provider.publicKey && provider.publicKey.toBase58() !== wallet.address) {
+          wallet.address = provider.publicKey.toBase58();
+          wallet.publicKey = wallet.address;
         }
       }
 
