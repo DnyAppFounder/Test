@@ -22,14 +22,16 @@ import {
   X, Check, ChevronDown, ChevronRight, Globe,
   ChartBar as BarChart2,
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
-  Search, Film, Megaphone,
+  Search, Film, Megaphone, Zap, Wallet, Clock, CircleAlert,
 } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { VerificationService } from '@/services/verificationService';
-import { SocialService } from '@/services/socialService';
+import { SocialService, PROMOTE_TIERS } from '@/services/socialService';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
+import { SolanaPriceService } from '@/services/solana/priceService';
+import { TransactionManager } from '@/lib/wallet/TransactionManager';
 
 type WhoCanReply = 'everyone' | 'followers' | 'mentioned';
 type Visibility = 'public' | 'followers';
@@ -75,6 +77,44 @@ export default function CreatePostScreen() {
   const [tokenResults, setTokenResults] = useState<LiveToken[]>([]);
   const [tokenSearching, setTokenSearching] = useState(false);
   const [timeframe, setTimeframe] = useState('1D');
+
+  // Promote
+  const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [promoteStep, setPromoteStep] = useState<'select' | 'confirm' | 'processing' | 'done'>('select');
+  const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
+  const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
+  const DAWEN_TREASURY = 'DawEn7h3sMhW5RjNfUeDmPT5yVFiRgXwemRZy2f8DrUq';
+
+  useEffect(() => {
+    const svc = new SolanaPriceService();
+    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+  }, []);
+
+  const usdToSol = (usd: number) => solUsdPrice > 0 ? (usd / solUsdPrice) : 0;
+
+  const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey) ?? null;
+
+  const handleConfirmPromotion = async () => {
+    if (!selectedTierKey || !profile) return;
+    const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
+    if (!tier) return;
+    const solAmount = usdToSol(tier.usdPrice);
+    setPromoteStep('processing');
+    try {
+      const txManager = TransactionManager.getInstance();
+      const result = await txManager.sendTransaction({
+        blockchain: 'solana',
+        to: DAWEN_TREASURY,
+        amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
+        accountIndex: 0,
+      });
+      if (!result.success) throw new Error(result.error || 'Transaction failed');
+      setPromoteStep('done');
+    } catch (err: any) {
+      setPromoteStep('confirm');
+      Alert.alert('Payment Failed', err?.message || 'Could not complete SOL payment. Make sure your wallet is unlocked and has sufficient balance.');
+    }
+  };
 
   // Settings
   const [visibility, setVisibility] = useState<Visibility>('public');
@@ -310,7 +350,6 @@ export default function CreatePostScreen() {
                 <Image
                   source={{ uri: profile.avatar_url }}
                   style={styles.avatarImg}
-                  defaultSource={{ uri: 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg?auto=compress&cs=tinysrgb&w=100' }}
                 />
               ) : (
                 <User size={24} color={colors.textMuted} />
@@ -451,7 +490,7 @@ export default function CreatePostScreen() {
               <Text style={styles.qaLabel}>Media</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Promote', 'Post first, then promote from your profile or feed.')}>
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => { setPromoteStep('select'); setSelectedTierKey(null); setShowPromoteModal(true); }}>
               <View style={[styles.qaIconWrap, { backgroundColor: '#f59e0b22' }]}>
                 <Megaphone size={20} color="#f59e0b" strokeWidth={2} />
               </View>
@@ -663,6 +702,133 @@ export default function CreatePostScreen() {
             ))}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Promote modal */}
+      <Modal
+        visible={showPromoteModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowPromoteModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          {promoteStep === 'select' && (
+            <>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Promote Post</Text>
+                <TouchableOpacity onPress={() => setShowPromoteModal(false)}>
+                  <X size={22} color={colors.textPrimary} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.emptySearch, { marginTop: 0, marginBottom: 20, textAlign: 'left', paddingHorizontal: spacing.xl }]}>
+                Boost your post to reach more users. Payment in SOL.
+              </Text>
+              {PROMOTE_TIERS.map(tier => (
+                <TouchableOpacity
+                  key={tier.key}
+                  style={styles.promTierCard}
+                  onPress={() => { setSelectedTierKey(tier.key); setPromoteStep('confirm'); }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.promTierLeft}>
+                    <View style={styles.promTierIcon}>
+                      <Clock size={16} color={colors.primary} strokeWidth={2} />
+                    </View>
+                    <View>
+                      <Text style={styles.promTierLabel}>{tier.label}</Text>
+                      <Text style={styles.promTierSub}>{tier.hours}h visibility boost</Text>
+                    </View>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.promTierUsd}>${tier.usdPrice}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                      <Zap size={11} color={colors.textMuted} strokeWidth={2} />
+                      <Text style={styles.promTierSol}>
+                        {solUsdPrice > 0 ? `${usdToSol(tier.usdPrice).toFixed(4)} SOL` : '... SOL'}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
+
+          {promoteStep === 'confirm' && selectedTier && (
+            <>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Confirm Promotion</Text>
+                <TouchableOpacity onPress={() => setPromoteStep('select')}>
+                  <X size={22} color={colors.textPrimary} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.promConfirmCard}>
+                <View style={styles.promConfirmRow}>
+                  <Text style={styles.promConfirmLabel}>Duration</Text>
+                  <Text style={styles.promConfirmValue}>{selectedTier.label} ({selectedTier.hours}h)</Text>
+                </View>
+                <View style={styles.promConfirmDivider} />
+                <View style={styles.promConfirmRow}>
+                  <Text style={styles.promConfirmLabel}>Price</Text>
+                  <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                    <Text style={[styles.promConfirmValue, { color: '#F59E0B' }]}>${selectedTier.usdPrice}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                      <Zap size={11} color={colors.textMuted} strokeWidth={2} />
+                      <Text style={styles.promTierSol}>
+                        {solUsdPrice > 0 ? `${usdToSol(selectedTier.usdPrice).toFixed(4)} SOL` : '... SOL'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.promConfirmDivider} />
+                <View style={styles.promConfirmRow}>
+                  <Text style={styles.promConfirmLabel}>Payment</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <Wallet size={13} color={colors.primary} strokeWidth={2} />
+                    <Text style={[styles.promConfirmValue, { color: colors.primary }]}>Solana Wallet</Text>
+                  </View>
+                </View>
+              </View>
+              <View style={styles.promNotice}>
+                <CircleAlert size={14} color={colors.warning} strokeWidth={2} />
+                <Text style={styles.promNoticeText}>
+                  Real SOL transaction. Wallet must be unlocked with sufficient balance.
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.promConfirmBtn} onPress={handleConfirmPromotion} activeOpacity={0.85}>
+                <Zap size={16} color={colors.white} strokeWidth={2} />
+                <Text style={styles.promConfirmBtnText}>
+                  Pay {solUsdPrice > 0 ? `${usdToSol(selectedTier.usdPrice).toFixed(4)} SOL` : `$${selectedTier.usdPrice}`} & Promote
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ alignItems: 'center', marginTop: 12 }} onPress={() => setPromoteStep('select')} activeOpacity={0.7}>
+                <Text style={{ color: colors.textMuted, fontSize: 14 }}>Go back</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {promoteStep === 'processing' && (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 }}>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.textPrimary }}>Processing...</Text>
+              <Text style={{ fontSize: 14, color: colors.textMuted }}>Sending SOL to DAWEN treasury</Text>
+            </View>
+          )}
+
+          {promoteStep === 'done' && (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, paddingHorizontal: spacing.xl }}>
+              <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#10b98122', justifyContent: 'center', alignItems: 'center' }}>
+                <Check size={32} color="#10b981" strokeWidth={2.5} />
+              </View>
+              <Text style={{ fontSize: 22, fontWeight: '800', color: colors.textPrimary }}>Payment Sent!</Text>
+              <Text style={{ fontSize: 15, color: colors.textMuted, textAlign: 'center' }}>
+                Your post will be promoted after you submit it.
+              </Text>
+              <TouchableOpacity style={styles.promConfirmBtn} onPress={() => setShowPromoteModal(false)} activeOpacity={0.85}>
+                <Text style={styles.promConfirmBtnText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -888,6 +1054,52 @@ const styles = StyleSheet.create({
 
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', paddingHorizontal: spacing.xl },
   pickerCard: { backgroundColor: '#1A1A2E', borderRadius: 20, padding: spacing.xl, borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
+
+  promTierCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.xl, paddingVertical: 16,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.08)',
+  },
+  promTierLeft: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  promTierIcon: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  promTierLabel: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  promTierSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  promTierUsd: { fontSize: 16, fontWeight: '800', color: '#F59E0B' },
+  promTierSol: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
+
+  promConfirmCard: {
+    marginHorizontal: spacing.xl, marginTop: spacing.xl,
+    backgroundColor: '#12121E', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
+    overflow: 'hidden',
+  },
+  promConfirmRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg, paddingVertical: 16,
+  },
+  promConfirmDivider: { height: 1, backgroundColor: 'rgba(139,92,246,0.08)' },
+  promConfirmLabel: { fontSize: 14, color: colors.textMuted, fontWeight: '500' },
+  promConfirmValue: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+
+  promNotice: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    marginHorizontal: spacing.xl, marginTop: 16,
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderRadius: 12, padding: 12,
+  },
+  promNoticeText: { flex: 1, fontSize: 12, color: colors.warning, lineHeight: 18 },
+
+  promConfirmBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: spacing.xl, marginTop: 20,
+    backgroundColor: colors.primary, borderRadius: borderRadius.full,
+    paddingVertical: 15,
+  },
+  promConfirmBtnText: { fontSize: 16, fontWeight: '800', color: colors.white },
   pickerTitle: { fontSize: 17, fontWeight: '800', color: colors.textPrimary, marginBottom: spacing.lg },
   pickerOption: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

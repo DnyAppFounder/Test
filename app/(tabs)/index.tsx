@@ -49,6 +49,7 @@ import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
 import { PortfolioChart } from '@/components/PortfolioChart';
 import { NFTService, NFT } from '@/services/nftService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import SparklineChart from '@/components/SparklineChart';
 
 type TabKey = 'market' | 'assets' | 'watchlist';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
@@ -79,6 +80,7 @@ export default function WalletHome() {
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [category, setCategory] = useState<CategoryKey>('all');
   const [watchlist, setWatchlist] = useState<WatchlistToken[]>([]);
+  const [watchlistEnriched, setWatchlistEnriched] = useState<Map<string, LiveToken>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [assetSubTab, setAssetSubTab] = useState<AssetSubTab>('tokens');
   const [assetsError, setAssetsError] = useState<string | null>(null);
@@ -151,6 +153,17 @@ export default function WalletHome() {
     try {
       const data = await watchlistService.getWatchlist(profile.id);
       setWatchlist(data);
+      // Enrich with live market data
+      const enriched = new Map<string, LiveToken>();
+      await Promise.allSettled(
+        data.map(async (item) => {
+          try {
+            const token = await liveMarketService.getTokenDetail(item.token_address);
+            if (token) enriched.set(item.token_address, token);
+          } catch {}
+        })
+      );
+      setWatchlistEnriched(enriched);
     } catch (error) {
       console.error('Error loading watchlist:', error);
       setWatchlist([]);
@@ -640,32 +653,73 @@ export default function WalletHome() {
               <Text style={styles.inlineEmptySub}>Star tokens from token details to track them here</Text>
             </View>
           ) : (
-            watchlist.map((item, idx) => (
-              <TouchableOpacity
-                key={item.id}
-                style={[styles.assetRow, idx < watchlist.length - 1 && styles.assetRowBorder]}
-                onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.assetLogoPlaceholder}>
-                  <Text style={styles.assetLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
-                </View>
-                <View style={styles.assetInfo}>
-                  <Text style={styles.assetName}>{item.token_name}</Text>
-                  <Text style={styles.assetSymbol}>{item.token_symbol?.toUpperCase()}</Text>
-                </View>
+            watchlist.map((item, idx) => {
+              const live = watchlistEnriched.get(item.token_address);
+              const change = live?.priceChange24h ?? 0;
+              const isUp = change >= 0;
+              const sparkData = live?.sparkline && live.sparkline.length >= 2 ? live.sparkline :
+                Array.from({ length: 10 }, (_, i) => 1 + Math.sin(i * 0.5 + (isUp ? 0 : Math.PI)) * 0.5 * Math.abs(change || 1));
+              return (
                 <TouchableOpacity
-                  style={styles.starBtn}
-                  onPress={async (e) => {
-                    e.stopPropagation();
-                    if (profile?.id) await watchlistService.removeFromWatchlist(item.token_address, profile.id);
-                    await loadWatchlist();
-                  }}
+                  key={item.id}
+                  style={[styles.watchlistRow, idx < watchlist.length - 1 && styles.assetRowBorder]}
+                  onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
+                  activeOpacity={0.8}
                 >
-                  <Star size={20} color={colors.warning} fill={colors.warning} strokeWidth={2} />
+                  {/* Logo */}
+                  {live?.image ? (
+                    <Image source={{ uri: live.image }} style={styles.assetLogo} />
+                  ) : (
+                    <View style={styles.assetLogoPlaceholder}>
+                      <Text style={styles.assetLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
+                    </View>
+                  )}
+
+                  {/* Name + symbol */}
+                  <View style={styles.assetInfo}>
+                    <Text style={styles.assetName} numberOfLines={1}>{item.token_name}</Text>
+                    <Text style={styles.assetSymbol}>{item.token_symbol?.toUpperCase()}</Text>
+                  </View>
+
+                  {/* Sparkline */}
+                  <View style={{ marginHorizontal: 8 }}>
+                    <SparklineChart
+                      data={sparkData}
+                      width={56}
+                      height={28}
+                      color={isUp ? '#10b981' : '#ef4444'}
+                    />
+                    <Text style={[styles.watchlistChange, { color: isUp ? '#10b981' : '#ef4444' }]}>
+                      {isUp ? '+' : ''}{change.toFixed(2)}%
+                    </Text>
+                  </View>
+
+                  {/* Price + mcap */}
+                  <View style={styles.watchlistPriceCol}>
+                    <Text style={styles.watchlistPrice}>
+                      {live ? liveMarketService.formatPrice(live.price) : '—'}
+                    </Text>
+                    {live?.marketCap ? (
+                      <Text style={styles.watchlistMcap}>
+                        MC {liveMarketService.formatMarketCap(live.marketCap)}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  {/* Star remove */}
+                  <TouchableOpacity
+                    style={[styles.starBtn, { marginLeft: 4 }]}
+                    onPress={async (e) => {
+                      e.stopPropagation();
+                      if (profile?.id) await watchlistService.removeFromWatchlist(item.token_address, profile.id);
+                      await loadWatchlist();
+                    }}
+                  >
+                    <Star size={18} color={colors.warning} fill={colors.warning} strokeWidth={2} />
+                  </TouchableOpacity>
                 </TouchableOpacity>
-              </TouchableOpacity>
-            ))
+              );
+            })
           )}
         </View>
       )}
@@ -1656,6 +1710,32 @@ const styles = StyleSheet.create({
   },
   starBtn: {
     padding: spacing.sm,
+  },
+  watchlistRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+  },
+  watchlistChange: {
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  watchlistPriceCol: {
+    alignItems: 'flex-end',
+    minWidth: 72,
+  },
+  watchlistPrice: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  watchlistMcap: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   retryBtn: {
     marginTop: spacing.xs,
