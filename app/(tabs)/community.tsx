@@ -320,18 +320,39 @@ export default function CommunityScreen() {
       reposts_count: p.reposted_by_user ? Math.max(0, (p.reposts_count || 0) - 1) : (p.reposts_count || 0) + 1,
     } : p);
 
+  const [likingIds] = useState(() => new Set<string>());
+  const [repostingIds] = useState(() => new Set<string>());
+
   const handleLike = async (postId: string) => {
-    if (!profile) return;
+    if (!profile || likingIds.has(postId)) return;
+    likingIds.add(postId);
     setPosts(prev => togglePostLikeState(prev, postId));
     setProfilePosts(prev => togglePostLikeState(prev, postId));
-    await SocialService.toggleLike(postId, profile.id);
+    try {
+      await SocialService.toggleLike(postId, profile.id);
+    } catch {
+      // revert on failure
+      setPosts(prev => togglePostLikeState(prev, postId));
+      setProfilePosts(prev => togglePostLikeState(prev, postId));
+    } finally {
+      likingIds.delete(postId);
+    }
   };
 
   const handleRepost = async (postId: string) => {
-    if (!profile) return;
+    if (!profile || repostingIds.has(postId)) return;
+    repostingIds.add(postId);
     setPosts(prev => togglePostRepostState(prev, postId));
     setProfilePosts(prev => togglePostRepostState(prev, postId));
-    await SocialService.toggleRepost(postId, profile.id);
+    try {
+      await SocialService.toggleRepost(postId, profile.id);
+    } catch {
+      // revert on failure
+      setPosts(prev => togglePostRepostState(prev, postId));
+      setProfilePosts(prev => togglePostRepostState(prev, postId));
+    } finally {
+      repostingIds.delete(postId);
+    }
   };
 
   const requestDeletePost = (postId: string) => {

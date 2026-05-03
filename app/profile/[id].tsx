@@ -42,6 +42,8 @@ import {
 import LinkText from '@/components/LinkText';
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
+import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
@@ -156,7 +158,7 @@ const urStyles = StyleSheet.create({
 export default function ProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { selectedAccount, activeAddress } = useWallet();
+  const { selectedAccount, activeAddress, connectedWallet } = useWallet();
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
@@ -213,8 +215,11 @@ export default function ProfileScreen() {
 
   // Premium certification modal
   const [showPremiumModal, setShowPremiumModal] = useState(false);
-  const [purchasingPremium, setPurchasingPremium] = useState(false);
   const [premiumDone, setPremiumDone] = useState(false);
+  const [premiumPayStatus, setPremiumPayStatus] = useState<PayStatus>('idle');
+  const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
+  const [solUsdPrice, setSolUsdPrice] = useState(0);
+  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DTEST'>('SOL');
 
   // Basic verification modal
   const [showVerifyModal, setShowVerifyModal] = useState(false);
@@ -225,9 +230,14 @@ export default function ProfileScreen() {
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyChecking, setVerifyChecking] = useState(false);
 
-  const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar } = useProfile();
+  const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const walletAddr = selectedAccount?.address || activeAddress || '';
   const isOwnProfile = currentUserProfile?.id === id;
+
+  useEffect(() => {
+    const svc = new SolanaPriceService();
+    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+  }, []);
 
   const loadProfile = useCallback(async () => {
     if (!id) return;
@@ -404,18 +414,19 @@ export default function ProfileScreen() {
     if (!id) return;
     if (tab === 'posts') return;
     setTabLoading(tab);
+    const viewerId = currentUserProfile?.id;
     try {
       if (tab === 'replies') {
-        setReplies(await SocialService.getUserReplies(id));
+        setReplies(await SocialService.getUserReplies(id, viewerId));
       } else if (tab === 'media') {
-        setMediaPosts(await SocialService.getUserMediaPosts(id));
+        setMediaPosts(await SocialService.getUserMediaPosts(id, viewerId));
       } else if (tab === 'likes') {
-        setLikedPosts(await SocialService.getUserLikedPosts(id));
+        setLikedPosts(await SocialService.getUserLikedPosts(id, viewerId));
       }
     } finally {
       setTabLoading(null);
     }
-  }, [id]);
+  }, [id, currentUserProfile?.id]);
 
   const handleTabChange = (tab: ProfileTab) => {
     setActiveTab(tab);
@@ -481,26 +492,74 @@ export default function ProfileScreen() {
     await SocialService.toggleCommentLike(commentId, currentUserProfile.id);
   };
 
+  const [likingIds, setLikingIds] = useState<Set<string>>(new Set());
+  const [repostingIds, setRepostingIds] = useState<Set<string>>(new Set());
+
   const handleLike = async (postId: string) => {
-    if (!currentUserProfile) return;
-    const update = (list: Post[]) => list.map(p =>
+    if (!currentUserProfile || likingIds.has(postId)) return;
+    setLikingIds(prev => new Set(prev).add(postId));
+    const optimistic = (list: Post[]) => list.map(p =>
       p.id === postId ? {
         ...p,
         liked_by_user: !p.liked_by_user,
         likes_count: p.liked_by_user ? Math.max(0, (p.likes_count || 0) - 1) : (p.likes_count || 0) + 1,
       } : p
     );
-    setPosts(update);
-    setReplies(update);
-    setLikedPosts(update);
-    setMediaPosts(update);
-    await SocialService.toggleLike(postId, currentUserProfile.id);
+    setPosts(optimistic);
+    setReplies(optimistic);
+    setLikedPosts(optimistic);
+    setMediaPosts(optimistic);
+    try {
+      await SocialService.toggleLike(postId, currentUserProfile.id);
+    } catch {
+      // revert on failure
+      const revert = (list: Post[]) => list.map(p =>
+        p.id === postId ? {
+          ...p,
+          liked_by_user: !p.liked_by_user,
+          likes_count: p.liked_by_user ? Math.max(0, (p.likes_count || 0) - 1) : (p.likes_count || 0) + 1,
+        } : p
+      );
+      setPosts(revert);
+      setReplies(revert);
+      setLikedPosts(revert);
+      setMediaPosts(revert);
+    } finally {
+      setLikingIds(prev => { const s = new Set(prev); s.delete(postId); return s; });
+    }
   };
 
   const handleRepost = async (postId: string) => {
-    if (!currentUserProfile) return;
-    await SocialService.toggleRepost(postId, currentUserProfile.id);
-    await loadProfile();
+    if (!currentUserProfile || repostingIds.has(postId)) return;
+    setRepostingIds(prev => new Set(prev).add(postId));
+    const optimistic = (list: Post[]) => list.map(p =>
+      p.id === postId ? {
+        ...p,
+        reposted_by_user: !p.reposted_by_user,
+        reposts_count: p.reposted_by_user ? Math.max(0, (p.reposts_count || 0) - 1) : (p.reposts_count || 0) + 1,
+      } : p
+    );
+    setPosts(optimistic);
+    setReplies(optimistic);
+    setLikedPosts(optimistic);
+    setMediaPosts(optimistic);
+    try {
+      await SocialService.toggleRepost(postId, currentUserProfile.id);
+    } catch {
+      const revert = (list: Post[]) => list.map(p =>
+        p.id === postId ? {
+          ...p,
+          reposted_by_user: !p.reposted_by_user,
+          reposts_count: p.reposted_by_user ? Math.max(0, (p.reposts_count || 0) - 1) : (p.reposts_count || 0) + 1,
+        } : p
+      );
+      setPosts(revert);
+      setReplies(revert);
+      setLikedPosts(revert);
+      setMediaPosts(revert);
+    } finally {
+      setRepostingIds(prev => { const s = new Set(prev); s.delete(postId); return s; });
+    }
   };
 
   const requestDeletePost = (postId: string) => {
@@ -543,17 +602,35 @@ export default function ProfileScreen() {
     setVerifyChecking(false);
   };
 
+  const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : 0;
+
   const handlePurchasePremium = async () => {
     if (!currentUserProfile || !isOwnProfile) return;
-    setPurchasingPremium(true);
-    // In production: initiate a real Solana transaction here.
-    // The signature would be verified on-chain before activating.
-    const { success } = await VerificationService.activatePremium(currentUserProfile.id, selectedPremiumTier);
-    setPurchasingPremium(false);
-    if (success) {
-      setPremiumDone(true);
-      await loadProfile();
+    const tier = PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)!;
+    const solAmt = usdToSol(tier.usd);
+    const fromAddr = activeAddress || selectedAccount?.address || '';
+    if (!fromAddr) return;
+    setPremiumPayStatus('preparing');
+
+    const result = await payToTreasury({
+      fromAddress: fromAddr,
+      amountSol: premiumPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
+      amountToken: premiumPayWith === 'DTEST' ? tier.usd : undefined,
+      tokenMint: premiumPayWith === 'DTEST' ? DTEST_MINT : undefined,
+      connectedWalletId: connectedWallet?.id ?? null,
+      internalAccountIndex: selectedAccount?.accountIndex ?? 0,
+      onStatus: setPremiumPayStatus,
+    });
+
+    if (!result.success) {
+      setPremiumPayStatus('idle');
+      return;
     }
+
+    setPremiumTxSig(result.signature ?? null);
+    await VerificationService.activatePremium(currentUserProfile.id, selectedPremiumTier, result.signature ?? undefined);
+    setPremiumDone(true);
+    await loadProfile();
   };
 
   const displayName = profile?.username
@@ -957,25 +1034,46 @@ export default function ProfileScreen() {
                     );
                   })}
 
-                  <TouchableOpacity
-                    style={[styles.premiumPayBtn, purchasingPremium && { opacity: 0.6 }]}
-                    onPress={handlePurchasePremium}
-                    disabled={purchasingPremium}
-                    activeOpacity={0.85}
-                  >
-                    {purchasingPremium
-                      ? <ActivityIndicator size="small" color={colors.white} />
-                      : <>
-                          <Wallet size={15} color={colors.white} strokeWidth={2} />
-                          <Text style={styles.premiumPayBtnText}>
-                            Pay ${PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)?.usd} with Connected Wallet
-                          </Text>
-                        </>
-                    }
-                  </TouchableOpacity>
+                  {/* Pay with */}
+                  <Text style={styles.editLabel}>Pay with</Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                    {(['SOL', 'DTEST'] as const).map(method => (
+                      <TouchableOpacity
+                        key={method}
+                        style={{ flex: 1, backgroundColor: premiumPayWith === method ? 'rgba(59,130,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: premiumPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
+                        onPress={() => setPremiumPayWith(method)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={{ fontSize: 16 }}>{method === 'SOL' ? '◎' : 'D'}</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: premiumPayWith === method ? colors.primary : colors.textPrimary }}>{method}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {premiumPayStatus === 'preparing' || premiumPayStatus === 'signing' || premiumPayStatus === 'sending' ? (
+                    <View style={{ alignItems: 'center', paddingVertical: 16, gap: 12 }}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                      <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>
+                        {premiumPayStatus === 'signing' ? 'Confirm in wallet...' :
+                         premiumPayStatus === 'sending' ? 'Transaction pending...' :
+                         'Preparing transaction...'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.premiumPayBtn}
+                      onPress={handlePurchasePremium}
+                      activeOpacity={0.85}
+                    >
+                      <Wallet size={15} color={colors.white} strokeWidth={2} />
+                      <Text style={styles.premiumPayBtnText}>
+                        Pay ${PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)?.usd}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
 
                   <Text style={styles.premiumNote}>
-                    Payment is processed via your connected Solana wallet. The transaction is verified on-chain before the badge is activated.
+                    Payment is processed via your Solana wallet. The transaction is verified on-chain before the badge is activated.
                   </Text>
                 </>
               ) : (
@@ -1112,14 +1210,14 @@ export default function ProfileScreen() {
                     </View>
                     <View style={styles.verifyStepInfo}>
                       <Text style={styles.verifyStepTitle}>Reply to the pinned post</Text>
-                      <Text style={styles.verifyStepSub}>Comment on the "Get verified" post</Text>
+                      <Text style={styles.verifyStepSub}>Reply with exactly: "Get Verified ✔️"</Text>
                     </View>
-                    {verifyStatus?.pinnedPostId && (
+                    {verifyStatus?.badgeId && (
                       <TouchableOpacity
                         style={styles.verifyActionBtn}
                         onPress={() => {
                           setShowVerifyModal(false);
-                          router.push('/(tabs)/community' as any);
+                          router.push(`/profile/${verifyStatus!.badgeId}` as any);
                         }}
                         activeOpacity={0.8}
                       >

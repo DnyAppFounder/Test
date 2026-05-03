@@ -1052,8 +1052,38 @@ export class SocialService {
     return data || [];
   }
 
+  // Shared helper: enrich a list of posts with like/repost state for currentUserId
+  private static async enrichPostsWithUserState(posts: any[], currentUserId?: string): Promise<Post[]> {
+    if (!posts.length) return [];
+    const authorIds = [...new Set(posts.map((p: any) => p.author_id))];
+    const { data: authors } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .in('id', authorIds);
+    const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
+
+    let likedSet = new Set<string>();
+    let repostedSet = new Set<string>();
+    if (currentUserId) {
+      const postIds = posts.map((p: any) => p.id);
+      const [likesRes, repostsResult] = await Promise.all([
+        supabase.from('post_likes').select('post_id').eq('user_id', currentUserId).in('post_id', postIds),
+        repostsFetch('check', { userId: currentUserId, postIds }),
+      ]);
+      likedSet = new Set((likesRes.data || []).map((l: any) => l.post_id));
+      repostedSet = new Set<string>((repostsResult?.repostedIds || []) as string[]);
+    }
+
+    return posts.map((p: any) => ({
+      ...p,
+      author: authorMap.get(p.author_id),
+      liked_by_user: likedSet.has(p.id),
+      reposted_by_user: repostedSet.has(p.id),
+    }));
+  }
+
   // Posts where this user left a comment (replies tab)
-  static async getUserReplies(userId: string): Promise<Post[]> {
+  static async getUserReplies(userId: string, currentUserId?: string): Promise<Post[]> {
     const { data: comments } = await supabase
       .from('post_comments')
       .select('post_id, created_at')
@@ -1070,19 +1100,11 @@ export class SocialService {
       .in('id', postIds);
 
     if (!posts || posts.length === 0) return [];
-
-    const authorIds = [...new Set(posts.map((p: any) => p.author_id))];
-    const { data: authors } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .in('id', authorIds);
-    const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
-
-    return posts.map((p: any) => ({ ...p, author: authorMap.get(p.author_id) }));
+    return this.enrichPostsWithUserState(posts, currentUserId);
   }
 
   // Posts the user has liked
-  static async getUserLikedPosts(userId: string): Promise<Post[]> {
+  static async getUserLikedPosts(userId: string, currentUserId?: string): Promise<Post[]> {
     const { data: likes } = await supabase
       .from('post_likes')
       .select('post_id, created_at')
@@ -1100,22 +1122,16 @@ export class SocialService {
 
     if (!posts || posts.length === 0) return [];
 
-    const authorIds = [...new Set(posts.map((p: any) => p.author_id))];
-    const { data: authors } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .in('id', authorIds);
-    const authorMap = new Map((authors || []).map((a: UserProfile) => [a.id, a]));
-
-    return posts.map((p: any) => ({
-      ...p,
-      author: authorMap.get(p.author_id),
-      liked_by_user: true,
-    }));
+    const enriched = await this.enrichPostsWithUserState(posts, currentUserId);
+    // For the likes tab: if currentUserId matches userId, we know they liked all these posts
+    if (currentUserId === userId) {
+      return enriched.map(p => ({ ...p, liked_by_user: true }));
+    }
+    return enriched;
   }
 
   // Posts by this user that have a media attachment
-  static async getUserMediaPosts(userId: string): Promise<Post[]> {
+  static async getUserMediaPosts(userId: string, currentUserId?: string): Promise<Post[]> {
     const { data } = await supabase
       .from('posts')
       .select('*')
@@ -1124,13 +1140,6 @@ export class SocialService {
       .order('created_at', { ascending: false });
 
     if (!data || data.length === 0) return [];
-
-    const { data: author } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-
-    return data.map((p: any) => ({ ...p, author: author || undefined }));
+    return this.enrichPostsWithUserState(data, currentUserId);
   }
 }
