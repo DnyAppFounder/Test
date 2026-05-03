@@ -106,10 +106,11 @@ export interface PostComment {
 }
 
 export const PROMOTE_TIERS = [
-  { key: '1h', label: '1 Hour', hours: 1, price: 5 },
-  { key: '10h', label: '10 Hours', hours: 10, price: 25 },
-  { key: '24h', label: '24 Hours', hours: 24, price: 50 },
-  { key: '1w', label: '1 Week', hours: 168, price: 200 },
+  { key: '1h', label: '1 Hour', hours: 1, solPrice: 0.05 },
+  { key: '3h', label: '3 Hours', hours: 3, solPrice: 0.12 },
+  { key: '24h', label: '24 Hours', hours: 24, solPrice: 0.5 },
+  { key: '3d', label: '3 Days', hours: 72, solPrice: 1.0 },
+  { key: '7d', label: '7 Days', hours: 168, solPrice: 2.0 },
 ];
 
 export class SocialService {

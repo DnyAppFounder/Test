@@ -15,9 +15,10 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail } from 'lucide-react-native';
+import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Hop as Home, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
+import { TransactionManager } from '@/lib/wallet/TransactionManager';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -303,13 +304,38 @@ export default function CommunityScreen() {
     setPromoteStep('confirm');
   };
 
+  // DAWEN treasury — receives promotion SOL payments
+  const DAWEN_TREASURY = 'DawEn7h3sMhW5RjNfUeDmPT5yVFiRgXwemRZy2f8DrUq';
+
   const handleConfirmPromotion = async () => {
-    // Promotion payment not configured — show unavailable message
-    Alert.alert(
-      'Promotion Not Configured',
-      'Promotion is not configured yet. Payment processing will be available in a future update.',
-      [{ text: 'OK' }]
-    );
+    if (!selectedTierKey || !selectedPostId || !profile) return;
+    const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
+    if (!tier) return;
+
+    setPromoteStep('processing');
+    try {
+      const txManager = TransactionManager.getInstance();
+      const result = await txManager.sendTransaction({
+        blockchain: 'solana',
+        to: DAWEN_TREASURY,
+        amount: String(tier.solPrice),
+        accountIndex: 0,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Transaction failed');
+      }
+
+      // Record promotion in DB after payment confirmed
+      await SocialService.promotePost(selectedPostId, tier.key);
+      setPosts(prev => prev.map(p =>
+        p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
+      ));
+      setPromoteStep('done');
+    } catch (err: any) {
+      setPromoteStep('confirm');
+      Alert.alert('Payment Failed', err?.message || 'Could not complete SOL payment. Make sure your wallet is unlocked and has sufficient balance.');
+    }
   };
 
   const closePromoteModal = () => {
@@ -1263,9 +1289,12 @@ export default function CommunityScreen() {
                         <Text style={styles.tierSub}>{tier.hours}h visibility boost</Text>
                       </View>
                     </View>
-                    <View>
-                      <Text style={styles.tierPrice}>${tier.price}</Text>
-                      <Text style={styles.tierCurrency}>USD</Text>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Zap size={13} color="#F59E0B" strokeWidth={2} />
+                        <Text style={styles.tierPrice}>{tier.solPrice} SOL</Text>
+                      </View>
+                      <Text style={styles.tierCurrency}>Solana</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -1288,25 +1317,28 @@ export default function CommunityScreen() {
                   <View style={styles.confirmDivider} />
                   <View style={styles.confirmRow}>
                     <Text style={styles.confirmLabel}>Price</Text>
-                    <Text style={styles.confirmValue}>${selectedTier.price} USD</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Zap size={13} color="#F59E0B" strokeWidth={2} />
+                      <Text style={styles.confirmValue}>{(selectedTier as any).solPrice} SOL</Text>
+                    </View>
                   </View>
                   <View style={styles.confirmDivider} />
                   <View style={styles.confirmRow}>
                     <Text style={styles.confirmLabel}>Payment</Text>
                     <View style={styles.paymentBadge}>
                       <Wallet size={13} color={colors.primary} />
-                      <Text style={styles.paymentBadgeText}>Wallet</Text>
+                      <Text style={styles.paymentBadgeText}>Solana Wallet</Text>
                     </View>
                   </View>
                 </View>
                 <View style={styles.mockNotice}>
                   <CircleAlert size={14} color={colors.warning} />
                   <Text style={styles.mockNoticeText}>
-                    SIMULATED: Payment is mocked for demo. In production this charges your connected wallet.
+                    Real SOL transaction. Make sure your wallet is unlocked and has enough balance.
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirmPromotion}>
-                  <Text style={styles.confirmBtnText}>Pay ${selectedTier.price} & Promote</Text>
+                  <Text style={styles.confirmBtnText}>Pay {(selectedTier as any).solPrice} SOL & Promote</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelLink} onPress={() => setPromoteStep('select')}>
                   <Text style={styles.cancelLinkText}>Go back</Text>

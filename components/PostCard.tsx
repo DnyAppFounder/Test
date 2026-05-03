@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Linking } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2 } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
@@ -100,9 +100,9 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         ) : null}
       </View>
 
-      {/* Content with clickable @mentions */}
+      {/* Content with clickable @mentions and links */}
       <Text style={styles.content}>
-        {post.content.split(/(@\w+)/g).map((part, i) => {
+        {post.content.split(/(@\w+|https?:\/\/[^\s]+)/g).map((part, i) => {
           if (/^@\w+$/.test(part)) {
             return (
               <Text
@@ -113,6 +113,17 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
                     if (results[0]?.id) router.push(`/profile/${results[0].id}` as any);
                   }).catch(() => {});
                 }}
+              >
+                {part}
+              </Text>
+            );
+          }
+          if (/^https?:\/\//.test(part)) {
+            return (
+              <Text
+                key={i}
+                style={styles.linkText}
+                onPress={() => Linking.openURL(part).catch(() => {})}
               >
                 {part}
               </Text>
@@ -267,6 +278,11 @@ const styles = StyleSheet.create({
   mentionText: {
     color: '#8B5CF6',
     fontWeight: '700',
+  },
+  linkText: {
+    color: '#3B82F6',
+    fontWeight: '500',
+    textDecorationLine: 'underline',
   },
   actions: {
     flexDirection: 'row',

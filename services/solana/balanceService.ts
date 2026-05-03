@@ -75,7 +75,9 @@ export class SolanaBalanceService {
           const tokenAmount = parsedInfo.tokenAmount;
           const uiAmount = tokenAmount.uiAmount;
 
-          if (uiAmount && uiAmount > 0) {
+          // Filter NFTs: decimals === 0 with exactly 1 token = NFT
+          const isNFT = tokenAmount.decimals === 0 && uiAmount === 1;
+          if (uiAmount && uiAmount > 0 && !isNFT) {
             tokens.push({
               mint: parsedInfo.mint,
               balance: parseInt(tokenAmount.amount),

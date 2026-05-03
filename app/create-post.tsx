@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,18 +14,20 @@ import {
   Alert,
   Modal,
   FlatList,
+  Animated,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import {
   X, Check, ChevronDown, ChevronRight, Globe,
-  Image as ImageIcon, Video, ChartBar as BarChart2,
+  ChartBar as BarChart2,
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
-  Search, Megaphone, Film,
+  Search, Film,
 } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
+import { VerificationService } from '@/services/verificationService';
 import { SocialService } from '@/services/socialService';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 
@@ -39,6 +41,9 @@ const WHO_CAN_REPLY_OPTIONS: { value: WhoCanReply; label: string }[] = [
   { value: 'mentioned', label: 'Mentioned people' },
 ];
 
+const MAX_MEDIA = 4;
+const MAX_TOKENS = 2;
+
 const qaGifBox: any = {
   width: 28, height: 28, borderRadius: 6, borderWidth: 2, borderColor: '#10b981',
   justifyContent: 'center', alignItems: 'center',
@@ -49,19 +54,22 @@ export default function CreatePostScreen() {
   const router = useRouter();
   const { profile } = useProfile();
 
+  const isPremium = profile ? VerificationService.isPremiumActive(profile as any) : false;
+  const CHAR_LIMIT = isPremium ? 1000 : 230;
+
   const [content, setContent] = useState('');
   const [posting, setPosting] = useState(false);
 
-  // Media
-  const [mediaUri, setMediaUri] = useState<string | null>(null);
+  // Multi-media
+  const [mediaUris, setMediaUris] = useState<string[]>([]);
   const [mediaUploading, setMediaUploading] = useState(false);
 
   // @mention
   const [mentionResults, setMentionResults] = useState<any[]>([]);
   const [mentionLoading, setMentionLoading] = useState(false);
 
-  // Token attachment
-  const [attachedToken, setAttachedToken] = useState<LiveToken | null>(null);
+  // Token attachment (max 2)
+  const [attachedTokens, setAttachedTokens] = useState<LiveToken[]>([]);
   const [showTokenPicker, setShowTokenPicker] = useState(false);
   const [tokenSearch, setTokenSearch] = useState('');
   const [tokenResults, setTokenResults] = useState<LiveToken[]>([]);
@@ -76,31 +84,54 @@ export default function CreatePostScreen() {
   const [showReplyPicker, setShowReplyPicker] = useState(false);
   const [showVisibilityPicker, setShowVisibilityPicker] = useState(false);
 
+  // Animated dashed border
+  const dashAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(dashAnim, { toValue: 1, duration: 1800, useNativeDriver: false }),
+        Animated.timing(dashAnim, { toValue: 0, duration: 1800, useNativeDriver: false }),
+      ])
+    ).start();
+  }, []);
+
+  const borderColor = dashAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ['rgba(139,92,246,0.25)', 'rgba(139,92,246,0.7)', 'rgba(139,92,246,0.25)'],
+  });
+
   const displayName = profile?.username
     || (profile?.wallet_address ? `${profile.wallet_address.slice(0, 6)}...${profile.wallet_address.slice(-4)}` : 'Wallet');
   const handleText = `@${(profile?.username || 'user').toLowerCase()}`;
 
-  // ── Media picker (images + videos) ───────────────────────────────────────
+  // ── Media picker ─────────────────────────────────────────────────────────
   const pickMedia = async () => {
+    if (mediaUris.length >= MAX_MEDIA) {
+      Alert.alert('Limit reached', `You can attach up to ${MAX_MEDIA} media items.`);
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to attach media.');
+      Alert.alert('Permission needed', 'Allow photo/video access to attach media.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
-      allowsEditing: true,
+      allowsMultipleSelection: true,
+      selectionLimit: MAX_MEDIA - mediaUris.length,
     });
-    if (!result.canceled && result.assets[0]) {
-      setMediaUri(result.assets[0].uri);
+    if (!result.canceled && result.assets.length > 0) {
+      const newUris = result.assets.map(a => a.uri);
+      setMediaUris(prev => [...prev, ...newUris].slice(0, MAX_MEDIA));
     }
   };
 
-  const removeMedia = () => setMediaUri(null);
+  const removeMedia = (uri: string) => setMediaUris(prev => prev.filter(u => u !== uri));
 
   // ── @mention handling ─────────────────────────────────────────────────────
   const handleContentChange = async (text: string) => {
+    if (text.length > CHAR_LIMIT) return;
     setContent(text);
     const match = text.match(/@(\w+)$/);
     if (match && match[1].length >= 1) {
@@ -140,13 +171,23 @@ export default function CreatePostScreen() {
   }, []);
 
   const selectToken = (token: LiveToken) => {
-    setAttachedToken(token);
+    if (attachedTokens.find(t => t.address === token.address)) {
+      setShowTokenPicker(false);
+      return;
+    }
+    if (attachedTokens.length >= MAX_TOKENS) {
+      Alert.alert('Limit reached', 'You can attach up to 2 tokens per post.');
+      return;
+    }
+    setAttachedTokens(prev => [...prev, token]);
     setShowTokenPicker(false);
     setTokenSearch('');
     setTokenResults([]);
   };
 
-  const removeToken = () => setAttachedToken(null);
+  const removeToken = (address: string) => {
+    setAttachedTokens(prev => prev.filter(t => t.address !== address));
+  };
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handlePost = async () => {
@@ -154,14 +195,15 @@ export default function CreatePostScreen() {
     setPosting(true);
     try {
       const effectiveReply = mentionedReply ? 'mentioned' : whoCanReply;
+      const primaryToken = attachedTokens[0] ?? null;
 
       await SocialService.createPost(profile.id, content.trim(), {
-        imageUri: mediaUri || undefined,
-        tokenAddress: attachedToken?.address ?? undefined,
-        tokenSymbol: attachedToken?.symbol ?? undefined,
-        tokenPrice: attachedToken?.price ?? undefined,
-        tokenChange24h: attachedToken?.priceChange24h ?? undefined,
-        tokenLogoUri: attachedToken?.image ?? undefined,
+        imageUri: mediaUris[0] || undefined,
+        tokenAddress: primaryToken?.address ?? undefined,
+        tokenSymbol: primaryToken?.symbol ?? undefined,
+        tokenPrice: primaryToken?.price ?? undefined,
+        tokenChange24h: primaryToken?.priceChange24h ?? undefined,
+        tokenLogoUri: primaryToken?.image ?? undefined,
         visibility,
         whoCanReply: effectiveReply,
         allowQuotes,
@@ -177,34 +219,28 @@ export default function CreatePostScreen() {
     }
   };
 
-  const canPost = content.trim().length > 0 && !posting;
+  const charLeft = CHAR_LIMIT - content.length;
+  const charWarning = charLeft <= 30;
+  const canPost = content.trim().length > 0 && content.length <= CHAR_LIMIT && !posting;
 
-  // ── Token card chart (static SVG-like bar chart) ──────────────────────────
-  const renderTokenChart = () => {
-    if (!attachedToken) return null;
-    const price = attachedToken.price;
-    const change = attachedToken.priceChange24h ?? 0;
+  const renderTokenCard = (token: LiveToken) => {
+    const change = token.priceChange24h ?? 0;
     const isPositive = change >= 0;
     return (
-      <View style={styles.tokenCard}>
+      <View key={token.address} style={styles.tokenCard}>
         <View style={styles.tokenCardHeader}>
           <View style={styles.tokenCardTitleRow}>
-            {attachedToken.image ? (
-              <Image source={{ uri: attachedToken.image }} style={styles.tokenLogo} />
-            ) : null}
-            <Text style={styles.tokenCardSymbol}>${attachedToken.symbol}</Text>
+            {token.image ? <Image source={{ uri: token.image }} style={styles.tokenLogo} /> : null}
+            <Text style={styles.tokenCardSymbol}>${token.symbol}</Text>
           </View>
-          <TouchableOpacity style={styles.tokenCardRemove} onPress={removeToken}>
+          <TouchableOpacity style={styles.tokenCardRemove} onPress={() => removeToken(token.address)}>
             <X size={13} color={colors.textMuted} strokeWidth={2.5} />
           </TouchableOpacity>
         </View>
-        <Text style={styles.tokenCardPrice}>
-          {liveMarketService.formatPrice(price)}
-        </Text>
+        <Text style={styles.tokenCardPrice}>{liveMarketService.formatPrice(token.price)}</Text>
         <Text style={[styles.tokenCardChange, { color: isPositive ? '#10b981' : '#ef4444' }]}>
           {isPositive ? '+' : ''}{change.toFixed(2)}% {isPositive ? '↗' : '↘'}
         </Text>
-        {/* Simple bar chart visual */}
         <View style={styles.chartArea}>
           <View style={styles.chartLine} />
           <View style={[styles.chartLine, { top: '40%', opacity: 0.6 }]} />
@@ -300,16 +336,29 @@ export default function CreatePostScreen() {
             </View>
           </View>
 
-          {/* Text input */}
-          <TextInput
-            style={styles.contentInput}
-            placeholder={"What's happening in the market?\nShare your thoughts with the DAWEN community."}
-            placeholderTextColor={colors.textMuted}
-            value={content}
-            onChangeText={handleContentChange}
-            multiline
-            autoFocus={false}
-          />
+          {/* Text input with animated dashed border */}
+          <Animated.View style={[styles.inputWrapper, { borderColor }]}>
+            <TextInput
+              style={styles.contentInput}
+              placeholder={"What's happening in the market?\nShare your thoughts with the DAWEN community."}
+              placeholderTextColor={colors.textMuted}
+              value={content}
+              onChangeText={handleContentChange}
+              multiline
+              autoFocus={false}
+              maxLength={CHAR_LIMIT}
+            />
+            <View style={styles.charCountRow}>
+              {isPremium && (
+                <View style={styles.premiumBadgeRow}>
+                  <Text style={styles.premiumLabel}>Premium · 1000 chars</Text>
+                </View>
+              )}
+              <Text style={[styles.charCount, charWarning && styles.charCountWarn]}>
+                {charLeft}
+              </Text>
+            </View>
+          </Animated.View>
 
           {/* @mention dropdown */}
           {mentionResults.length > 0 && (
@@ -343,47 +392,55 @@ export default function CreatePostScreen() {
             </View>
           )}
 
-          {/* Attached media */}
-          {mediaUri && (
-            <View style={styles.mediaPreviewWrap}>
-              <Image
-                source={{ uri: mediaUri }}
-                style={styles.mediaPreview}
-                resizeMode="cover"
-              />
-              <TouchableOpacity style={styles.removeMediaBtn} onPress={removeMedia}>
-                <X size={16} color={colors.white} strokeWidth={2.5} />
-              </TouchableOpacity>
+          {/* Attached media grid */}
+          {mediaUris.length > 0 && (
+            <View style={styles.mediaGrid}>
+              {mediaUris.map(uri => (
+                <View key={uri} style={styles.mediaThumbWrap}>
+                  <Image source={{ uri }} style={styles.mediaThumb} resizeMode="cover" />
+                  <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeMedia(uri)}>
+                    <X size={14} color={colors.white} strokeWidth={2.5} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {mediaUris.length < MAX_MEDIA && (
+                <TouchableOpacity style={styles.addMoreMedia} onPress={pickMedia} activeOpacity={0.8}>
+                  <Text style={styles.addMediaPlus}>+</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
-          {/* Token card or picker trigger */}
-          <View style={styles.mediaRow}>
-            {attachedToken ? (
-              renderTokenChart()
-            ) : (
-              <TouchableOpacity
-                style={styles.tokenPickerTrigger}
-                activeOpacity={0.8}
-                onPress={() => setShowTokenPicker(true)}
-              >
-                <Coins size={22} color={colors.primary} strokeWidth={2} />
-                <Text style={styles.tokenPickerText}>Attach Token</Text>
-              </TouchableOpacity>
-            )}
+          {/* Token cards (up to 2) */}
+          {attachedTokens.length > 0 && (
+            <View style={attachedTokens.length === 2 ? styles.tokenCardsRow : undefined}>
+              {attachedTokens.map(renderTokenCard)}
+            </View>
+          )}
 
-            {/* Add media box */}
-            <TouchableOpacity style={styles.addMediaBox} activeOpacity={0.8} onPress={pickMedia}>
-              {mediaUri ? (
-                <Check size={22} color={colors.primary} strokeWidth={2.5} />
-              ) : (
-                <>
+          {/* Action row: add media + token */}
+          {(mediaUris.length === 0 || attachedTokens.length < MAX_TOKENS) && (
+            <View style={styles.mediaRow}>
+              {mediaUris.length === 0 && (
+                <TouchableOpacity style={styles.addMediaBox} activeOpacity={0.8} onPress={pickMedia}>
                   <Text style={styles.addMediaPlus}>+</Text>
                   <Text style={styles.addMediaLabel}>Add media</Text>
-                </>
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
-          </View>
+              {attachedTokens.length < MAX_TOKENS && (
+                <TouchableOpacity
+                  style={styles.tokenPickerTrigger}
+                  activeOpacity={0.8}
+                  onPress={() => setShowTokenPicker(true)}
+                >
+                  <Coins size={22} color={colors.primary} strokeWidth={2} />
+                  <Text style={styles.tokenPickerText}>
+                    {attachedTokens.length === 0 ? 'Attach Token' : 'Add 2nd Token'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           {/* Quick actions */}
           <View style={styles.quickActionsRow}>
@@ -392,13 +449,6 @@ export default function CreatePostScreen() {
                 <Film size={20} color="#8B5CF6" strokeWidth={2} />
               </View>
               <Text style={styles.qaLabel}>Media</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Promote Post', 'Post promotion is coming soon. Your post will be boosted to the top of the feed.')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#f59e0b22' }]}>
-                <Megaphone size={20} color="#f59e0b" strokeWidth={2} />
-              </View>
-              <Text style={styles.qaLabel}>Promote</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Poll', 'Not configured yet')}>
@@ -433,7 +483,6 @@ export default function CreatePostScreen() {
           {/* Post settings */}
           <Text style={styles.settingsHeader}>POST SETTINGS</Text>
           <View style={styles.settingsCard}>
-            {/* Who can reply */}
             <TouchableOpacity
               style={[styles.settingRow, styles.settingRowBorder]}
               activeOpacity={0.8}
@@ -453,7 +502,6 @@ export default function CreatePostScreen() {
               </View>
             </TouchableOpacity>
 
-            {/* Allow quotes */}
             <View style={[styles.settingRow, styles.settingRowBorder]}>
               <View style={styles.settingLeft}>
                 <View style={[styles.settingIcon, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
@@ -469,7 +517,6 @@ export default function CreatePostScreen() {
               />
             </View>
 
-            {/* Mentioned people can reply */}
             <View style={[styles.settingRow, styles.settingRowBorder]}>
               <View style={styles.settingLeft}>
                 <View style={[styles.settingIcon, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
@@ -485,7 +532,6 @@ export default function CreatePostScreen() {
               />
             </View>
 
-            {/* Language */}
             <TouchableOpacity style={styles.settingRow} activeOpacity={0.8}>
               <View style={styles.settingLeft}>
                 <View style={[styles.settingIcon, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
@@ -513,7 +559,9 @@ export default function CreatePostScreen() {
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Attach Token</Text>
+            <Text style={styles.modalTitle}>
+              {attachedTokens.length === 0 ? 'Attach Token' : 'Add 2nd Token'}
+            </Text>
             <TouchableOpacity onPress={() => setShowTokenPicker(false)}>
               <X size={22} color={colors.textPrimary} strokeWidth={2.5} />
             </TouchableOpacity>
@@ -653,10 +701,6 @@ const styles = StyleSheet.create({
   userInfo: { gap: 4, justifyContent: 'center' },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   username: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
-  verifiedBadge: {
-    width: 18, height: 18, borderRadius: 9, backgroundColor: colors.primary,
-    justifyContent: 'center', alignItems: 'center',
-  },
   handle: { fontSize: 13, color: colors.textMuted },
   visibilityBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -666,9 +710,34 @@ const styles = StyleSheet.create({
   },
   visibilityText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
 
-  contentInput: {
-    fontSize: 18, color: colors.textPrimary, lineHeight: 26, minHeight: 80, marginBottom: spacing.sm,
+  inputWrapper: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: 'rgba(139,92,246,0.03)',
   },
+  contentInput: {
+    fontSize: 18, color: colors.textPrimary, lineHeight: 26, minHeight: 80,
+  },
+  charCountRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  premiumBadgeRow: {
+    backgroundColor: 'rgba(245,158,11,0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  premiumLabel: { fontSize: 10, fontWeight: '700', color: '#F59E0B' },
+  charCount: { fontSize: 12, fontWeight: '700', color: colors.textMuted },
+  charCountWarn: { color: '#ef4444' },
+
   mentionDropdown: {
     backgroundColor: '#1A1A28',
     borderWidth: 1,
@@ -686,48 +755,40 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.04)',
   },
-  mentionAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-  },
-  mentionAvatarFallback: {
-    backgroundColor: '#2A2A3A',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mentionUsername: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  mentionAddr: {
-    fontSize: 10,
-    color: colors.textMuted,
-  },
+  mentionAvatar: { width: 30, height: 30, borderRadius: 15 },
+  mentionAvatarFallback: { backgroundColor: '#2A2A3A', justifyContent: 'center', alignItems: 'center' },
+  mentionUsername: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  mentionAddr: { fontSize: 10, color: colors.textMuted },
 
-  mediaPreviewWrap: { marginBottom: spacing.lg, borderRadius: 16, overflow: 'hidden', position: 'relative' },
-  mediaPreview: { width: '100%', height: 200, borderRadius: 16 },
+  mediaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  mediaThumbWrap: {
+    width: 90, height: 90, borderRadius: 12, overflow: 'hidden', position: 'relative',
+  },
+  mediaThumb: { width: '100%', height: '100%' },
   removeMediaBtn: {
-    position: 'absolute', top: 10, right: 10,
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    position: 'absolute', top: 5, right: 5,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  addMoreMedia: {
+    width: 90, height: 90, borderRadius: 12,
+    borderWidth: 1.5, borderStyle: 'dashed',
+    borderColor: 'rgba(139,92,246,0.4)',
+    backgroundColor: 'rgba(139,92,246,0.04)',
     justifyContent: 'center', alignItems: 'center',
   },
 
-  mediaRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xl },
-
-  tokenPickerTrigger: {
-    flex: 1, minHeight: 80, borderRadius: 16, borderWidth: 1.5,
-    borderColor: 'rgba(139,92,246,0.3)', borderStyle: 'dashed',
-    backgroundColor: 'rgba(139,92,246,0.04)',
-    justifyContent: 'center', alignItems: 'center', gap: 8,
-  },
-  tokenPickerText: { fontSize: 14, fontWeight: '700', color: colors.primary },
-
+  tokenCardsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
   tokenCard: {
     flex: 1, backgroundColor: '#12121E', borderRadius: 16, padding: spacing.md,
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)', minHeight: 170, overflow: 'hidden',
+    marginBottom: spacing.lg,
   },
   tokenCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   tokenCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -749,11 +810,19 @@ const styles = StyleSheet.create({
   tfText: { fontSize: 10, fontWeight: '700', color: colors.textMuted },
   tfTextActive: { color: colors.white },
 
+  mediaRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xl },
+  tokenPickerTrigger: {
+    flex: 1, minHeight: 80, borderRadius: 16, borderWidth: 1.5,
+    borderColor: 'rgba(139,92,246,0.3)', borderStyle: 'dashed',
+    backgroundColor: 'rgba(139,92,246,0.04)',
+    justifyContent: 'center', alignItems: 'center', gap: 8,
+  },
+  tokenPickerText: { fontSize: 14, fontWeight: '700', color: colors.primary },
   addMediaBox: {
     width: 110, borderRadius: 16, borderWidth: 1.5,
     borderColor: 'rgba(139,92,246,0.3)', borderStyle: 'dashed',
     justifyContent: 'center', alignItems: 'center', gap: 6,
-    minHeight: 170, backgroundColor: 'rgba(139,92,246,0.04)',
+    minHeight: 80, backgroundColor: 'rgba(139,92,246,0.04)',
   },
   addMediaPlus: { fontSize: 28, fontWeight: '300', color: colors.primary },
   addMediaLabel: { fontSize: 13, fontWeight: '600', color: colors.primary },
@@ -783,7 +852,6 @@ const styles = StyleSheet.create({
   settingRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   settingValue: { fontSize: 14, color: colors.textMuted, fontWeight: '500' },
 
-  // Modal
   modalContainer: { flex: 1, backgroundColor: '#0D0D15', paddingTop: spacing.xl },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
