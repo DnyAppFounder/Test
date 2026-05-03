@@ -8,10 +8,10 @@ const PINNED_POST_LOOKUP_USERNAME = 'VerificationBadge';
 
 // Premium subscription prices in USD equivalent
 export const PREMIUM_TIERS = [
-  { key: '1m', label: '1 Month', months: 1, usd: 8 },
-  { key: '3m', label: '3 Months', months: 3, usd: 22 },
-  { key: '6m', label: '6 Months', months: 6, usd: 40 },
-  { key: '1y', label: '1 Year', months: 12, usd: 72 },
+  { key: '1m', label: '1 Month', months: 1, usd: 4.99 },
+  { key: '3m', label: '3 Months', months: 3, usd: 12.99 },
+  { key: '6m', label: '6 Months', months: 6, usd: 24.99 },
+  { key: '1y', label: '1 Year', months: 12, usd: 39.99 },
 ] as const;
 
 export type PremiumTierKey = typeof PREMIUM_TIERS[number]['key'];

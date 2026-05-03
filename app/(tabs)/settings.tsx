@@ -26,11 +26,12 @@ import { Language, languageNames } from '@/constants/i18n';
 import { SocialService, UserProfile, NotificationSettings } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
-import { payToTreasury, TREASURY_WALLET, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
 import { SolanaPriceService } from '@/services/solana/priceService';
+import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
-type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'certification' | null;
+type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'verify' | 'premium' | null;
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -49,12 +50,20 @@ export default function SettingsScreen() {
   const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
-  // Premium Certification
-  const [certPlan, setCertPlan] = useState<'basic' | 'premium'>('basic');
-  const [certPayWith, setCertPayWith] = useState<'SOL' | 'DTEST'>('SOL');
-  const [certPayStatus, setCertPayStatus] = useState<PayStatus>('idle');
-  const [certTxSig, setCertTxSig] = useState<string | null>(null);
-  const [certDone, setCertDone] = useState(false);
+  // Blue badge verification (free 3-step)
+  const [verifyStatus, setVerifyStatus] = useState<{
+    followsDecent: boolean; followsBadge: boolean; repliedToPost: boolean;
+    alreadyVerified: boolean; decentId: string | null; badgeId: string | null; pinnedPostId: string | null;
+  } | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyChecking, setVerifyChecking] = useState(false);
+
+  // Premium certification (paid)
+  const [premiumTierKey, setPremiumTierKey] = useState<PremiumTierKey>('1m');
+  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  const [premiumPayStatus, setPremiumPayStatus] = useState<PayStatus>('idle');
+  const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
+  const [premiumDone, setPremiumDone] = useState(false);
   const [solUsdPrice, setSolUsdPrice] = useState(0);
 
   useEffect(() => {
@@ -62,47 +71,67 @@ export default function SettingsScreen() {
     svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
   }, []);
 
-  const CERT_PLANS = [
-    { key: 'basic' as const, label: 'Basic Verification', usdPrice: 9.99, desc: 'Blue checkmark • Verified badge on profile and posts' },
-    { key: 'premium' as const, label: 'Premium Certification', usdPrice: 29.99, desc: 'Gold badge • Priority visibility • Exclusive features' },
-  ];
-
   const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : 0;
 
-  const handleConfirmCertification = async () => {
+  const loadVerifyStatus = async () => {
+    if (!profile?.id) return;
+    setVerifyLoading(true);
+    try {
+      const status = await VerificationService.getVerificationStatus(profile.id);
+      setVerifyStatus(status);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleCheckVerification = async () => {
+    if (!profile?.id) return;
+    setVerifyChecking(true);
+    try {
+      const granted = await VerificationService.checkAndGrantBasicVerification(profile.id);
+      if (granted) {
+        await refreshProfile();
+        const status = await VerificationService.getVerificationStatus(profile.id);
+        setVerifyStatus(status);
+      } else {
+        const status = await VerificationService.getVerificationStatus(profile.id);
+        setVerifyStatus(status);
+        Alert.alert('Not Yet Verified', 'Please complete all 3 steps first.');
+      }
+    } finally {
+      setVerifyChecking(false);
+    }
+  };
+
+  const handleConfirmPremium = async () => {
     if (!profile || !activeAddress) return;
-    const plan = CERT_PLANS.find(p => p.key === certPlan)!;
-    const solAmt = usdToSol(plan.usdPrice);
-    setCertPayStatus('preparing');
+    const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
+    const solAmt = usdToSol(tier.usd);
+    setPremiumPayStatus('preparing');
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
-      amountSol: certPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
-      amountToken: certPayWith === 'DTEST' ? plan.usdPrice : undefined,
-      tokenMint: certPayWith === 'DTEST' ? DTEST_MINT : undefined,
+      amountSol: premiumPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
+      amountToken: premiumPayWith === 'DTEST' ? tier.usd : undefined,
+      tokenMint: premiumPayWith === 'DTEST' ? DTEST_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
       internalAccountIndex: selectedAccount?.accountIndex ?? 0,
-      onStatus: setCertPayStatus,
+      onStatus: setPremiumPayStatus,
     });
 
     if (!result.success) {
-      setCertPayStatus('idle');
+      setPremiumPayStatus('idle');
       Alert.alert('Payment Failed', result.error || 'Could not complete payment.');
       return;
     }
 
-    setCertTxSig(result.signature ?? null);
+    setPremiumTxSig(result.signature ?? null);
 
     try {
-      if (certPlan === 'basic') {
-        await SocialService.updateProfile(profile.id, { verified_basic: true } as any);
-      } else {
-        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-        await SocialService.updateProfile(profile.id, { premium_expiration: expiresAt } as any);
-      }
+      await VerificationService.activatePremium(profile.id, premiumTierKey, result.signature ?? undefined);
       await refreshProfile();
     } catch {}
-    setCertDone(true);
+    setPremiumDone(true);
   };
 
   const rawWalletAddress = activeAddress || selectedAccount?.address || '';
@@ -259,10 +288,16 @@ export default function SettingsScreen() {
           onPress: () => router.push('/rewards' as any),
         },
         {
+          icon: <Shield size={20} color="#3b82f6" />,
+          label: 'Get Verified (Free)',
+          value: (profile as any)?.verified_basic ? 'Verified' : undefined,
+          onPress: () => { loadVerifyStatus(); setActiveModal('verify'); },
+        },
+        {
           icon: <Shield size={20} color="#f59e0b" />,
           label: 'Premium Certification',
-          value: profile?.is_verified ? 'Active' : (profile as any)?.verified_basic ? 'Basic' : undefined,
-          onPress: () => { setCertDone(false); setCertPayStatus('idle'); setCertTxSig(null); setActiveModal('certification'); },
+          value: VerificationService.isPremiumActive(profile as any) ? 'Active' : undefined,
+          onPress: () => { setPremiumDone(false); setPremiumPayStatus('idle'); setPremiumTxSig(null); setActiveModal('premium'); },
         },
       ],
     },
@@ -758,107 +793,203 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
-      {/* Premium Certification Modal */}
-      <Modal visible={activeModal === 'certification'} animationType="slide" transparent>
+      {/* Blue Badge Verification Modal (Free) */}
+      <Modal visible={activeModal === 'verify'} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { paddingBottom: 32 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Premium Certification</Text>
-              <TouchableOpacity onPress={() => { setActiveModal(null); setCertDone(false); setCertPayStatus('idle'); }}>
+              <Text style={styles.modalTitle}>Get Verified</Text>
+              <TouchableOpacity onPress={() => setActiveModal(null)}>
                 <X size={24} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            {certDone ? (
+            {verifyLoading ? (
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 40 }} />
+            ) : verifyStatus?.alreadyVerified ? (
+              <View style={{ alignItems: 'center', gap: 16, paddingVertical: 24 }}>
+                <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                  <Check size={36} color="#3b82f6" />
+                </View>
+                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.textPrimary }}>Already Verified!</Text>
+                <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center' }}>
+                  Your blue badge is active on your profile and posts.
+                </Text>
+                <TouchableOpacity style={{ backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 50, marginTop: 8 }} onPress={() => setActiveModal(null)}>
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 20, lineHeight: 18 }}>
+                  Complete all 3 steps below to receive your free blue verification badge.
+                </Text>
+
+                {[
+                  {
+                    num: 1,
+                    label: 'Follow @Decent',
+                    done: verifyStatus?.followsDecent ?? false,
+                    action: verifyStatus?.decentId
+                      ? () => { setActiveModal(null); }
+                      : undefined,
+                    actionLabel: 'Go to Profile',
+                  },
+                  {
+                    num: 2,
+                    label: 'Follow @VerificationBadge',
+                    done: verifyStatus?.followsBadge ?? false,
+                    action: verifyStatus?.badgeId
+                      ? () => { setActiveModal(null); }
+                      : undefined,
+                    actionLabel: 'Go to Profile',
+                  },
+                  {
+                    num: 3,
+                    label: 'Reply to the pinned post by @VerificationBadge with exactly: "Get Verified ✔️"',
+                    done: verifyStatus?.repliedToPost ?? false,
+                    action: verifyStatus?.pinnedPostId
+                      ? () => { setActiveModal(null); }
+                      : undefined,
+                    actionLabel: 'View Post',
+                  },
+                ].map(step => (
+                  <View
+                    key={step.num}
+                    style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 16, backgroundColor: step.done ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: step.done ? '#3b82f6' : colors.surfaceBorder }}
+                  >
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: step.done ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                      {step.done
+                        ? <Check size={16} color="#fff" strokeWidth={3} />
+                        : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>{step.num}</Text>
+                      }
+                    </View>
+                    <View style={{ flex: 1, gap: 6 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary, lineHeight: 20 }}>{step.label}</Text>
+                    </View>
+                  </View>
+                ))}
+
+                <TouchableOpacity
+                  style={{ backgroundColor: '#3b82f6', borderRadius: 14, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 8 }}
+                  onPress={handleCheckVerification}
+                  disabled={verifyChecking}
+                  activeOpacity={0.88}
+                >
+                  {verifyChecking
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Check size={18} color="#fff" />
+                  }
+                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: 0.5 }}>
+                    {verifyChecking ? 'Checking...' : 'CHECK & VERIFY'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 10 }}>
+                  Verification is free. Make sure all 3 steps are completed before checking.
+                </Text>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Premium Certification Modal (Paid) */}
+      <Modal visible={activeModal === 'premium'} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: 32 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Premium Certification</Text>
+              <TouchableOpacity onPress={() => { setActiveModal(null); setPremiumDone(false); setPremiumPayStatus('idle'); }}>
+                <X size={24} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            {premiumDone ? (
               <View style={{ alignItems: 'center', gap: 16, paddingVertical: 24 }}>
                 <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(16,185,129,0.15)', justifyContent: 'center', alignItems: 'center' }}>
                   <Check size={36} color="#10b981" />
                 </View>
-                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.textPrimary }}>Certification Active!</Text>
+                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.textPrimary }}>Premium Active!</Text>
                 <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center' }}>
-                  Your {CERT_PLANS.find(p => p.key === certPlan)?.label} is now active.
+                  Your {PREMIUM_TIERS.find(t => t.key === premiumTierKey)?.label} premium is now active.
                 </Text>
-                {certTxSig && (
+                {premiumTxSig && (
                   <Text style={{ fontSize: 11, color: colors.primary, textAlign: 'center', fontWeight: '600' }} numberOfLines={1} ellipsizeMode="middle">
-                    {certTxSig}
+                    {premiumTxSig}
                   </Text>
                 )}
-                <TouchableOpacity style={{ backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 50, marginTop: 8 }} onPress={() => { setActiveModal(null); setCertDone(false); }}>
+                <TouchableOpacity style={{ backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 50, marginTop: 8 }} onPress={() => { setActiveModal(null); setPremiumDone(false); }}>
                   <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Done</Text>
                 </TouchableOpacity>
               </View>
-            ) : certPayStatus === 'preparing' || certPayStatus === 'signing' || certPayStatus === 'sending' ? (
+            ) : premiumPayStatus === 'preparing' || premiumPayStatus === 'signing' || premiumPayStatus === 'sending' ? (
               <View style={{ alignItems: 'center', gap: 16, paddingVertical: 32 }}>
                 <ActivityIndicator size="large" color={colors.primary} />
                 <Text style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }}>
-                  {certPayStatus === 'signing' ? 'Confirm in wallet...' :
-                   certPayStatus === 'sending' ? 'Transaction pending...' :
+                  {premiumPayStatus === 'signing' ? 'Confirm in wallet...' :
+                   premiumPayStatus === 'sending' ? 'Transaction pending...' :
                    'Preparing transaction...'}
                 </Text>
               </View>
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
-                {/* Plan selection */}
                 <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 10, marginTop: 4 }}>SELECT PLAN</Text>
-                {CERT_PLANS.map(plan => {
-                  const isSelected = certPlan === plan.key;
-                  const solAmt = usdToSol(plan.usdPrice);
-                  const dispAmt = certPayWith === 'SOL'
+                {PREMIUM_TIERS.map(tier => {
+                  const isSelected = premiumTierKey === tier.key;
+                  const solAmt = usdToSol(tier.usd);
+                  const dispAmt = premiumPayWith === 'SOL'
                     ? (solUsdPrice > 0 ? `≈ ${solAmt.toFixed(3)} SOL` : '... SOL')
-                    : `≈ ${plan.usdPrice} DTEST`;
+                    : `≈ ${tier.usd} DTEST`;
                   return (
                     <TouchableOpacity
-                      key={plan.key}
+                      key={tier.key}
                       style={{ backgroundColor: isSelected ? 'rgba(245,158,11,0.1)' : colors.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: isSelected ? '#f59e0b' : colors.surfaceBorder, flexDirection: 'row', alignItems: 'center', gap: 12 }}
-                      onPress={() => setCertPlan(plan.key)}
+                      onPress={() => setPremiumTierKey(tier.key)}
                       activeOpacity={0.8}
                     >
                       <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: isSelected ? '#f59e0b' : 'rgba(245,158,11,0.15)', justifyContent: 'center', alignItems: 'center' }}>
                         <Shield size={20} color={isSelected ? '#fff' : '#f59e0b'} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: colors.textPrimary }}>{plan.label}</Text>
-                        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>{plan.desc}</Text>
+                        <Text style={{ fontSize: 15, fontWeight: '700', color: colors.textPrimary }}>{tier.label}</Text>
                         <Text style={{ fontSize: 12, color: '#f59e0b', fontWeight: '600', marginTop: 3 }}>{dispAmt}</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                        <Text style={{ fontSize: 18, fontWeight: '900', color: colors.textPrimary }}>${plan.usdPrice}</Text>
+                        <Text style={{ fontSize: 18, fontWeight: '900', color: colors.textPrimary }}>${tier.usd}</Text>
                         {isSelected && <Check size={16} color="#f59e0b" strokeWidth={3} />}
                       </View>
                     </TouchableOpacity>
                   );
                 })}
 
-                {/* Pay with */}
                 <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 10, marginTop: 6 }}>PAY WITH</Text>
                 <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
                   {(['SOL', 'DTEST'] as const).map(method => (
                     <TouchableOpacity
                       key={method}
-                      style={{ flex: 1, backgroundColor: certPayWith === method ? 'rgba(139,92,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: certPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
-                      onPress={() => setCertPayWith(method)}
+                      style={{ flex: 1, backgroundColor: premiumPayWith === method ? 'rgba(59,130,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: premiumPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
+                      onPress={() => setPremiumPayWith(method)}
                       activeOpacity={0.8}
                     >
                       <Text style={{ fontSize: 16 }}>{method === 'SOL' ? '◎' : 'D'}</Text>
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: certPayWith === method ? colors.primary : colors.textPrimary }}>{method}</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: premiumPayWith === method ? colors.primary : colors.textPrimary }}>{method}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                {/* Summary */}
                 {(() => {
-                  const plan = CERT_PLANS.find(p => p.key === certPlan)!;
-                  const solAmt = usdToSol(plan.usdPrice);
-                  const dispAmt = certPayWith === 'SOL' ? (solUsdPrice > 0 ? `${solAmt.toFixed(4)} SOL` : '... SOL') : `${plan.usdPrice} DTEST`;
+                  const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
+                  const solAmt = usdToSol(tier.usd);
+                  const dispAmt = premiumPayWith === 'SOL' ? (solUsdPrice > 0 ? `${solAmt.toFixed(4)} SOL` : '... SOL') : `${tier.usd} DTEST`;
                   return (
                     <View style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: colors.surfaceBorder, gap: 10 }}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 13, color: colors.textMuted }}>Selected Plan</Text>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>{plan.label}</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>{tier.label}</Text>
                       </View>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 13, color: colors.textMuted }}>USD Price</Text>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>${plan.usdPrice}</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>${tier.usd}</Text>
                       </View>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 13, color: colors.textMuted }}>You Pay</Text>
@@ -874,11 +1005,11 @@ export default function SettingsScreen() {
 
                 <TouchableOpacity
                   style={{ backgroundColor: '#f59e0b', borderRadius: 14, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
-                  onPress={handleConfirmCertification}
+                  onPress={handleConfirmPremium}
                   activeOpacity={0.88}
                 >
                   <Shield size={18} color="#fff" />
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: 1 }}>CONFIRM CERTIFICATION</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: 1 }}>CONFIRM PREMIUM</Text>
                 </TouchableOpacity>
                 <Text style={{ fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 10 }}>
                   Payment goes directly to DAWEN treasury on Solana. Non-refundable.
