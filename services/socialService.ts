@@ -1,5 +1,22 @@
 import { supabase } from '@/lib/supabase';
 
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+const REPOSTS_FN = `${SUPABASE_URL}/functions/v1/jupiter-proxy`;
+
+async function repostsFetch(action: string, body: object): Promise<any> {
+  const res = await fetch(`${REPOSTS_FN}?repost_action=${action}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Apikey': SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 export interface UserProfile {
   id: string;
   wallet_address: string;
@@ -281,21 +298,17 @@ export class SocialService {
     if (currentUserId) {
       const postIds = sortedPosts.map((p: any) => p.id);
 
-      const [likesRes, repostsRes] = await Promise.all([
+      const [likesRes, repostsResult] = await Promise.all([
         supabase
           .from('post_likes')
           .select('post_id')
           .eq('user_id', currentUserId)
           .in('post_id', postIds),
-        supabase
-          .from('reposts')
-          .select('post_id')
-          .eq('user_id', currentUserId)
-          .in('post_id', postIds),
+        repostsFetch('check', { userId: currentUserId, postIds }),
       ]);
 
       likedSet = new Set((likesRes.data || []).map((l: { post_id: string }) => l.post_id));
-      repostedSet = new Set((repostsRes.data || []).map((r: { post_id: string }) => r.post_id));
+      repostedSet = new Set<string>((repostsResult?.repostedIds || []) as string[]);
     }
 
     return sortedPosts.map((p: any) => ({
@@ -327,12 +340,12 @@ export class SocialService {
     let repostedSet = new Set<string>();
     if (currentUserId && data.length > 0) {
       const postIds = data.map((p: Post) => p.id);
-      const [likesRes, repostsRes] = await Promise.all([
+      const [likesRes, repostsResult] = await Promise.all([
         supabase.from('post_likes').select('post_id').eq('user_id', currentUserId).in('post_id', postIds),
-        supabase.from('reposts').select('post_id').eq('user_id', currentUserId).in('post_id', postIds),
+        repostsFetch('check', { userId: currentUserId, postIds }),
       ]);
       likedSet = new Set((likesRes.data || []).map((l: any) => l.post_id));
-      repostedSet = new Set((repostsRes.data || []).map((r: any) => r.post_id));
+      repostedSet = new Set<string>((repostsResult?.repostedIds || []) as string[]);
     }
 
     return data.map((p: Post) => ({
@@ -488,43 +501,21 @@ export class SocialService {
   }
 
   static async toggleRepost(postId: string, userId: string): Promise<boolean> {
-    const { data: existing } = await supabase
-      .from('reposts')
-      .select('id')
-      .eq('post_id', postId)
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (existing) {
-      await supabase.from('reposts').delete().eq('id', existing.id);
-      const { data: post } = await supabase
-        .from('posts')
-        .select('reposts_count')
-        .eq('id', postId)
-        .maybeSingle();
-      if (post) {
-        await supabase
+    const result = await repostsFetch('toggle', { postId, userId });
+    if (result && typeof result.reposted === 'boolean') {
+      if (result.reposted) {
+        const { data: post } = await supabase
           .from('posts')
-          .update({ reposts_count: Math.max(0, (post.reposts_count || 0) - 1) })
-          .eq('id', postId);
+          .select('author_id')
+          .eq('id', postId)
+          .maybeSingle();
+        if (post) {
+          await this.createNotification(post.author_id, userId, 'repost', postId, 'reposted your post');
+        }
       }
-      return false;
+      return result.reposted;
     }
-
-    await supabase.from('reposts').insert({ post_id: postId, user_id: userId });
-    const { data: post } = await supabase
-      .from('posts')
-      .select('reposts_count, author_id')
-      .eq('id', postId)
-      .maybeSingle();
-    if (post) {
-      await supabase
-        .from('posts')
-        .update({ reposts_count: (post.reposts_count || 0) + 1 })
-        .eq('id', postId);
-      await this.createNotification(post.author_id, userId, 'repost', postId, 'reposted your post');
-    }
-    return true;
+    return false;
   }
 
   static async getComments(postId: string, currentUserId?: string): Promise<PostComment[]> {

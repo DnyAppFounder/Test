@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,6 +12,70 @@ const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
 const JUPITER_PRICE_API = "https://price.jup.ag/v4/price";
 const JUPITER_TOKEN_LIST = "https://token.jup.ag/all";
 
+async function handleReposts(req: Request, repostAction: string): Promise<Response> {
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  if (repostAction === "toggle") {
+    const body = await req.json();
+    const { postId, userId } = body;
+    if (!postId || !userId) {
+      return new Response(JSON.stringify({ error: "postId and userId required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: existing } = await supabase
+      .from("reposts")
+      .select("id")
+      .eq("post_id", postId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from("reposts").delete().eq("id", existing.id);
+      const { data: post } = await supabase.from("posts").select("reposts_count").eq("id", postId).maybeSingle();
+      if (post) {
+        await supabase.from("posts").update({ reposts_count: Math.max(0, (post.reposts_count || 0) - 1) }).eq("id", postId);
+      }
+      return new Response(JSON.stringify({ reposted: false }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    } else {
+      await supabase.from("reposts").insert({ post_id: postId, user_id: userId });
+      const { data: post } = await supabase.from("posts").select("reposts_count").eq("id", postId).maybeSingle();
+      if (post) {
+        await supabase.from("posts").update({ reposts_count: (post.reposts_count || 0) + 1 }).eq("id", postId);
+      }
+      return new Response(JSON.stringify({ reposted: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+  }
+
+  if (repostAction === "check") {
+    const body = await req.json();
+    const { userId, postIds } = body;
+    if (!userId || !Array.isArray(postIds) || postIds.length === 0) {
+      return new Response(JSON.stringify({ repostedIds: [] }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    const { data } = await supabase
+      .from("reposts")
+      .select("post_id")
+      .eq("user_id", userId)
+      .in("post_id", postIds);
+    return new Response(
+      JSON.stringify({ repostedIds: (data || []).map((r: any) => r.post_id) }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  return new Response(JSON.stringify({ error: "Unknown repost_action" }), {
+    status: 400,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -19,6 +84,11 @@ Deno.serve(async (req: Request) => {
   try {
     const url = new URL(req.url);
     const action = url.searchParams.get("action") || "";
+    const repostAction = url.searchParams.get("repost_action") || "";
+
+    if (repostAction) {
+      return await handleReposts(req, repostAction);
+    }
 
     if (action === "quote") {
       const inputMint = url.searchParams.get("inputMint") || "";
