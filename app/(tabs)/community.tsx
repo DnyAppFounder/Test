@@ -21,6 +21,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { TransactionManager } from '@/lib/wallet/TransactionManager';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
@@ -81,6 +82,14 @@ export default function CommunityScreen() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // SOL/USD price for promotion tier conversion
+  const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
+  useEffect(() => {
+    const svc = new SolanaPriceService();
+    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+  }, []);
+  const usdToSol = (usd: number) => solUsdPrice > 0 ? (usd / solUsdPrice) : 0;
 
   // Timestamp set when notifications are cleared — hides older notifications locally
   const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
@@ -324,13 +333,14 @@ export default function CommunityScreen() {
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
     if (!tier) return;
 
+    const solAmount = usdToSol((tier as any).usdPrice);
     setPromoteStep('processing');
     try {
       const txManager = TransactionManager.getInstance();
       const result = await txManager.sendTransaction({
         blockchain: 'solana',
         to: DAWEN_TREASURY,
-        amount: String(tier.solPrice),
+        amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
         accountIndex: 0,
       });
 
@@ -1325,11 +1335,13 @@ export default function CommunityScreen() {
                       </View>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <Zap size={13} color="#F59E0B" strokeWidth={2} />
-                        <Text style={styles.tierPrice}>{tier.solPrice} SOL</Text>
+                      <Text style={[styles.tierPrice, { color: '#F59E0B' }]}>${(tier as any).usdPrice}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                        <Zap size={11} color={colors.textMuted} strokeWidth={2} />
+                        <Text style={styles.tierCurrency}>
+                          {solUsdPrice > 0 ? `${usdToSol((tier as any).usdPrice).toFixed(4)} SOL` : '... SOL'}
+                        </Text>
                       </View>
-                      <Text style={styles.tierCurrency}>Solana</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -1352,9 +1364,14 @@ export default function CommunityScreen() {
                   <View style={styles.confirmDivider} />
                   <View style={styles.confirmRow}>
                     <Text style={styles.confirmLabel}>Price</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Zap size={13} color="#F59E0B" strokeWidth={2} />
-                      <Text style={styles.confirmValue}>{(selectedTier as any).solPrice} SOL</Text>
+                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                      <Text style={[styles.confirmValue, { color: '#F59E0B' }]}>${(selectedTier as any).usdPrice}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                        <Zap size={11} color={colors.textMuted} strokeWidth={2} />
+                        <Text style={{ fontSize: 12, color: colors.textMuted }}>
+                          {solUsdPrice > 0 ? `${usdToSol((selectedTier as any).usdPrice).toFixed(4)} SOL` : '... SOL'}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                   <View style={styles.confirmDivider} />
@@ -1373,7 +1390,9 @@ export default function CommunityScreen() {
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirmPromotion}>
-                  <Text style={styles.confirmBtnText}>Pay {(selectedTier as any).solPrice} SOL & Promote</Text>
+                  <Text style={styles.confirmBtnText}>
+                    Pay {solUsdPrice > 0 ? `${usdToSol((selectedTier as any).usdPrice).toFixed(4)} SOL` : `$${(selectedTier as any).usdPrice}`} & Promote
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelLink} onPress={() => setPromoteStep('select')}>
                   <Text style={styles.cancelLinkText}>Go back</Text>
