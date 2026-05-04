@@ -54,7 +54,7 @@ class WalletAssetLoaderService {
         decimals: 9,
         balance: portfolio.solBalance.toString(),
         uiBalance: portfolio.solBalance,
-        price: portfolio.solBalance > 0 ? portfolio.solValue / portfolio.solBalance : 0,
+        price: portfolio.solPrice || 0,
         value: portfolio.solValue,
         priceChange24h: 0,
         logoUrl: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
