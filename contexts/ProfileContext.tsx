@@ -74,6 +74,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const uploadAvatar = useCallback(async (imageUri: string): Promise<string | null> => {
     if (!profile || !activeAddress) return null;
+    // Throws on error — callers must catch and show the message
     const url = await SocialService.uploadAvatar(activeAddress, imageUri, profile.id);
     if (url) setProfile(prev => prev ? { ...prev, avatar_url: url } : prev);
     return url;

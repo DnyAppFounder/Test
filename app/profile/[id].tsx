@@ -351,21 +351,38 @@ export default function ProfileScreen() {
     }
   };
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const handleSaveProfile = async () => {
     if (!profile) return;
     setSaving(true);
+    setSaveError(null);
     try {
       let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
-      if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
-        const uploaded = await uploadGlobalAvatar(avatarUrl);
-        // Never persist local URI — use uploaded permanent URL or keep existing
-        avatarUrl = uploaded ?? profile.avatar_url ?? undefined;
+      if (avatarUrl && !avatarUrl.startsWith('http')) {
+        try {
+          const uploaded = await uploadGlobalAvatar(avatarUrl);
+          if (!uploaded) {
+            setSaveError('Avatar upload failed. Please try again.');
+            setSaving(false);
+            return;
+          }
+          avatarUrl = uploaded;
+        } catch (uploadErr: any) {
+          setSaveError(uploadErr?.message || 'Avatar upload failed. Please try again.');
+          setSaving(false);
+          return;
+        }
       }
       let bannerUrl: string | undefined = editBannerUrl.trim() || undefined;
-      if (bannerUrl && (bannerUrl.startsWith('file://') || bannerUrl.startsWith('blob:') || bannerUrl.startsWith('data:'))) {
-        const uploaded = await SocialService.uploadAvatar(profile.wallet_address, bannerUrl, profile.id + '_banner');
-        if (uploaded) bannerUrl = uploaded;
-        else bannerUrl = (profile as any).banner_url ?? undefined;
+      if (bannerUrl && !bannerUrl.startsWith('http')) {
+        try {
+          const uploaded = await SocialService.uploadAvatar(profile.wallet_address, bannerUrl, profile.id + '_banner');
+          if (uploaded) bannerUrl = uploaded;
+          else bannerUrl = (profile as any).banner_url ?? undefined;
+        } catch {
+          bannerUrl = (profile as any).banner_url ?? undefined;
+        }
       }
       await updateGlobalProfile({
         username: editUsername.trim() || undefined,
@@ -377,9 +394,11 @@ export default function ProfileScreen() {
         discord_url: editDiscordUrl.trim() || null,
       });
       await loadProfile();
+      setShowEditModal(false);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Save failed. Please try again.');
     } finally {
       setSaving(false);
-      setShowEditModal(false);
     }
   };
 
@@ -1332,6 +1351,12 @@ export default function ProfileScreen() {
                 autoCapitalize="none"
                 keyboardType="url"
               />
+
+              {saveError ? (
+                <Text style={{ color: colors.error, fontSize: 13, marginBottom: 12, textAlign: 'center' }}>
+                  {saveError}
+                </Text>
+              ) : null}
 
               <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile} disabled={saving}>
                 {saving

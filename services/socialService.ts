@@ -193,56 +193,75 @@ export class SocialService {
     imageUri: string,
     profileId: string
   ): Promise<string | null> {
-    try {
-      const fileName = `${walletAddress}/avatar_${Date.now()}.jpg`;
+    const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+    const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
 
+    try {
       let blob: Blob;
 
       if (imageUri.startsWith('data:')) {
-        // Base64 data URI — decode directly
         const [header, base64] = imageUri.split(',');
         const mime = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        if (!ALLOWED_MIME.includes(mime)) throw new Error(`Unsupported format: ${mime}`);
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         blob = new Blob([bytes], { type: mime });
-      } else if (imageUri.startsWith('blob:') || imageUri.startsWith('http')) {
-        // blob: URIs and remote http(s) — fetch works
-        const response = await fetch(imageUri);
-        blob = await response.blob();
       } else {
-        // file:// or unknown scheme on native — fetch directly
+        // blob:, file://, or http(s):// — fetch works for all on web and native
         const response = await fetch(imageUri);
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
         blob = await response.blob();
       }
 
-      // Upload to Supabase Storage
+      // Validate mime type
+      const mimeType = blob.type || 'image/jpeg';
+      const isImage = ALLOWED_MIME.some(m => mimeType.startsWith(m.split('/')[0]) && mimeType.includes(mimeType.split('/')[1]));
+      if (blob.type && !ALLOWED_MIME.includes(blob.type)) {
+        throw new Error(`File type not allowed: ${blob.type}. Use PNG, JPG, JPEG, or WebP.`);
+      }
+
+      // Validate size
+      if (blob.size > MAX_SIZE_BYTES) {
+        throw new Error(`Image too large (${(blob.size / 1024 / 1024).toFixed(1)} MB). Maximum 5 MB.`);
+      }
+
+      // Derive extension from mime type
+      const extMap: Record<string, string> = {
+        'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
+        'image/webp': 'webp', 'image/gif': 'gif',
+      };
+      const ext = extMap[mimeType] || 'jpg';
+      // Use fixed filename per user so old avatars are overwritten (no storage bloat)
+      const fileName = `${walletAddress}/avatar.${ext}`;
+
       const { data, error } = await supabase.storage
         .from('avatars')
         .upload(fileName, blob, {
-          contentType: blob.type || 'image/jpeg',
+          contentType: mimeType,
           upsert: true,
         });
 
       if (error) {
         console.error('[Avatar] Upload error:', error);
-        return null;
+        throw new Error(error.message || 'Upload failed');
       }
 
-      // Get public URL
       const { data: urlData } = supabase.storage
         .from('avatars')
         .getPublicUrl(data.path);
 
-      const publicUrl = urlData.publicUrl;
+      // Bust cache by appending timestamp so image refreshes everywhere
+      const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
 
-      // Update profile with the permanent URL
+      // Persist to DB
       await this.updateProfile(profileId, { avatar_url: publicUrl });
 
       return publicUrl;
     } catch (error) {
       console.error('[Avatar] Upload failed:', error);
-      return null;
+      // Re-throw so callers can show error to user
+      throw error;
     }
   }
 

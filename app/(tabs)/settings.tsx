@@ -165,32 +165,46 @@ export default function SettingsScreen() {
   };
 
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleSaveProfile = async () => {
     if (!profile) return;
     setIsUploading(true);
+    setUploadError(null);
     try {
       let avatarUrl: string | undefined = editAvatarUrl.trim() || undefined;
-      if (avatarUrl && (avatarUrl.startsWith('file://') || avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
-        // Upload to Supabase storage; use permanent URL only, never persist local URI
-        const uploaded = await uploadGlobalAvatar(avatarUrl);
-        avatarUrl = uploaded ?? profile.avatar_url ?? undefined;
+      if (avatarUrl && !avatarUrl.startsWith('http')) {
+        // Local URI — upload to storage
+        try {
+          const uploaded = await uploadGlobalAvatar(avatarUrl);
+          if (uploaded) {
+            avatarUrl = uploaded;
+          } else {
+            setUploadError('Upload failed. Please try again.');
+            setIsUploading(false);
+            return;
+          }
+        } catch (uploadErr: any) {
+          setUploadError(uploadErr?.message || 'Upload failed. Please try again.');
+          setIsUploading(false);
+          return;
+        }
       }
       await updateGlobalProfile({
         username: editUsername.trim() || undefined,
         bio: editBio.trim(),
-        // Only set avatar_url if it's a real remote URL
         avatar_url: avatarUrl && avatarUrl.startsWith('http') ? avatarUrl : profile.avatar_url ?? undefined,
       });
-    } catch (err) {
-      console.error('[Settings] handleSaveProfile error:', err);
+      setActiveModal(null);
+    } catch (err: any) {
+      setUploadError(err?.message || 'Save failed. Please try again.');
     } finally {
       setIsUploading(false);
     }
-    setActiveModal(null);
   };
 
   const handlePickImage = async () => {
+    setUploadError(null);
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -529,16 +543,24 @@ export default function SettingsScreen() {
               <Text style={styles.profileCharCount}>{editBio.length}/160</Text>
             </View>
 
+            {/* Error message */}
+            {uploadError ? (
+              <Text style={{ color: colors.error, fontSize: 13, marginBottom: 12, textAlign: 'center' }}>
+                {uploadError}
+              </Text>
+            ) : null}
+
             {/* Save button */}
             <TouchableOpacity
-              style={styles.profileSaveBtn}
+              style={[styles.profileSaveBtn, isUploading && { opacity: 0.7 }]}
               onPress={handleSaveProfile}
               disabled={isUploading}
               activeOpacity={0.9}
             >
-              <Text style={styles.profileSaveBtnText}>
-                {isUploading ? 'Saving...' : 'Save Changes'}
-              </Text>
+              {isUploading
+                ? <ActivityIndicator size="small" color={colors.white} />
+                : <Text style={styles.profileSaveBtnText}>Save Changes</Text>
+              }
             </TouchableOpacity>
           </View>
         </View>
