@@ -279,10 +279,17 @@ class JupiterSwapService {
     try {
       const url = `${proxy}?action=price&ids=${tokenMint}`;
       const response = await fetch(url, { headers: proxyHeaders() });
-      if (!response.ok) return 0;
+      if (!response.ok) {
+        console.error('[Jupiter] getTokenPrice HTTP', response.status);
+        return 0;
+      }
       const data = await response.json();
-      return data?.data?.[tokenMint]?.price || 0;
-    } catch {
+      // Jupiter Price API v3: { mint: { usdPrice } }
+      // Legacy v6: { data: { mint: { price } } }
+      const entry = data?.[tokenMint] ?? data?.data?.[tokenMint];
+      return entry?.usdPrice ?? entry?.price ?? 0;
+    } catch (err: any) {
+      console.error('[Jupiter] getTokenPrice error:', err?.message);
       return 0;
     }
   }
@@ -294,15 +301,22 @@ class JupiterSwapService {
       const ids = tokenMints.join(',');
       const url = `${proxy}?action=price&ids=${ids}`;
       const response = await fetch(url, { headers: proxyHeaders() });
-      if (!response.ok) return new Map();
+      if (!response.ok) {
+        console.error('[Jupiter] getMultipleTokenPrices HTTP', response.status);
+        return new Map();
+      }
       const data = await response.json();
       const prices = new Map<string, number>();
+      // Support both v3 (top-level) and v6 (data wrapper)
+      const source = data?.data ?? data;
       for (const mint of tokenMints) {
-        const price = data?.data?.[mint]?.price;
-        if (price) prices.set(mint, price);
+        const entry = source?.[mint];
+        const price = entry?.usdPrice ?? entry?.price;
+        if (typeof price === 'number' && price > 0) prices.set(mint, price);
       }
       return prices;
-    } catch {
+    } catch (err: any) {
+      console.error('[Jupiter] getMultipleTokenPrices error:', err?.message);
       return new Map();
     }
   }
