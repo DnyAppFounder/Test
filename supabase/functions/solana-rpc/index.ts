@@ -14,7 +14,7 @@ const RPC_ENDPOINTS = [SOLANA_RPC_URL].filter(Boolean) as string[];
 
 const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
 const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
-const JUPITER_PRICE_API = "https://price.jup.ag/v6/price";
+const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
 const JUPITER_TOKEN_LIST_ALL = "https://token.jup.ag/all";
 const JUPITER_TOKEN_LIST_STRICT = "https://token.jup.ag/strict";
 
