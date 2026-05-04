@@ -14,6 +14,10 @@ export interface WalletBalances {
 }
 
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+// wSOL token accounts should not appear in the SPL token list —
+// native SOL is fetched separately via getBalance(). wSOL is only
+// a synthetic mint used by Jupiter for routing.
+const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 
 async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1500): Promise<T> {
   for (let i = 0; i <= retries; i++) {
@@ -77,7 +81,9 @@ export class SolanaBalanceService {
 
           // Filter NFTs: decimals === 0 with exactly 1 token = NFT
           const isNFT = tokenAmount.decimals === 0 && uiAmount === 1;
-          if (uiAmount && uiAmount > 0 && !isNFT) {
+          // Exclude wSOL — native SOL is fetched via getBalance(), not token accounts
+          const isWSOL = parsedInfo.mint === WSOL_MINT;
+          if (uiAmount && uiAmount > 0 && !isNFT && !isWSOL) {
             tokens.push({
               mint: parsedInfo.mint,
               balance: parseInt(tokenAmount.amount),
