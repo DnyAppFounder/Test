@@ -15,6 +15,7 @@ export interface EnrichedToken {
 export interface WalletPortfolio {
   address: string;
   solBalance: number;
+  solPrice: number;
   solValue: number;
   tokens: EnrichedToken[];
   totalValue: number;
@@ -76,6 +77,7 @@ export class SolanaWalletService {
     return {
       address,
       solBalance: balances.solBalance,
+      solPrice,
       solValue,
       tokens: enrichedTokens,
       totalValue,
