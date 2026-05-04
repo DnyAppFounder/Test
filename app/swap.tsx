@@ -33,7 +33,7 @@ type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'erro
 
 export default function SwapScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens, nativeBalance } = useWallet();
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -51,9 +51,17 @@ export default function SwapScreen() {
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
 
+  const SOL_FEE_BUFFER = 0.002;
+
   const fromTokenBalance = fromToken
-    ? parseFloat(walletTokens.find(t => t.contract_address === fromToken.address)?.balance || '0')
+    ? fromToken.address === SOL_MINT
+      ? nativeBalance
+      : parseFloat(walletTokens.find(t => t.contract_address === fromToken.address)?.balance || '0')
     : 0;
+
+  const maxSpendable = fromToken?.address === SOL_MINT
+    ? Math.max(0, nativeBalance - SOL_FEE_BUFFER)
+    : fromTokenBalance;
 
   const shortAddr = activeWallet
     ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
@@ -101,11 +109,19 @@ export default function SwapScreen() {
     const amount = parseFloat(fromAmount);
     if (!fromToken || !toToken || !fromAmount || isNaN(amount) || amount <= 0) {
       setQuote(null);
+      setErrorMsg(null);
+      setStatus('idle');
+      return;
+    }
+    if (amount > fromTokenBalance) {
+      setQuote(null);
+      setErrorMsg(`Insufficient ${fromToken.symbol} balance`);
+      setStatus('error');
       return;
     }
     const timer = setTimeout(() => fetchQuote(amount), 500);
     return () => clearTimeout(timer);
-  }, [fromAmount, fromToken, toToken]);
+  }, [fromAmount, fromToken, toToken, fromTokenBalance]);
 
   const fetchQuote = async (amount: number) => {
     if (!fromToken || !toToken) return;
@@ -115,10 +131,11 @@ export default function SwapScreen() {
       const amountInSmallest = Math.floor(amount * Math.pow(10, fromToken.decimals));
       if (amountInSmallest < 1) {
         setQuote(null);
-        setErrorMsg('Amount too small.');
+        setErrorMsg('Amount too small — enter a larger value.');
         setStatus('error');
         return;
       }
+      console.log('[Swap] Quote request — from:', fromToken.symbol, 'to:', toToken.symbol, 'amount:', amountInSmallest, 'inputMint:', fromToken.address, 'outputMint:', toToken.address);
       const q = await jupiterSwapService.getQuote(fromToken.address, toToken.address, amountInSmallest, 50);
       if (q) {
         setQuote(q);
@@ -128,19 +145,24 @@ export default function SwapScreen() {
         setQuote(null);
         const isDawen = toToken.address === DAWEN_MINT || fromToken.address === DAWEN_MINT;
         setErrorMsg(isDawen
-          ? 'No Jupiter route available for DAWEN yet. Try another token or check liquidity.'
+          ? 'No route available for this token yet. Try SOL → USDC or another liquid pair.'
           : 'No route available. Insufficient liquidity for this pair.');
         setStatus('error');
       }
     } catch (e: any) {
       setQuote(null);
       const msg = e?.message || '';
-      if (msg.includes('400')) {
-        setErrorMsg('No route available. This token may lack liquidity on Jupiter.');
-      } else if (msg.includes('network') || msg.includes('fetch')) {
+      console.error('[Swap] Quote failed — from:', fromToken.symbol, 'to:', toToken.symbol, 'error:', msg);
+      if (msg.includes('Insufficient') || msg.includes('balance')) {
+        setErrorMsg('Insufficient balance for this swap.');
+      } else if (msg.includes('400') || msg.includes('No route') || msg.includes('route')) {
+        setErrorMsg('No route available. This pair may lack liquidity on Jupiter.');
+      } else if (msg.includes('Jupiter unavailable') || msg.includes('502') || msg.includes('503')) {
+        setErrorMsg('Jupiter is currently unavailable. Please try again in a moment.');
+      } else if (msg.includes('network') || msg.includes('fetch') || msg.includes('Failed to fetch')) {
         setErrorMsg('Network error. Check your connection and try again.');
       } else {
-        setErrorMsg(`Jupiter API failed: ${msg || 'Unknown error'}`);
+        setErrorMsg(`Quote failed: ${msg || 'Unknown error'}`);
       }
       setStatus('error');
     }
@@ -244,7 +266,9 @@ export default function SwapScreen() {
 
   const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
   const isProcessing = status === 'signing' || status === 'sending';
-  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error';
+  const parsedAmount = parseFloat(fromAmount);
+  const isInsufficientBalance = fromToken && fromAmount && !isNaN(parsedAmount) && parsedAmount > fromTokenBalance;
+  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
 
   const fromAmountUsd = fromToken && fromAmount && fromTokenPrice > 0
     ? `≈ $${(parseFloat(fromAmount) * fromTokenPrice).toFixed(2)}`
@@ -258,11 +282,12 @@ export default function SwapScreen() {
     if (!hasWallet) return 'Connect Wallet';
     if (!fromToken || !toToken) return 'Select Token';
     if (!fromAmount || parseFloat(fromAmount) <= 0) return 'Enter Amount';
+    if (isInsufficientBalance) return `Insufficient ${fromToken?.symbol ?? ''} Balance`;
     if (status === 'quoting') return 'Getting Quote...';
     if (status === 'signing') return 'Confirm in Wallet';
     if (status === 'sending') return 'Sending Transaction...';
     if (status === 'success') return 'Swap Successful!';
-    if (status === 'error') return 'Retry Swap';
+    if (status === 'error') return 'Retry';
     if (quote) return 'CONFIRM SWAP';
     return 'Enter Amount';
   };
@@ -360,15 +385,10 @@ export default function SwapScreen() {
               </TouchableOpacity>
 
               <View style={styles.amountWrap}>
-                {hasWallet && fromToken && fromTokenBalance > 0 && (
+                {hasWallet && fromToken && maxSpendable > 0 && (
                   <TouchableOpacity
                     style={styles.maxBtn}
-                    onPress={() => {
-                      const maxAmt = fromToken.address === SOL_MINT
-                        ? Math.max(0, fromTokenBalance - 0.01)
-                        : fromTokenBalance;
-                      setFromAmount(maxAmt.toFixed(6));
-                    }}
+                    onPress={() => setFromAmount(maxSpendable.toFixed(6))}
                     disabled={isProcessing}
                   >
                     <Text style={styles.maxBtnText}>MAX</Text>
@@ -483,10 +503,10 @@ export default function SwapScreen() {
         <TouchableOpacity
           style={[
             styles.confirmBtn,
-            (!canSwap && status !== 'error') && styles.confirmBtnDisabled,
+            (!canSwap || !!isInsufficientBalance) && styles.confirmBtnDisabled,
           ]}
           onPress={handleExecuteSwap}
-          disabled={!canSwap && status !== 'idle'}
+          disabled={!canSwap || !!isInsufficientBalance}
           activeOpacity={0.85}
         >
           {isProcessing && <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />}
