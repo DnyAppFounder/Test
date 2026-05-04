@@ -9,7 +9,6 @@ export interface TokenPrice {
 }
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-// Batch size for Jupiter price API — URL length limit safety
 const BATCH_SIZE = 50;
 
 function getProxyBase(): string {
@@ -33,20 +32,24 @@ function proxyHeaders(): Record<string, string> {
   return key ? { Authorization: `Bearer ${key}`, apikey: key } : {};
 }
 
+// Jupiter Price API v3 response shape:
+// { "So111...": { "usdPrice": 147.47, "priceChange24h": 1.29, "decimals": 9, "blockId": ... } }
+// Note: top-level keys are the mint addresses — no "data" wrapper.
+
 export class SolanaPriceService {
   private priceCache: Map<string, TokenPrice> = new Map();
   private cacheExpiry = 30_000;
 
-  /** Fetch prices for a batch of mint addresses via Jupiter proxy */
-  private async fetchJupiterPrices(mints: string[]): Promise<Map<string, number>> {
+  private async fetchJupiterPrices(mints: string[]): Promise<Map<string, TokenPrice>> {
     const proxy = getProxyBase();
     if (!proxy) {
       console.warn('[PriceService] No proxy URL — EXPO_PUBLIC_SUPABASE_URL not set');
       return new Map();
     }
 
+    // Pass ids without encodeURIComponent — the edge function forwards them as-is
     const ids = mints.join(',');
-    const url = `${proxy}?action=price&ids=${encodeURIComponent(ids)}`;
+    const url = `${proxy}?action=price&ids=${ids}`;
 
     let res: Response;
     try {
@@ -58,7 +61,7 @@ export class SolanaPriceService {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      console.error(`[PriceService] Jupiter price API error ${res.status}:`, body.slice(0, 300));
+      console.error(`[PriceService] Jupiter price API HTTP ${res.status}:`, body.slice(0, 400));
       return new Map();
     }
 
@@ -67,26 +70,45 @@ export class SolanaPriceService {
       data = await res.json();
     } catch {
       const body = await res.text().catch(() => '');
-      console.error('[PriceService] Non-JSON price response:', body.slice(0, 300));
+      console.error('[PriceService] Non-JSON price response:', body.slice(0, 400));
       return new Map();
     }
 
-    const result = new Map<string, number>();
-    if (!data?.data) {
-      console.warn('[PriceService] Unexpected price response shape:', JSON.stringify(data).slice(0, 200));
-      return result;
+    // Jupiter Price API v3: response is { mint: { usdPrice, priceChange24h, ... } }
+    // Old v6 had: { data: { mint: { price, ... } } }
+    // Detect which shape we got
+    const isV3 = data && typeof data === 'object' && !data.data && mints.some(m => m in data);
+    const isV6 = data?.data && typeof data.data === 'object';
+
+    if (!isV3 && !isV6) {
+      console.warn('[PriceService] Unexpected price response shape:', JSON.stringify(data).slice(0, 300));
+      return new Map();
     }
 
+    const result = new Map<string, TokenPrice>();
+    const source = isV3 ? data : data.data;
+
     for (const mint of mints) {
-      const entry = data.data[mint];
-      const price = entry?.price;
-      if (typeof price === 'number' && price > 0) {
-        result.set(mint, price);
-      } else if (price !== undefined) {
-        console.log('[PriceService] Zero or missing price for', mint.slice(0, 8), '— value:', price);
+      const entry = source[mint];
+      // v3 uses usdPrice, v6 used price
+      const rawPrice = entry?.usdPrice ?? entry?.price;
+      const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(rawPrice);
+      const priceChange24h = typeof entry?.priceChange24h === 'number' ? entry.priceChange24h : 0;
+
+      if (isFinite(price) && price > 0) {
+        result.set(mint, {
+          mint,
+          price,
+          priceChange24h,
+          volume24h: 0,
+          lastUpdated: Date.now(),
+        });
+      } else {
+        console.log('[PriceService] No price for', mint.slice(0, 8), '— raw entry:', JSON.stringify(entry));
       }
     }
 
+    console.log(`[PriceService] Fetched ${result.size}/${mints.length} prices (v${isV3 ? '3' : '6'})`);
     return result;
   }
 
@@ -97,21 +119,15 @@ export class SolanaPriceService {
     }
 
     const prices = await this.fetchJupiterPrices([SOL_MINT]);
-    const price = prices.get(SOL_MINT) ?? 0;
+    const entry = prices.get(SOL_MINT);
 
-    if (price > 0) {
-      console.log('[PriceService] SOL price:', price);
-      this.priceCache.set(SOL_MINT, {
-        mint: SOL_MINT,
-        price,
-        priceChange24h: 0,
-        volume24h: 0,
-        lastUpdated: Date.now(),
-      });
-      return price;
+    if (entry && entry.price > 0) {
+      console.log('[PriceService] SOL price:', entry.price);
+      this.priceCache.set(SOL_MINT, entry);
+      return entry.price;
     }
 
-    // Return cached value even if stale rather than 0
+    // Return stale cache rather than 0
     const stale = this.priceCache.get(SOL_MINT);
     if (stale && stale.price > 0) {
       console.warn('[PriceService] Using stale SOL price:', stale.price);
@@ -126,7 +142,7 @@ export class SolanaPriceService {
     if (mintAddress === SOL_MINT) {
       const price = await this.getSOLPrice();
       if (price === 0) return null;
-      return {
+      return this.priceCache.get(SOL_MINT) ?? {
         mint: SOL_MINT,
         price,
         priceChange24h: 0,
@@ -136,26 +152,19 @@ export class SolanaPriceService {
     }
 
     const cached = this.priceCache.get(mintAddress);
-    if (cached && Date.now() - cached.lastUpdated < this.cacheExpiry) {
-      return cached.price > 0 ? cached : null;
+    if (cached && Date.now() - cached.lastUpdated < this.cacheExpiry && cached.price > 0) {
+      return cached;
     }
 
     const prices = await this.fetchJupiterPrices([mintAddress]);
-    const price = prices.get(mintAddress) ?? 0;
+    const entry = prices.get(mintAddress);
 
-    if (price > 0) {
-      const entry: TokenPrice = {
-        mint: mintAddress,
-        price,
-        priceChange24h: 0,
-        volume24h: 0,
-        lastUpdated: Date.now(),
-      };
+    if (entry) {
       this.priceCache.set(mintAddress, entry);
       return entry;
     }
 
-    // Return null — caller decides what to display
+    // Return null — caller shows "No price data"
     return null;
   }
 
@@ -174,18 +183,10 @@ export class SolanaPriceService {
 
     if (uncached.length === 0) return results;
 
-    // Fetch in batches to avoid URL length issues
     for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
       const batch = uncached.slice(i, i + BATCH_SIZE);
       const prices = await this.fetchJupiterPrices(batch);
-      for (const [mint, price] of prices) {
-        const entry: TokenPrice = {
-          mint,
-          price,
-          priceChange24h: 0,
-          volume24h: 0,
-          lastUpdated: Date.now(),
-        };
+      for (const [mint, entry] of prices) {
         this.priceCache.set(mint, entry);
         results.set(mint, entry);
       }
