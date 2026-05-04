@@ -9,7 +9,7 @@ const corsHeaders = {
 
 const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
 const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
-const JUPITER_PRICE_API = "https://price.jup.ag/v4/price";
+const JUPITER_PRICE_API = "https://price.jup.ag/v6/price";
 const JUPITER_TOKEN_LIST = "https://token.jup.ag/all";
 
 async function handleReposts(req: Request, repostAction: string): Promise<Response> {
