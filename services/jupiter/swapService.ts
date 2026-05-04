@@ -104,12 +104,27 @@ class JupiterSwapService {
 
     if (!response.ok) {
       console.error(`[Jupiter] Quote HTTP ${response.status}:`, bodyText.slice(0, 300));
+
+      // Try to parse error body for a meaningful message
+      let errData: any = null;
+      try { errData = JSON.parse(bodyText); } catch {}
+      const errMsg: string = errData?.error || errData?.message || bodyText.slice(0, 200);
+
       if (response.status === 400) {
-        // 400 = no route / invalid params — not an app error, return null
-        console.log('[Jupiter] No route available (400)');
+        // 400 from Jupiter = no route or invalid params
+        console.log('[Jupiter] No route available (400):', errMsg);
         return null;
       }
-      throw new Error(`Jupiter quote failed (${response.status}): ${bodyText.slice(0, 200)}`);
+      if (response.status === 502 || response.status === 503) {
+        // Check if the proxy forwarded a Jupiter "no route" inside a 502
+        const lower = errMsg.toLowerCase();
+        if (lower.includes('no route') || lower.includes('could not find') || lower.includes('liquidity')) {
+          console.log('[Jupiter] No route (inside 502):', errMsg);
+          return null;
+        }
+        throw new Error(`Jupiter unavailable (${response.status}): ${errMsg}`);
+      }
+      throw new Error(`Jupiter quote failed (${response.status}): ${errMsg}`);
     }
 
     let data: any;
