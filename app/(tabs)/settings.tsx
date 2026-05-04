@@ -27,7 +27,7 @@ import { SocialService, UserProfile, NotificationSettings } from '@/services/soc
 import { useProfile } from '@/contexts/ProfileContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
-import { SolanaPriceService } from '@/services/solana/priceService';
+import { getSolPrice } from '@/services/solana/priceService';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
@@ -67,11 +67,23 @@ export default function SettingsScreen() {
   const [solUsdPrice, setSolUsdPrice] = useState(0);
 
   useEffect(() => {
-    const svc = new SolanaPriceService();
-    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+    let cancelled = false;
+    const fetchPrice = async () => {
+      // Retry until we get a real price (up to ~30s)
+      for (let i = 0; i < 6; i++) {
+        try {
+          const p = await getSolPrice();
+          if (p > 0 && !cancelled) { setSolUsdPrice(p); return; }
+        } catch {}
+        if (cancelled) return;
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    };
+    fetchPrice();
+    return () => { cancelled = true; };
   }, []);
 
-  const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : 0;
+  const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : null;
 
   const loadVerifyStatus = async () => {
     if (!profile?.id) return;
@@ -106,12 +118,18 @@ export default function SettingsScreen() {
   const handleConfirmPremium = async () => {
     if (!profile || !activeAddress) return;
     const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
-    const solAmt = usdToSol(tier.usd);
+    // Fetch live SOL price at moment of payment — never use 0
+    const liveSolPrice = await getSolPrice();
+    if (premiumPayWith === 'SOL' && liveSolPrice <= 0) {
+      Alert.alert('Price Unavailable', 'Could not fetch SOL price. Please try again in a moment.');
+      return;
+    }
+    const solAmt = liveSolPrice > 0 ? tier.usd / liveSolPrice : null;
     setPremiumPayStatus('preparing');
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
-      amountSol: premiumPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
+      amountSol: premiumPayWith === 'SOL' ? (solAmt ?? 0.001) : undefined,
       amountToken: premiumPayWith === 'DTEST' ? tier.usd : undefined,
       tokenMint: premiumPayWith === 'DTEST' ? DTEST_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
@@ -995,7 +1013,7 @@ export default function SettingsScreen() {
                   const isSelected = premiumTierKey === tier.key;
                   const solAmt = usdToSol(tier.usd);
                   const dispAmt = premiumPayWith === 'SOL'
-                    ? (solUsdPrice > 0 ? `≈ ${solAmt.toFixed(3)} SOL` : '... SOL')
+                    ? (solAmt !== null ? `≈ ${solAmt.toFixed(3)} SOL` : 'Loading price...')
                     : `≈ ${tier.usd} DTEST`;
                   return (
                     <TouchableOpacity
@@ -1037,7 +1055,7 @@ export default function SettingsScreen() {
                 {(() => {
                   const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
                   const solAmt = usdToSol(tier.usd);
-                  const dispAmt = premiumPayWith === 'SOL' ? (solUsdPrice > 0 ? `${solAmt.toFixed(4)} SOL` : '... SOL') : `${tier.usd} DTEST`;
+                  const dispAmt = premiumPayWith === 'SOL' ? (solAmt !== null ? `${solAmt.toFixed(4)} SOL` : 'Loading price...') : `${tier.usd} DTEST`;
                   return (
                     <View style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: colors.surfaceBorder, gap: 10 }}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>

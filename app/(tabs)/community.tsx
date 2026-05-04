@@ -21,7 +21,7 @@ import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Be
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
-import { SolanaPriceService } from '@/services/solana/priceService';
+import { getSolPrice } from '@/services/solana/priceService';
 import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -91,10 +91,21 @@ export default function CommunityScreen() {
   // SOL/USD price for promotion tier conversion
   const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
   useEffect(() => {
-    const svc = new SolanaPriceService();
-    svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
+    let cancelled = false;
+    const fetchPrice = async () => {
+      for (let i = 0; i < 6; i++) {
+        try {
+          const p = await getSolPrice();
+          if (p > 0 && !cancelled) { setSolUsdPrice(p); return; }
+        } catch {}
+        if (cancelled) return;
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    };
+    fetchPrice();
+    return () => { cancelled = true; };
   }, []);
-  const usdToSol = (usd: number) => solUsdPrice > 0 ? (usd / solUsdPrice) : 0;
+  const usdToSol = (usd: number): number | null => solUsdPrice > 0 ? usd / solUsdPrice : null;
 
   // Timestamp set when notifications are cleared — hides older notifications locally
   const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
@@ -392,13 +403,19 @@ export default function CommunityScreen() {
     if (!tier) return;
 
     const usdPrice = (tier as any).usdPrice as number;
-    const solAmount = usdToSol(usdPrice);
+    // Fetch live SOL price at moment of payment
+    const liveSolPrice = await getSolPrice();
+    if (promotePayWith === 'SOL' && liveSolPrice <= 0) {
+      Alert.alert('Price Unavailable', 'Could not fetch SOL price. Please try again in a moment.');
+      return;
+    }
+    const solAmount = liveSolPrice > 0 ? usdPrice / liveSolPrice : null;
     setPromoteStep('processing');
     setPromotePayStatus('preparing');
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
-      amountSol: promotePayWith === 'SOL' ? (solAmount > 0 ? solAmount : 0.001) : undefined,
+      amountSol: promotePayWith === 'SOL' ? (solAmount ?? 0.001) : undefined,
       amountToken: promotePayWith === 'DTEST' ? usdPrice : undefined,
       tokenMint: promotePayWith === 'DTEST' ? DTEST_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
@@ -1408,8 +1425,9 @@ export default function CommunityScreen() {
             {(promoteStep === 'select') && (() => {
               const activeTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey) ?? PROMOTE_TIERS[0];
               const usdPrice = (activeTier as any).usdPrice as number;
+              const solAmt = usdToSol(usdPrice);
               const displayAmt = promotePayWith === 'SOL'
-                ? (solUsdPrice > 0 ? `${usdToSol(usdPrice).toFixed(3)} SOL` : '... SOL')
+                ? (solAmt !== null ? `${solAmt.toFixed(3)} SOL` : 'Loading price...')
                 : `${usdPrice} DTEST`;
               return (
                 <>
@@ -1459,8 +1477,9 @@ export default function CommunityScreen() {
                     {PROMOTE_TIERS.map(tier => {
                       const isSelected = selectedTierKey === tier.key;
                       const tUsd = (tier as any).usdPrice as number;
+                      const tSolAmt = usdToSol(tUsd);
                       const tAmt = promotePayWith === 'SOL'
-                        ? (solUsdPrice > 0 ? `≈ ${usdToSol(tUsd).toFixed(3)} SOL` : '... SOL')
+                        ? (tSolAmt !== null ? `≈ ${tSolAmt.toFixed(3)} SOL` : 'Loading...')
                         : `≈ ${tUsd} DTEST`;
                       const isQuick = tier.key === '1h';
                       return (

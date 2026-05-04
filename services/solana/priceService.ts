@@ -10,6 +10,7 @@ export interface TokenPrice {
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const BATCH_SIZE = 50;
+const CACHE_TTL = 30_000;
 
 function getProxyBase(): string {
   const url =
@@ -32,139 +33,119 @@ function proxyHeaders(): Record<string, string> {
   return key ? { Authorization: `Bearer ${key}`, apikey: key } : {};
 }
 
-// Jupiter Price API v3 response shape:
-// { "So111...": { "usdPrice": 147.47, "priceChange24h": 1.29, "decimals": 9, "blockId": ... } }
-// Note: top-level keys are the mint addresses — no "data" wrapper.
+// ---------------------------------------------------------------------------
+// Global singleton price cache — shared across all SolanaPriceService instances
+// ---------------------------------------------------------------------------
+const globalPriceCache = new Map<string, TokenPrice>();
 
-export class SolanaPriceService {
-  private priceCache: Map<string, TokenPrice> = new Map();
-  private cacheExpiry = 30_000;
+// In-flight deduplication: if a fetch for the same mints is already running,
+// wait for it rather than firing a second identical request.
+const inflight = new Map<string, Promise<Map<string, TokenPrice>>>();
 
-  private async fetchJupiterPrices(mints: string[]): Promise<Map<string, TokenPrice>> {
-    const proxy = getProxyBase();
-    if (!proxy) {
-      console.warn('[PriceService] No proxy URL — EXPO_PUBLIC_SUPABASE_URL not set');
-      return new Map();
-    }
+async function fetchJupiterPrices(mints: string[]): Promise<Map<string, TokenPrice>> {
+  const cacheKey = [...mints].sort().join(',');
 
-    // Pass ids without encodeURIComponent — the edge function forwards them as-is
-    const ids = mints.join(',');
-    const url = `${proxy}?action=price&ids=${ids}`;
+  const existing = inflight.get(cacheKey);
+  if (existing) return existing;
 
-    let res: Response;
-    try {
-      res = await fetch(url, { headers: proxyHeaders() });
-    } catch (err: any) {
-      console.error('[PriceService] Network error fetching prices:', err?.message);
-      return new Map();
-    }
+  const promise = _doFetchJupiterPrices(mints);
+  inflight.set(cacheKey, promise);
+  promise.finally(() => inflight.delete(cacheKey));
+  return promise;
+}
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.error(`[PriceService] Jupiter price API HTTP ${res.status}:`, body.slice(0, 400));
-      return new Map();
-    }
-
-    let data: any;
-    try {
-      data = await res.json();
-    } catch {
-      const body = await res.text().catch(() => '');
-      console.error('[PriceService] Non-JSON price response:', body.slice(0, 400));
-      return new Map();
-    }
-
-    // Jupiter Price API v3: response is { mint: { usdPrice, priceChange24h, ... } }
-    // Old v6 had: { data: { mint: { price, ... } } }
-    // Detect which shape we got
-    const isV3 = data && typeof data === 'object' && !data.data && mints.some(m => m in data);
-    const isV6 = data?.data && typeof data.data === 'object';
-
-    if (!isV3 && !isV6) {
-      console.warn('[PriceService] Unexpected price response shape:', JSON.stringify(data).slice(0, 300));
-      return new Map();
-    }
-
-    const result = new Map<string, TokenPrice>();
-    const source = isV3 ? data : data.data;
-
-    for (const mint of mints) {
-      const entry = source[mint];
-      // v3 uses usdPrice, v6 used price
-      const rawPrice = entry?.usdPrice ?? entry?.price;
-      const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(rawPrice);
-      const priceChange24h = typeof entry?.priceChange24h === 'number' ? entry.priceChange24h : 0;
-
-      if (isFinite(price) && price > 0) {
-        result.set(mint, {
-          mint,
-          price,
-          priceChange24h,
-          volume24h: 0,
-          lastUpdated: Date.now(),
-        });
-      } else {
-        console.log('[PriceService] No price for', mint.slice(0, 8), '— raw entry:', JSON.stringify(entry));
-      }
-    }
-
-    console.log(`[PriceService] Fetched ${result.size}/${mints.length} prices (v${isV3 ? '3' : '6'})`);
-    return result;
+async function _doFetchJupiterPrices(mints: string[]): Promise<Map<string, TokenPrice>> {
+  const proxy = getProxyBase();
+  if (!proxy) {
+    console.warn('[PriceService] No proxy URL — EXPO_PUBLIC_SUPABASE_URL not set');
+    return new Map();
   }
 
+  const ids = mints.join(',');
+  const url = `${proxy}?action=price&ids=${ids}`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: proxyHeaders() });
+  } catch (err: any) {
+    console.error('[PriceService] Network error fetching prices:', err?.message);
+    return new Map();
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`[PriceService] Price proxy HTTP ${res.status}:`, body.slice(0, 400));
+    return new Map();
+  }
+
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    const body = await res.text().catch(() => '');
+    console.error('[PriceService] Non-JSON price response:', body.slice(0, 400));
+    return new Map();
+  }
+
+  // Jupiter Price API v3:  { mint: { usdPrice, priceChange24h, ... } }
+  // Old v6 (fallback):     { data: { mint: { price, ... } } }
+  const isV6 = data?.data && typeof data.data === 'object' && !Array.isArray(data.data);
+  const source: Record<string, any> = isV6 ? data.data : data;
+
+  const result = new Map<string, TokenPrice>();
+  for (const mint of mints) {
+    const entry = source?.[mint];
+    if (!entry) continue;
+
+    const rawPrice = entry.usdPrice ?? entry.price;
+    const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(rawPrice);
+    const priceChange24h = typeof entry.priceChange24h === 'number' ? entry.priceChange24h : 0;
+
+    if (isFinite(price) && price > 0) {
+      result.set(mint, {
+        mint,
+        price,
+        priceChange24h,
+        volume24h: 0,
+        lastUpdated: Date.now(),
+      });
+    } else {
+      console.log('[PriceService] No price in response for', mint.slice(0, 8), '— entry:', JSON.stringify(entry).slice(0, 80));
+    }
+  }
+
+  console.log(`[PriceService] fetchJupiterPrices: got ${result.size}/${mints.length} prices`);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// SolanaPriceService — thin wrapper over the global cache / fetch logic
+// ---------------------------------------------------------------------------
+export class SolanaPriceService {
   async getSOLPrice(): Promise<number> {
-    const cached = this.priceCache.get(SOL_MINT);
-    if (cached && Date.now() - cached.lastUpdated < this.cacheExpiry && cached.price > 0) {
-      return cached.price;
-    }
-
-    const prices = await this.fetchJupiterPrices([SOL_MINT]);
-    const entry = prices.get(SOL_MINT);
-
-    if (entry && entry.price > 0) {
-      console.log('[PriceService] SOL price:', entry.price);
-      this.priceCache.set(SOL_MINT, entry);
-      return entry.price;
-    }
-
-    // Return stale cache rather than 0
-    const stale = this.priceCache.get(SOL_MINT);
-    if (stale && stale.price > 0) {
-      console.warn('[PriceService] Using stale SOL price:', stale.price);
-      return stale.price;
-    }
-
-    console.error('[PriceService] SOL price fetch failed — returning 0');
-    return 0;
+    return getSolPrice();
   }
 
   async getTokenPrice(mintAddress: string): Promise<TokenPrice | null> {
     if (mintAddress === SOL_MINT) {
-      const price = await this.getSOLPrice();
+      const price = await getSolPrice();
       if (price === 0) return null;
-      return this.priceCache.get(SOL_MINT) ?? {
-        mint: SOL_MINT,
-        price,
-        priceChange24h: 0,
-        volume24h: 0,
-        lastUpdated: Date.now(),
+      return globalPriceCache.get(SOL_MINT) ?? {
+        mint: SOL_MINT, price, priceChange24h: 0, volume24h: 0, lastUpdated: Date.now(),
       };
     }
 
-    const cached = this.priceCache.get(mintAddress);
-    if (cached && Date.now() - cached.lastUpdated < this.cacheExpiry && cached.price > 0) {
+    const cached = globalPriceCache.get(mintAddress);
+    if (cached && Date.now() - cached.lastUpdated < CACHE_TTL && cached.price > 0) {
       return cached;
     }
 
-    const prices = await this.fetchJupiterPrices([mintAddress]);
+    const prices = await fetchJupiterPrices([mintAddress]);
     const entry = prices.get(mintAddress);
-
     if (entry) {
-      this.priceCache.set(mintAddress, entry);
+      globalPriceCache.set(mintAddress, entry);
       return entry;
     }
-
-    // Return null — caller shows "No price data"
     return null;
   }
 
@@ -173,21 +154,19 @@ export class SolanaPriceService {
     const uncached: string[] = [];
 
     for (const mint of mintAddresses) {
-      const cached = this.priceCache.get(mint);
-      if (cached && Date.now() - cached.lastUpdated < this.cacheExpiry && cached.price > 0) {
+      const cached = globalPriceCache.get(mint);
+      if (cached && Date.now() - cached.lastUpdated < CACHE_TTL && cached.price > 0) {
         results.set(mint, cached);
       } else {
         uncached.push(mint);
       }
     }
 
-    if (uncached.length === 0) return results;
-
     for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
       const batch = uncached.slice(i, i + BATCH_SIZE);
-      const prices = await this.fetchJupiterPrices(batch);
+      const prices = await fetchJupiterPrices(batch);
       for (const [mint, entry] of prices) {
-        this.priceCache.set(mint, entry);
+        globalPriceCache.set(mint, entry);
         results.set(mint, entry);
       }
     }
@@ -196,6 +175,59 @@ export class SolanaPriceService {
   }
 
   clearCache() {
-    this.priceCache.clear();
+    globalPriceCache.clear();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level singleton helpers used everywhere
+// ---------------------------------------------------------------------------
+
+let solPricePromise: Promise<number> | null = null;
+let solPriceLastFetched = 0;
+
+/** Get the current SOL/USD price. Deduplicates concurrent calls. */
+export async function getSolPrice(): Promise<number> {
+  const cached = globalPriceCache.get(SOL_MINT);
+  if (cached && cached.price > 0 && Date.now() - cached.lastUpdated < CACHE_TTL) {
+    return cached.price;
+  }
+
+  // Deduplicate concurrent callers
+  if (!solPricePromise || Date.now() - solPriceLastFetched > CACHE_TTL) {
+    solPriceLastFetched = Date.now();
+    solPricePromise = _fetchSolPrice().then(price => {
+      solPricePromise = null;
+      return price;
+    });
+  }
+  return solPricePromise;
+}
+
+async function _fetchSolPrice(): Promise<number> {
+  const prices = await fetchJupiterPrices([SOL_MINT]);
+  const entry = prices.get(SOL_MINT);
+
+  if (entry && entry.price > 0) {
+    console.log('[PriceService] SOL price:', entry.price);
+    globalPriceCache.set(SOL_MINT, entry);
+    return entry.price;
+  }
+
+  // Stale cache fallback
+  const stale = globalPriceCache.get(SOL_MINT);
+  if (stale && stale.price > 0) {
+    console.warn('[PriceService] Using stale SOL price:', stale.price);
+    return stale.price;
+  }
+
+  console.error('[PriceService] All SOL price sources failed');
+  return 0;
+}
+
+/** Convert USD to SOL. Returns null if SOL price is not available yet. */
+export async function usdToSolAmount(usd: number): Promise<number | null> {
+  const price = await getSolPrice();
+  if (price <= 0) return null;
+  return usd / price;
 }
