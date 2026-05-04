@@ -1,10 +1,10 @@
 import { supabase } from '@/lib/supabase';
 import { SocialService } from './socialService';
 
-// The two special accounts users must follow
-const REQUIRED_FOLLOW_USERNAMES = ['Decent', 'VerificationBadge'];
-// The pinned post id users must reply to (stored in verification_accounts)
-const PINNED_POST_LOOKUP_USERNAME = 'VerificationBadge';
+// The accounts users must follow for verification
+const REQUIRED_FOLLOW_USERNAMES = ['Decent', 'VerificationBadge', 'DawenPulse'];
+// The account users must DM "Blue" to for the final step
+const BLUE_BADGE_DM_USERNAME = 'BlueBadge';
 
 // Premium subscription prices in USD equivalent
 export const PREMIUM_TIERS = [
@@ -18,61 +18,35 @@ export type PremiumTierKey = typeof PREMIUM_TIERS[number]['key'];
 
 export class VerificationService {
   /**
-   * Ensure the two verification accounts exist in both user_profiles and verification_accounts.
+   * Ensure the verification accounts exist in user_profiles.
    * Safe to call multiple times — idempotent.
    */
   static async ensureVerificationAccounts(): Promise<{
     decentId: string | null;
     badgeId: string | null;
-    pinnedPostId: string | null;
+    dawenPulseId: string | null;
+    blueBadgeId: string | null;
   }> {
-    let decentId: string | null = null;
-    let badgeId: string | null = null;
-    let pinnedPostId: string | null = null;
-
-    // Look up both profiles by username
     const { data: profiles } = await supabase
       .from('user_profiles')
       .select('id, username')
-      .in('username', REQUIRED_FOLLOW_USERNAMES);
+      .in('username', [...REQUIRED_FOLLOW_USERNAMES, BLUE_BADGE_DM_USERNAME]);
 
-    const decentProfile = profiles?.find(p => p.username === 'Decent');
-    const badgeProfile = profiles?.find(p => p.username === 'VerificationBadge');
+    const find = (name: string) => profiles?.find(p => p.username === name)?.id ?? null;
 
-    decentId = decentProfile?.id ?? null;
-    badgeId = badgeProfile?.id ?? null;
-
-    // Look for pinned post on the badge account
-    if (badgeId) {
-      const { data: va } = await supabase
-        .from('verification_accounts')
-        .select('pinned_post_id')
-        .eq('account_username', 'VerificationBadge')
-        .maybeSingle();
-      pinnedPostId = va?.pinned_post_id ?? null;
-
-      // If no pinned post recorded, find the most recent post by that account
-      if (!pinnedPostId) {
-        const { data: post } = await supabase
-          .from('posts')
-          .select('id')
-          .eq('author_id', badgeId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        pinnedPostId = post?.id ?? null;
-      }
-    }
-
-    return { decentId, badgeId, pinnedPostId };
+    return {
+      decentId: find('Decent'),
+      badgeId: find('VerificationBadge'),
+      dawenPulseId: find('DawenPulse'),
+      blueBadgeId: find('BlueBadge'),
+    };
   }
 
   /**
-   * Check if the user meets all basic verification criteria and grant it if so.
+   * Check if the user meets all verification criteria and grant it if so.
    * Returns true if verification was newly granted (or already held).
    */
   static async checkAndGrantBasicVerification(userId: string): Promise<boolean> {
-    // Already verified?
     const { data: me } = await supabase
       .from('user_profiles')
       .select('verified_basic')
@@ -80,29 +54,29 @@ export class VerificationService {
       .maybeSingle();
     if (me?.verified_basic) return true;
 
-    const { decentId, badgeId, pinnedPostId } = await this.ensureVerificationAccounts();
+    const { decentId, badgeId, dawenPulseId, blueBadgeId } = await this.ensureVerificationAccounts();
 
-    if (!decentId || !badgeId) return false;
+    if (!decentId || !badgeId || !dawenPulseId || !blueBadgeId) return false;
 
-    // Check follows
-    const [followsDecent, followsBadge] = await Promise.all([
+    const [followsDecent, followsBadge, followsDawenPulse] = await Promise.all([
       SocialService.isFollowing(userId, decentId),
       SocialService.isFollowing(userId, badgeId),
+      SocialService.isFollowing(userId, dawenPulseId),
     ]);
 
-    if (!followsDecent || !followsBadge) return false;
+    if (!followsDecent || !followsBadge || !followsDawenPulse) return false;
 
-    // Check reply to pinned post
-    if (pinnedPostId) {
-      const { data: reply } = await supabase
-        .from('post_comments')
-        .select('id')
-        .eq('post_id', pinnedPostId)
-        .eq('author_id', userId)
-        .limit(1)
-        .maybeSingle();
-      if (!reply) return false;
-    }
+    // Check DM "Blue" sent to BlueBadge
+    const { data: dm } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('sender_id', userId)
+      .eq('receiver_id', blueBadgeId)
+      .ilike('content', 'blue')
+      .limit(1)
+      .maybeSingle();
+
+    if (!dm) return false;
 
     // Grant!
     await supabase
@@ -114,16 +88,18 @@ export class VerificationService {
   }
 
   /**
-   * Check verification status without granting. Returns the three criteria results.
+   * Check verification status without granting. Returns the criteria results.
    */
   static async getVerificationStatus(userId: string): Promise<{
     followsDecent: boolean;
     followsBadge: boolean;
-    repliedToPost: boolean;
+    followsDawenPulse: boolean;
+    sentBlueDM: boolean;
     alreadyVerified: boolean;
     decentId: string | null;
     badgeId: string | null;
-    pinnedPostId: string | null;
+    dawenPulseId: string | null;
+    blueBadgeId: string | null;
   }> {
     const { data: me } = await supabase
       .from('user_profiles')
@@ -131,42 +107,44 @@ export class VerificationService {
       .eq('id', userId)
       .maybeSingle();
 
-    const { decentId, badgeId, pinnedPostId } = await this.ensureVerificationAccounts();
+    const { decentId, badgeId, dawenPulseId, blueBadgeId } = await this.ensureVerificationAccounts();
 
     if (me?.verified_basic) {
       return {
-        followsDecent: true, followsBadge: true, repliedToPost: true,
-        alreadyVerified: true, decentId, badgeId, pinnedPostId,
+        followsDecent: true, followsBadge: true, followsDawenPulse: true, sentBlueDM: true,
+        alreadyVerified: true, decentId, badgeId, dawenPulseId, blueBadgeId,
       };
     }
 
     let followsDecent = false;
     let followsBadge = false;
-    let repliedToPost = false;
+    let followsDawenPulse = false;
+    let sentBlueDM = false;
 
     if (decentId) followsDecent = await SocialService.isFollowing(userId, decentId);
     if (badgeId) followsBadge = await SocialService.isFollowing(userId, badgeId);
+    if (dawenPulseId) followsDawenPulse = await SocialService.isFollowing(userId, dawenPulseId);
 
-    if (pinnedPostId) {
-      const { data: reply } = await supabase
-        .from('post_comments')
+    if (blueBadgeId) {
+      const { data: dm } = await supabase
+        .from('messages')
         .select('id')
-        .eq('post_id', pinnedPostId)
-        .eq('author_id', userId)
+        .eq('sender_id', userId)
+        .eq('receiver_id', blueBadgeId)
+        .ilike('content', 'blue')
         .limit(1)
         .maybeSingle();
-      repliedToPost = !!reply;
-    } else {
-      // No pinned post configured — don't block on this criteria
-      repliedToPost = true;
+      sentBlueDM = !!dm;
     }
 
-    return { followsDecent, followsBadge, repliedToPost, alreadyVerified: false, decentId, badgeId, pinnedPostId };
+    return {
+      followsDecent, followsBadge, followsDawenPulse, sentBlueDM,
+      alreadyVerified: false, decentId, badgeId, dawenPulseId, blueBadgeId,
+    };
   }
 
   /**
    * Activate premium for a given tier.
-   * In production this would verify an on-chain transaction first.
    * txSignature is the Solana transaction signature to verify.
    */
   static async activatePremium(
@@ -177,7 +155,6 @@ export class VerificationService {
     const tier = PREMIUM_TIERS.find(t => t.key === tierKey);
     if (!tier) return { success: false, expiration: null };
 
-    // Calculate expiration
     const expiration = new Date();
     expiration.setMonth(expiration.getMonth() + tier.months);
     const expirationIso = expiration.toISOString();

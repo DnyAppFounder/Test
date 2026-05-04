@@ -10,6 +10,8 @@ interface ProfileContextValue {
   uploadAvatar: (imageUri: string) => Promise<string | null>;
   unreadNotifCount: number;
   clearUnreadNotifCount: () => void;
+  unreadMessageCount: number;
+  clearUnreadMessageCount: () => void;
 }
 
 const ProfileContext = createContext<ProfileContextValue>({
@@ -20,6 +22,8 @@ const ProfileContext = createContext<ProfileContextValue>({
   uploadAvatar: async () => null,
   unreadNotifCount: 0,
   clearUnreadNotifCount: () => {},
+  unreadMessageCount: 0,
+  clearUnreadMessageCount: () => {},
 });
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
@@ -27,9 +31,14 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
 
   const clearUnreadNotifCount = useCallback(() => {
     setUnreadNotifCount(0);
+  }, []);
+
+  const clearUnreadMessageCount = useCallback(() => {
+    setUnreadMessageCount(0);
   }, []);
 
   const refreshProfile = useCallback(async () => {
@@ -53,12 +62,23 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [refreshProfile]);
 
   useEffect(() => {
-    if (!profile?.id) { setUnreadNotifCount(0); return; }
+    if (!profile?.id) {
+      setUnreadNotifCount(0);
+      setUnreadMessageCount(0);
+      return;
+    }
     let cancelled = false;
     const poll = async () => {
       try {
-        const notifs = await SocialService.getNotifications(profile.id);
-        if (!cancelled) setUnreadNotifCount(notifs.filter(n => !n.read).length);
+        const [notifs, convos] = await Promise.all([
+          SocialService.getNotifications(profile.id),
+          SocialService.getConversations(profile.id),
+        ]);
+        if (!cancelled) {
+          setUnreadNotifCount(notifs.filter(n => !n.read).length);
+          const msgCount = convos.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+          setUnreadMessageCount(msgCount);
+        }
       } catch {}
     };
     poll();
@@ -74,14 +94,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const uploadAvatar = useCallback(async (imageUri: string): Promise<string | null> => {
     if (!profile || !activeAddress) return null;
-    // Throws on error — callers must catch and show the message
     const url = await SocialService.uploadAvatar(activeAddress, imageUri, profile.id);
     if (url) setProfile(prev => prev ? { ...prev, avatar_url: url } : prev);
     return url;
   }, [profile, activeAddress]);
 
   return (
-    <ProfileContext.Provider value={{ profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount }}>
+    <ProfileContext.Provider value={{ profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount, unreadMessageCount, clearUnreadMessageCount }}>
       {children}
     </ProfileContext.Provider>
   );

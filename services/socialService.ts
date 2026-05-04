@@ -43,6 +43,7 @@ export interface Post {
   content: string;
   image_url: string | null;
   media_url: string | null;
+  media_urls: string[] | null;
   likes_count: number;
   comments_count: number;
   reposts_count: number;
@@ -50,12 +51,18 @@ export interface Post {
   promoted_until: string | null;
   promoted_tier: string | null;
   created_at: string;
-  // Token attachment
+  // Token attachment (primary)
   token_address: string | null;
   token_symbol: string | null;
   token_price: number | null;
   token_change_24h: number | null;
   token_logo_uri: string | null;
+  // Token attachment (secondary — for comparison posts)
+  token_address_2: string | null;
+  token_symbol_2: string | null;
+  token_price_2: number | null;
+  token_change_24h_2: number | null;
+  token_logo_uri_2: string | null;
   // Post settings
   visibility: 'public' | 'followers';
   who_can_reply: 'everyone' | 'followers' | 'mentioned';
@@ -412,11 +419,17 @@ export class SocialService {
     options?: {
       imageUri?: string;
       mediaUrl?: string;
+      mediaUris?: string[];
       tokenAddress?: string;
       tokenSymbol?: string;
       tokenPrice?: number;
       tokenChange24h?: number;
       tokenLogoUri?: string;
+      tokenAddress2?: string;
+      tokenSymbol2?: string;
+      tokenPrice2?: number;
+      tokenChange24h2?: number;
+      tokenLogoUri2?: string;
       visibility?: 'public' | 'followers';
       whoCanReply?: 'everyone' | 'followers' | 'mentioned';
       allowQuotes?: boolean;
@@ -424,12 +437,22 @@ export class SocialService {
       quotePostId?: string;
     }
   ): Promise<Post | null> {
-    let mediaUrl = options?.mediaUrl || null;
+    let mediaUrl: string | null = options?.mediaUrl || null;
+    let mediaUrls: string[] | null = null;
 
-    // Upload image if a local URI was provided
-    if (options?.imageUri && !options.mediaUrl) {
+    // Upload all media URIs in parallel
+    if (options?.mediaUris && options.mediaUris.length > 0) {
+      const uploaded = await Promise.all(
+        options.mediaUris.map(uri => this.uploadPostMedia(authorId, uri))
+      );
+      const valid = uploaded.filter((u): u is string => !!u);
+      if (valid.length > 0) {
+        mediaUrl = valid[0];
+        mediaUrls = valid;
+      }
+    } else if (options?.imageUri && !options.mediaUrl) {
       const uploaded = await this.uploadPostMedia(authorId, options.imageUri);
-      if (uploaded) mediaUrl = uploaded;
+      if (uploaded) { mediaUrl = uploaded; mediaUrls = [uploaded]; }
     }
 
     const { data } = await supabase
@@ -439,11 +462,17 @@ export class SocialService {
         content,
         image_url: mediaUrl,
         media_url: mediaUrl,
+        media_urls: mediaUrls,
         token_address: options?.tokenAddress || null,
         token_symbol: options?.tokenSymbol || null,
         token_price: options?.tokenPrice ?? null,
         token_change_24h: options?.tokenChange24h ?? null,
         token_logo_uri: options?.tokenLogoUri ?? null,
+        token_address_2: options?.tokenAddress2 || null,
+        token_symbol_2: options?.tokenSymbol2 || null,
+        token_price_2: options?.tokenPrice2 ?? null,
+        token_change_24h_2: options?.tokenChange24h2 ?? null,
+        token_logo_uri_2: options?.tokenLogoUri2 ?? null,
         visibility: options?.visibility ?? 'public',
         who_can_reply: options?.whoCanReply ?? 'everyone',
         allow_quotes: options?.allowQuotes ?? true,
