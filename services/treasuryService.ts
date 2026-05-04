@@ -15,6 +15,7 @@ export const DTEST_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8');
+const SYSTEM_PROGRAM_ID = new PublicKey('11111111111111111111111111111111');
 
 export type PayStatus =
   | 'idle'
@@ -40,33 +41,82 @@ export interface TreasuryPayResult {
   error?: string;
 }
 
-async function getOrCreateATA(
-  connection: ReturnType<SolanaConnectionService['getConnection']>,
-  fromPubkey: PublicKey,
-  ownerPubkey: PublicKey,
-  mintPubkey: PublicKey,
-  tx: Transaction
-): Promise<PublicKey> {
+async function deriveATA(ownerPubkey: PublicKey, mintPubkey: PublicKey): Promise<PublicKey> {
   const [ata] = PublicKey.findProgramAddressSync(
     [ownerPubkey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
-  const info = await connection.getAccountInfo(ata);
-  if (!info) {
+  return ata;
+}
+
+async function ensureATA(
+  rpc: SolanaConnectionService,
+  payerPubkey: PublicKey,
+  ownerPubkey: PublicKey,
+  mintPubkey: PublicKey,
+  tx: Transaction
+): Promise<PublicKey> {
+  const ata = await deriveATA(ownerPubkey, mintPubkey);
+  const info = await rpc.rpcCall('getAccountInfo', [ata.toBase58(), { commitment: 'confirmed' }]);
+  if (!info?.value) {
     tx.add(new TransactionInstruction({
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
       keys: [
-        { pubkey: fromPubkey, isSigner: true, isWritable: true },
+        { pubkey: payerPubkey, isSigner: true, isWritable: true },
         { pubkey: ata, isSigner: false, isWritable: true },
         { pubkey: ownerPubkey, isSigner: false, isWritable: false },
         { pubkey: mintPubkey, isSigner: false, isWritable: false },
-        { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
+        { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data: Buffer.alloc(0),
     }));
   }
   return ata;
+}
+
+/** Poll for confirmation via JSON-RPC — no WebSocket dependency */
+async function pollConfirmation(
+  rpc: SolanaConnectionService,
+  signature: string,
+  timeoutMs = 60000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const result = await rpc.rpcCall('getSignatureStatuses', [
+        [signature],
+        { searchTransactionHistory: true },
+      ]);
+      const status = result?.value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+        }
+        if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+          console.log('[Treasury] Confirmed:', signature, status.confirmationStatus);
+          return;
+        }
+      }
+    } catch (e: any) {
+      if (e.message?.includes('Transaction failed')) throw e;
+    }
+  }
+  throw new Error('Transaction not confirmed within 60 seconds');
+}
+
+async function sendRaw(rpc: SolanaConnectionService, tx: Transaction): Promise<string> {
+  const rawTx = tx.serialize();
+  const rawBase64 = Buffer.from(rawTx).toString('base64');
+  const sig = await rpc.rpcCall('sendTransaction', [
+    rawBase64,
+    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
+  ]);
+  if (!sig || typeof sig !== 'string') {
+    throw new Error(`RPC returned invalid signature: ${JSON.stringify(sig)}`);
+  }
+  return sig;
 }
 
 export async function payToTreasury(params: TreasuryPayParams): Promise<TreasuryPayResult> {
@@ -83,22 +133,21 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
   onStatus?.('preparing');
 
   try {
-    const connection = SolanaConnectionService.getInstance().getConnection();
+    const rpc = SolanaConnectionService.getInstance();
     const fromPubkey = new PublicKey(fromAddress);
     const treasuryPubkey = new PublicKey(TREASURY_WALLET);
     const tx = new Transaction();
 
     if (tokenMint && amountToken && amountToken > 0) {
-      // SPL token transfer
       const mintPubkey = new PublicKey(tokenMint);
       const decimals = tokenMint === DTEST_MINT ? 6 : 6;
       const rawAmount = BigInt(Math.floor(amountToken * Math.pow(10, decimals)));
 
-      const fromATA = await getOrCreateATA(connection, fromPubkey, fromPubkey, mintPubkey, tx);
-      const toATA = await getOrCreateATA(connection, fromPubkey, treasuryPubkey, mintPubkey, tx);
+      const fromATA = await ensureATA(rpc, fromPubkey, fromPubkey, mintPubkey, tx);
+      const toATA = await ensureATA(rpc, fromPubkey, treasuryPubkey, mintPubkey, tx);
 
       const data = Buffer.alloc(9);
-      data.writeUInt8(3, 0);
+      data.writeUInt8(3, 0); // transfer instruction
       data.writeBigUInt64LE(rawAmount, 1);
       tx.add(new TransactionInstruction({
         programId: TOKEN_PROGRAM_ID,
@@ -110,46 +159,53 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
         data,
       }));
     } else if (amountSol && amountSol > 0) {
-      // Native SOL transfer
       const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+      if (lamports < 1) throw new Error('SOL amount too small');
       tx.add(SystemProgram.transfer({ fromPubkey, toPubkey: treasuryPubkey, lamports }));
     } else {
-      throw new Error('Invalid payment amount');
+      throw new Error('Invalid payment amount — specify amountSol or amountToken > 0');
     }
 
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    const bhResult = await rpc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    const blockhash: string = bhResult?.value?.blockhash ?? bhResult?.blockhash;
+    if (!blockhash) throw new Error('Could not fetch recent blockhash');
     tx.recentBlockhash = blockhash;
     tx.feePayer = fromPubkey;
 
-    let signature: string;
     onStatus?.('signing');
+    let signature: string;
 
     if (connectedWalletId) {
       const provider = ExternalWalletAdapter.getProvider(connectedWalletId);
       if (!provider) throw new Error('Wallet provider not available. Open your wallet extension.');
       const signed = await provider.signTransaction(tx);
       onStatus?.('sending');
-      const rawTx = (signed as Transaction).serialize();
-      signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      signature = await sendRaw(rpc, signed as Transaction);
     } else {
       const walletManager = SecureWalletManager.getInstance();
       const mnemonic = await walletManager.getMnemonicUnlocked();
       const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
       tx.sign(keypair);
       onStatus?.('sending');
-      const rawTx = tx.serialize();
-      signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      signature = await sendRaw(rpc, tx);
     }
+
+    console.log('[Treasury] Transaction sent:', signature);
+    await pollConfirmation(rpc, signature);
 
     onStatus?.('confirmed');
     return { success: true, signature };
   } catch (err: any) {
     onStatus?.('failed');
-    let msg = err?.message || 'Transaction failed';
-    if (msg.includes('rejected') || msg.includes('User rejected')) msg = 'Transaction rejected in wallet';
-    else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance';
+    console.error('[Treasury] Payment error:', err);
+    let msg: string = err?.message || 'Transaction failed';
+    if (msg.includes('rejected') || msg.includes('User rejected')) {
+      msg = 'Transaction rejected in wallet';
+    } else if (msg.includes('insufficient') || msg.includes('balance') || msg.includes('0x1')) {
+      msg = 'Insufficient balance';
+    } else if (msg.includes('blockhash')) {
+      msg = 'Blockhash expired — please try again';
+    }
     return { success: false, error: msg };
   }
 }
@@ -167,7 +223,7 @@ export async function burnSplToken(params: {
   onStatus?.('preparing');
 
   try {
-    const connection = SolanaConnectionService.getInstance().getConnection();
+    const rpc = SolanaConnectionService.getInstance();
     const fromPubkey = new PublicKey(fromAddress);
     const mintPubkey = new PublicKey(tokenMint);
     const rawAmount = BigInt(Math.floor(amount * Math.pow(10, decimals)));
@@ -177,12 +233,11 @@ export async function burnSplToken(params: {
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    const BURN_IX = 8;
     const data = Buffer.alloc(9);
-    data.writeUInt8(BURN_IX, 0);
+    data.writeUInt8(8, 0); // burn instruction
     data.writeBigUInt64LE(rawAmount, 1);
 
-    const burnIx = new TransactionInstruction({
+    const tx = new Transaction().add(new TransactionInstruction({
       programId: TOKEN_PROGRAM_ID,
       keys: [
         { pubkey: fromATA, isSigner: false, isWritable: true },
@@ -190,34 +245,34 @@ export async function burnSplToken(params: {
         { pubkey: fromPubkey, isSigner: true, isWritable: false },
       ],
       data,
-    });
+    }));
 
-    const tx = new Transaction().add(burnIx);
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    const bhResult = await rpc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    const blockhash: string = bhResult?.value?.blockhash ?? bhResult?.blockhash;
+    if (!blockhash) throw new Error('Could not fetch recent blockhash');
     tx.recentBlockhash = blockhash;
     tx.feePayer = fromPubkey;
 
-    let signature: string;
     onStatus?.('signing');
+    let signature: string;
 
     if (connectedWalletId) {
       const provider = ExternalWalletAdapter.getProvider(connectedWalletId);
       if (!provider) throw new Error('Wallet provider not available.');
       const signed = await provider.signTransaction(tx);
       onStatus?.('sending');
-      const rawTx = (signed as Transaction).serialize();
-      signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      signature = await sendRaw(rpc, signed as Transaction);
     } else {
       const walletManager = SecureWalletManager.getInstance();
       const mnemonic = await walletManager.getMnemonicUnlocked();
       const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
       tx.sign(keypair);
       onStatus?.('sending');
-      const rawTx = tx.serialize();
-      signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      signature = await sendRaw(rpc, tx);
     }
+
+    console.log('[Treasury] Burn sent:', signature);
+    await pollConfirmation(rpc, signature);
 
     onStatus?.('confirmed');
     return { success: true, signature };
