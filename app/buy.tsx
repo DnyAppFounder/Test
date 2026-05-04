@@ -25,6 +25,7 @@ import {
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { jupiterSwapService } from '@/services/jupiter/swapService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
@@ -37,12 +38,11 @@ const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 type PayMethod = 'sol' | 'apple' | 'card';
 type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'signing' | 'sending' | 'success' | 'error';
 
-const SOL_PRICE_USD = 167.3;
-const DAWEN_PER_SOL = 2269.37;
+const priceService = new SolanaPriceService();
 
 export default function BuyScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, refreshWallet, nativeBalance, tokens } = useWallet();
 
   const [payMethod, setPayMethod] = useState<PayMethod>('sol');
   const [solAmount, setSolAmount] = useState('');
@@ -51,29 +51,62 @@ export default function BuyScreen() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [quote, setQuote] = useState<any>(null);
+  const [solPrice, setSolPrice] = useState(0);
+  const [quoteOutAmount, setQuoteOutAmount] = useState<string | null>(null);
 
   const hasWallet = !!activeAddress;
   const parsedAmount = parseFloat(solAmount);
   const hasValidAmount = !isNaN(parsedAmount) && parsedAmount > 0;
 
-  const estimatedDawen = hasValidAmount ? (parsedAmount * DAWEN_PER_SOL).toFixed(2) : '—';
-  const payUsd = hasValidAmount ? (parsedAmount * SOL_PRICE_USD).toFixed(2) : '0.00';
-  const receiveUsd = hasValidAmount ? (parsedAmount * SOL_PRICE_USD * 0.984).toFixed(2) : '0.00';
+  // Real SOL balance from wallet context
+  const solBalance = typeof nativeBalance === 'number' ? nativeBalance : 0;
+
+  // USD equivalents using real price
+  const payUsd = hasValidAmount && solPrice > 0 ? (parsedAmount * solPrice).toFixed(2) : '0.00';
+  const receiveUsd = hasValidAmount && solPrice > 0 ? (parsedAmount * solPrice * 0.984).toFixed(2) : '0.00';
 
   const PRESETS = ['0.1', '0.5', '1', '2', '5'];
-  const SOL_BALANCE = 2.5491;
 
+  // Load real SOL price on mount
+  useEffect(() => {
+    priceService.getSOLPrice().then(p => { if (p > 0) setSolPrice(p); }).catch(() => {});
+  }, []);
+
+  // Fetch real Jupiter quote when amount changes
   useEffect(() => {
     if (!hasValidAmount) {
       setQuote(null);
+      setQuoteOutAmount(null);
+      setStatus('idle');
       return;
     }
     setStatus('quoting');
     setErrorMsg(null);
-    const timer = setTimeout(() => {
-      // Simulate quote fetch — show as ready
-      setStatus('quote_ready');
-    }, 500);
+    setQuoteOutAmount(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const amountLamports = Math.floor(parsedAmount * 1e9);
+        const q = await jupiterSwapService.getQuote(SOL_MINT, DAWEN_MINT, amountLamports, 50);
+        if (q) {
+          setQuote(q);
+          // Format output amount (DAWEN has 6 decimals)
+          const outFormatted = jupiterSwapService.formatAmount(parseInt(q.outAmount), 6);
+          setQuoteOutAmount(outFormatted);
+          setStatus('quote_ready');
+        } else {
+          setQuote(null);
+          setQuoteOutAmount(null);
+          setErrorMsg('No route available for DAWEN. Try a different amount.');
+          setStatus('error');
+        }
+      } catch (e: any) {
+        setQuote(null);
+        setQuoteOutAmount(null);
+        setErrorMsg(e?.message || 'Failed to get quote');
+        setStatus('error');
+      }
+    }, 600);
     return () => clearTimeout(timer);
   }, [solAmount]);
 
@@ -101,15 +134,17 @@ export default function BuyScreen() {
   };
 
   const handleBuy = async () => {
-    if (!hasWallet || !hasValidAmount || status !== 'quote_ready') return;
+    if (!hasWallet || !hasValidAmount || !quote || status === 'signing' || status === 'sending') return;
+    if (parsedAmount > solBalance) {
+      setErrorMsg('Insufficient SOL balance');
+      setStatus('error');
+      return;
+    }
     setErrorMsg(null);
     setTxSignature(null);
     try {
       setStatus('signing');
-      const amountLamports = Math.floor(parsedAmount * 1e9);
-      const q = await jupiterSwapService.getQuote(SOL_MINT, DAWEN_MINT, amountLamports, 50);
-      if (!q) throw new Error('No route available');
-      const swapResult = await jupiterSwapService.getSwapTransaction(q, activeAddress!, true);
+      const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress!, true);
       let signedTx: VersionedTransaction;
       if (connectedWallet) {
         const txBuf = Buffer.from(swapResult.swapTransaction, 'base64');
@@ -134,11 +169,17 @@ export default function BuyScreen() {
   };
 
   const isProcessing = status === 'signing' || status === 'sending';
-  const canBuy = hasWallet && hasValidAmount && (status === 'quote_ready' || status === 'idle') && !isProcessing;
+  const canBuy = hasWallet && hasValidAmount && status === 'quote_ready' && !isProcessing;
+
+  // Rate text from real quote
+  const rateText = quote && quoteOutAmount && parsedAmount > 0
+    ? `1 SOL ≈ ${(parseFloat(quoteOutAmount) / parsedAmount).toLocaleString('en-US', { maximumFractionDigits: 2 })} DAWEN`
+    : '—';
+  const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
 
   const shortAddr = activeAddress
     ? `${activeAddress.slice(0, 4)}...${activeAddress.slice(-4)}`
-    : '7bor...Zs3C';
+    : '';
 
   if (status === 'success') {
     return (
@@ -178,7 +219,7 @@ export default function BuyScreen() {
 
           <View style={styles.walletPill}>
             <View style={styles.walletDot} />
-            <Text style={styles.walletPillText}>{shortAddr}</Text>
+            <Text style={styles.walletPillText}>{shortAddr || 'No Wallet'}</Text>
           </View>
         </View>
 
@@ -204,7 +245,6 @@ export default function BuyScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-            {/* Mini chart decoration */}
             <View style={styles.featuredChartDecor}>
               {[20, 35, 25, 45, 38, 55, 48, 65, 55, 72, 62, 80, 70, 88].map((v, i) => (
                 <View
@@ -268,7 +308,6 @@ export default function BuyScreen() {
           {/* Step 2: You pay */}
           <Text style={styles.stepLabel}>2. You pay</Text>
           <View style={styles.payCard}>
-            {/* Token selector + balance */}
             <View style={styles.payCardTop}>
               <TouchableOpacity style={styles.tokenSelector} activeOpacity={0.8}>
                 <View style={styles.solIconSmall}>
@@ -281,17 +320,16 @@ export default function BuyScreen() {
               </TouchableOpacity>
 
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceText}>Balance: {SOL_BALANCE} SOL</Text>
+                <Text style={styles.balanceText}>Balance: {solBalance.toFixed(4)} SOL</Text>
                 <TouchableOpacity
                   style={styles.maxBtn}
-                  onPress={() => handlePreset(SOL_BALANCE.toString())}
+                  onPress={() => handlePreset(Math.max(0, solBalance - 0.01).toFixed(6))}
                 >
                   <Text style={styles.maxBtnText}>MAX</Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            {/* Amount input */}
             <TextInput
               style={styles.amountInput}
               placeholder="0"
@@ -301,9 +339,10 @@ export default function BuyScreen() {
               keyboardType="decimal-pad"
               editable={!isProcessing}
             />
-            <Text style={styles.amountUsd}>${payUsd} USD</Text>
+            <Text style={styles.amountUsd}>
+              {solPrice > 0 ? `$${payUsd} USD` : 'Loading price...'}
+            </Text>
 
-            {/* Preset buttons */}
             <View style={styles.presetsRow}>
               {PRESETS.map(p => (
                 <TouchableOpacity
@@ -323,7 +362,6 @@ export default function BuyScreen() {
           {/* Step 3: You receive */}
           <Text style={styles.stepLabel}>3. You receive (estimated)</Text>
           <View style={styles.receiveCard}>
-            {/* Token selector */}
             <View style={styles.receiveTop}>
               <TouchableOpacity style={styles.dawenSelector} activeOpacity={0.8}>
                 <View style={styles.dawenSelectorLogo}>
@@ -336,16 +374,21 @@ export default function BuyScreen() {
               </TouchableOpacity>
 
               <View style={styles.receiveAmountCol}>
-                <Text style={styles.receiveAmount}>
-                  {hasValidAmount ? (parsedAmount * DAWEN_PER_SOL * 1.25).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                </Text>
-                <Text style={styles.receiveUsd}>${receiveUsd} USD</Text>
+                {status === 'quoting' ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={styles.receiveAmount}>
+                    {quoteOutAmount
+                      ? parseFloat(quoteOutAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                      : '—'}
+                  </Text>
+                )}
+                <Text style={styles.receiveUsd}>{solPrice > 0 ? `$${receiveUsd} USD` : ''}</Text>
               </View>
             </View>
 
             <View style={styles.divider} />
 
-            {/* Rate row */}
             <View style={styles.infoRow}>
               <View style={styles.infoRowLeft}>
                 <RefreshCw size={14} color={colors.textMuted} strokeWidth={2} />
@@ -353,24 +396,25 @@ export default function BuyScreen() {
                 <Info size={12} color={colors.textMuted} strokeWidth={2} />
               </View>
               <View style={styles.infoRowRight}>
-                <Text style={styles.infoValue}>1 SOL ≈ {DAWEN_PER_SOL.toLocaleString()} DAWEN</Text>
-                <TouchableOpacity>
-                  <RefreshCw size={13} color={colors.textMuted} strokeWidth={2} />
-                </TouchableOpacity>
+                {status === 'quoting' ? (
+                  <ActivityIndicator size="small" color={colors.textMuted} />
+                ) : (
+                  <Text style={styles.infoValue}>{rateText}</Text>
+                )}
               </View>
             </View>
 
-            {/* Price impact */}
             <View style={styles.infoRow}>
               <View style={styles.infoRowLeft}>
                 <View style={styles.infoCircle} />
                 <Text style={styles.infoLabel}>Price Impact</Text>
                 <Info size={12} color={colors.textMuted} strokeWidth={2} />
               </View>
-              <Text style={styles.infoValueAccent}>1.65%</Text>
+              <Text style={styles.infoValueAccent}>
+                {quote ? `${priceImpact.toFixed(2)}%` : '—'}
+              </Text>
             </View>
 
-            {/* Network fee */}
             <View style={styles.infoRow}>
               <View style={styles.infoRowLeft}>
                 <View style={[styles.infoCircle, { backgroundColor: colors.primary }]} />
@@ -382,7 +426,6 @@ export default function BuyScreen() {
 
             <View style={styles.divider} />
 
-            {/* Jupiter note */}
             <View style={styles.jupiterRow}>
               <Shield size={14} color={colors.textMuted} strokeWidth={2} />
               <Text style={styles.jupiterText}>Your transaction is secured and powered by Jupiter Aggregator.</Text>
@@ -409,6 +452,11 @@ export default function BuyScreen() {
           >
             {isProcessing ? (
               <ActivityIndicator color={colors.white} size="small" />
+            ) : status === 'quoting' ? (
+              <>
+                <ActivityIndicator color={colors.white} size="small" />
+                <Text style={[styles.confirmBtnText, { marginLeft: 8 }]}>GETTING QUOTE...</Text>
+              </>
             ) : (
               <>
                 <Text style={styles.confirmBtnText}>CONFIRM BUY</Text>
@@ -435,7 +483,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#0A0A0F' },
   flex: { flex: 1 },
 
-  // Done state
   doneContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -481,7 +528,6 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -542,7 +588,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
 
-  // Featured card
   featuredCard: {
     flexDirection: 'row',
     backgroundColor: '#12121E',
@@ -630,7 +675,6 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  // Step labels
   stepLabel: {
     fontSize: 14,
     fontWeight: '700',
@@ -638,7 +682,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
 
-  // Pay method
   payMethodRow: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -703,7 +746,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Pay card
   payCard: {
     backgroundColor: '#12121E',
     borderRadius: 16,
@@ -808,7 +850,6 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
 
-  // Receive card
   receiveCard: {
     backgroundColor: '#12121E',
     borderRadius: 16,
@@ -928,7 +969,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Error
   errorCard: {
     backgroundColor: colors.errorMuted,
     borderRadius: borderRadius.md,
@@ -943,7 +983,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Confirm button
   confirmBtn: {
     flexDirection: 'row',
     justifyContent: 'center',

@@ -511,7 +511,9 @@ export default function WalletHome() {
                     <Text style={styles.assetBalance2}>
                       {balanceHidden ? '****' : asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: asset.isNative ? 4 : 2 })}
                     </Text>
-                    <Text style={styles.assetBalanceUsd}>{balanceHidden ? '****' : `$${asset.value.toFixed(2)}`}</Text>
+                    <Text style={styles.assetBalanceUsd}>
+                      {balanceHidden ? '****' : asset.price > 0 ? `$${asset.value.toFixed(2)}` : 'No price data'}
+                    </Text>
                   </View>
                   <View style={styles.assetRight}>
                     <Text style={styles.assetValueText}>{asset.price > 0 ? `$${asset.price < 0.01 ? asset.price.toFixed(6) : asset.price.toFixed(2)}` : '—'}</Text>

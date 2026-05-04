@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService';
 import { mergedTokenListService as jupiterTokenListService, JupiterToken } from '@/services/tokenListService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import { useWallet } from '@/contexts/WalletContext';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -25,6 +26,8 @@ import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+
+const priceService = new SolanaPriceService();
 
 type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'error';
 
@@ -43,6 +46,7 @@ export default function SwapScreen() {
   const [status, setStatus] = useState<SwapStatus>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [fromTokenPrice, setFromTokenPrice] = useState(0);
 
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
@@ -57,6 +61,15 @@ export default function SwapScreen() {
   const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Phantom';
 
   useEffect(() => { loadTokens(); }, []);
+
+  useEffect(() => {
+    if (!fromToken) { setFromTokenPrice(0); return; }
+    if (fromToken.address === SOL_MINT) {
+      priceService.getSOLPrice().then(p => setFromTokenPrice(p)).catch(() => setFromTokenPrice(0));
+    } else {
+      priceService.getTokenPrice(fromToken.address).then(p => setFromTokenPrice(p?.price || 0)).catch(() => setFromTokenPrice(0));
+    }
+  }, [fromToken?.address]);
 
   const loadTokens = async () => {
     setLoading(true);
@@ -233,8 +246,8 @@ export default function SwapScreen() {
   const isProcessing = status === 'signing' || status === 'sending';
   const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error';
 
-  const fromAmountUsd = fromToken && fromAmount
-    ? `≈ $${(parseFloat(fromAmount) * 0).toFixed(2)}`
+  const fromAmountUsd = fromToken && fromAmount && fromTokenPrice > 0
+    ? `≈ $${(parseFloat(fromAmount) * fromTokenPrice).toFixed(2)}`
     : '';
 
   const rateText = quote && fromToken && toToken
