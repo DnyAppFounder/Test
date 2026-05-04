@@ -236,14 +236,20 @@ export default function CreatePostScreen() {
     try {
       const effectiveReply = mentionedReply ? 'mentioned' : whoCanReply;
       const primaryToken = attachedTokens[0] ?? null;
+      const secondToken = attachedTokens[1] ?? null;
 
       await SocialService.createPost(profile.id, content.trim(), {
-        imageUri: mediaUris[0] || undefined,
+        mediaUris: mediaUris.length > 0 ? mediaUris : undefined,
         tokenAddress: primaryToken?.address ?? undefined,
         tokenSymbol: primaryToken?.symbol ?? undefined,
         tokenPrice: primaryToken?.price ?? undefined,
         tokenChange24h: primaryToken?.priceChange24h ?? undefined,
         tokenLogoUri: primaryToken?.image ?? undefined,
+        tokenAddress2: secondToken?.address ?? undefined,
+        tokenSymbol2: secondToken?.symbol ?? undefined,
+        tokenPrice2: secondToken?.price ?? undefined,
+        tokenChange24h2: secondToken?.priceChange24h ?? undefined,
+        tokenLogoUri2: secondToken?.image ?? undefined,
         visibility,
         whoCanReply: effectiveReply,
         allowQuotes,

@@ -108,6 +108,18 @@ const badgeStyles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
   },
+  msgBadge: {
+    position: 'absolute',
+    top: -4,
+    left: -6,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
   globeGlow: {
     position: 'absolute',
     width: 32,
@@ -124,15 +136,15 @@ const badgeStyles = StyleSheet.create({
 
 export default function TabLayout() {
   const { t } = useLanguage();
-  const { unreadNotifCount } = useProfile();
+  const { unreadNotifCount, unreadMessageCount } = useProfile();
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.surfaceBorder,
+          backgroundColor: 'rgba(13,6,24,0.92)',
+          borderTopColor: 'rgba(139,92,246,0.2)',
           borderTopWidth: 1,
           height: 64,
           paddingBottom: 8,
@@ -160,7 +172,14 @@ export default function TabLayout() {
         options={{
           title: t.tabs.community,
           tabBarIcon: ({ size, color }) => (
-            <AnimatedGlobeIcon size={size} color={color} count={unreadNotifCount} />
+            <View style={{ position: 'relative' }}>
+              <AnimatedGlobeIcon size={size} color={color} count={unreadNotifCount} />
+              {unreadMessageCount > 0 && (
+                <View style={badgeStyles.msgBadge}>
+                  <Text style={badgeStyles.badgeText}>{unreadMessageCount > 99 ? '99+' : String(unreadMessageCount)}</Text>
+                </View>
+              )}
+            </View>
           ),
         }}
       />

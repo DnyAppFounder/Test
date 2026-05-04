@@ -34,7 +34,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress, connectedWallet, selectedAccount } = useWallet();
-  const { profile, refreshProfile, clearUnreadNotifCount } = useProfile();
+  const { profile, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,7 +219,7 @@ export default function CommunityScreen() {
 
   useEffect(() => {
     if (activeTab === 'notifications') { loadNotifications(); clearUnreadNotifCount(); }
-    if (activeTab === 'messages') loadConversations();
+    if (activeTab === 'messages') { loadConversations(); clearUnreadMessageCount(); }
     if (activeTab === 'profile' && profile?.id) {
       setProfilePostsLoading(true);
       Promise.all([

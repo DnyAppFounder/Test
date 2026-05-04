@@ -50,10 +50,10 @@ export default function SettingsScreen() {
   const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
-  // Blue badge verification (free 3-step)
+  // Blue badge verification (free 4-step)
   const [verifyStatus, setVerifyStatus] = useState<{
-    followsDecent: boolean; followsBadge: boolean; repliedToPost: boolean;
-    alreadyVerified: boolean; decentId: string | null; badgeId: string | null; pinnedPostId: string | null;
+    followsDecent: boolean; followsBadge: boolean; followsDawenPulse: boolean; sentBlueDM: boolean;
+    alreadyVerified: boolean; decentId: string | null; badgeId: string | null; dawenPulseId: string | null; blueBadgeId: string | null;
   } | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyChecking, setVerifyChecking] = useState(false);
@@ -96,7 +96,7 @@ export default function SettingsScreen() {
       } else {
         const status = await VerificationService.getVerificationStatus(profile.id);
         setVerifyStatus(status);
-        Alert.alert('Not Yet Verified', 'Please complete all 3 steps first.');
+        Alert.alert('Not Yet Verified', 'Please complete all 4 steps first.');
       }
     } finally {
       setVerifyChecking(false);
@@ -844,11 +844,11 @@ export default function SettingsScreen() {
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 20, lineHeight: 18 }}>
-                  Complete all 3 steps below to receive your free blue verification badge.
+                  Complete all 4 steps below to receive your free blue verification badge.
                 </Text>
 
                 {/* Step 1 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 16, backgroundColor: verifyStatus?.followsDecent ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsDecent ? '#3b82f6' : colors.surfaceBorder }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsDecent ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsDecent ? '#3b82f6' : colors.surfaceBorder }}>
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsDecent ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
                     {verifyStatus?.followsDecent ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>1</Text>}
                   </View>
@@ -868,7 +868,7 @@ export default function SettingsScreen() {
                 </View>
 
                 {/* Step 2 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 16, backgroundColor: verifyStatus?.followsBadge ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsBadge ? '#3b82f6' : colors.surfaceBorder }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsBadge ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsBadge ? '#3b82f6' : colors.surfaceBorder }}>
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsBadge ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
                     {verifyStatus?.followsBadge ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>2</Text>}
                   </View>
@@ -888,21 +888,41 @@ export default function SettingsScreen() {
                 </View>
 
                 {/* Step 3 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 16, backgroundColor: verifyStatus?.repliedToPost ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.repliedToPost ? '#3b82f6' : colors.surfaceBorder }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.repliedToPost ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                    {verifyStatus?.repliedToPost ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>3</Text>}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsDawenPulse ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsDawenPulse ? '#3b82f6' : colors.surfaceBorder }}>
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsDawenPulse ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                    {verifyStatus?.followsDawenPulse ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>3</Text>}
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>Reply to the pinned post</Text>
-                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Reply with exactly: "Get Verified ✔️"</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>Follow @DawenPulse</Text>
+                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Follow the official DawenPulse account</Text>
                   </View>
-                  {verifyStatus?.badgeId && (
+                  {verifyStatus?.dawenPulseId && (
                     <TouchableOpacity
                       style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
-                      onPress={() => { setActiveModal(null); router.push(`/profile/${verifyStatus!.badgeId}` as any); }}
+                      onPress={() => { setActiveModal(null); router.push(`/profile/${verifyStatus!.dawenPulseId}` as any); }}
                       activeOpacity={0.8}
                     >
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.repliedToPost ? 'Done' : 'Go'}</Text>
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.followsDawenPulse ? 'Done' : 'Follow'}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Step 4 */}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.sentBlueDM ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.sentBlueDM ? '#3b82f6' : colors.surfaceBorder }}>
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.sentBlueDM ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                    {verifyStatus?.sentBlueDM ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>4</Text>}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>DM "Blue" to @BlueBadge</Text>
+                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Send the message "Blue" to @BlueBadge</Text>
+                  </View>
+                  {verifyStatus?.blueBadgeId && (
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
+                      onPress={() => { setActiveModal(null); router.push(`/chat/${verifyStatus!.blueBadgeId}` as any); }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.sentBlueDM ? 'Done' : 'DM'}</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -922,7 +942,7 @@ export default function SettingsScreen() {
                   </Text>
                 </TouchableOpacity>
                 <Text style={{ fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 10 }}>
-                  Verification is free. Make sure all 3 steps are completed before checking.
+                  Verification is free. Make sure all 4 steps are completed before checking.
                 </Text>
               </ScrollView>
             )}
