@@ -46,6 +46,7 @@ interface WalletContextType {
   tokens: Token[];
   blockchains: Blockchain[];
   totalBalance: number;
+  nativeBalance: number;
   isLoading: boolean;
   isInitialized: boolean;
   portfolioError: string | null;
@@ -99,6 +100,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [blockchains, setBlockchains] = useState<Blockchain[]>([]);
   const [totalBalance, setTotalBalance] = useState(0);
+  const [nativeBalance, setNativeBalance] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
@@ -206,11 +208,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setTokens([]);
     setBlockchains([]);
     setTotalBalance(0);
+    setNativeBalance(0);
     setPortfolioError(null);
     setIsPortfolioLoading(false);
   }, [connectedWallet]);
 
-  const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number }) => {
+  const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number; nativeBalance?: number }) => {
     const tokensFromChain: Token[] = result.assets.map((asset) => ({
       id: asset.id,
       blockchain_id: 'solana',
@@ -226,6 +229,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }));
     setTokens(tokensFromChain);
     setTotalBalance(result.totalValue);
+    if (typeof result.nativeBalance === 'number') {
+      setNativeBalance(result.nativeBalance);
+    }
   }, []);
 
   const refreshPortfolio = useCallback(async () => {
@@ -314,6 +320,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } else {
       setTokens([]);
       setTotalBalance(0);
+      setNativeBalance(0);
       setPortfolioError(null);
     }
   }, [activeAddress, applyPortfolioResult]);
@@ -365,6 +372,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         tokens,
         blockchains,
         totalBalance,
+        nativeBalance,
         isLoading,
         isInitialized,
         portfolioError,
