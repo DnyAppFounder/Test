@@ -44,21 +44,43 @@ export default function GamingScreen() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const walletAddr = selectedAccount?.address || 'anonymous';
-    const [boxData, gameData, profileData] = await Promise.all([
-      GamingService.getMysteryBoxes(),
-      GamingService.getActiveGames(),
-      SocialService.getOrCreateProfile(walletAddr),
-    ]);
-    setBoxes(boxData);
-    setGames(gameData);
-    setProfile(profileData);
-    setLoading(false);
+    try {
+      const walletAddr = selectedAccount?.address || 'anonymous';
+      const [boxData, gameData, profileData] = await Promise.all([
+        GamingService.getMysteryBoxes(),
+        GamingService.getActiveGames(),
+        SocialService.getOrCreateProfile(walletAddr),
+      ]);
+      setBoxes(boxData ?? []);
+      setGames(gameData ?? []);
+      setProfile(profileData ?? null);
+    } catch (e) {
+      console.warn('[Gaming] loadData error:', e);
+    } finally {
+      setLoading(false);
+    }
   }, [selectedAccount?.address]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    let cancelled = false;
+    setLoading(true);
+    const walletAddr = selectedAccount?.address || 'anonymous';
+    Promise.all([
+      GamingService.getMysteryBoxes(),
+      GamingService.getActiveGames(),
+      SocialService.getOrCreateProfile(walletAddr),
+    ]).then(([boxData, gameData, profileData]) => {
+      if (cancelled) return;
+      setBoxes(boxData ?? []);
+      setGames(gameData ?? []);
+      setProfile(profileData ?? null);
+    }).catch((e) => {
+      console.warn('[Gaming] loadData error:', e);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [selectedAccount?.address]);
 
   const handleOpenBox = async (box: MysteryBox) => {
     if (!profile || openingBox) return;

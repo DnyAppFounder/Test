@@ -232,15 +232,18 @@ export default function CommunityScreen() {
     if (activeTab === 'notifications') { loadNotifications(); clearUnreadNotifCount(); }
     if (activeTab === 'messages') { loadConversations(); clearUnreadMessageCount(); }
     if (activeTab === 'profile' && profile?.id) {
+      const pid = profile.id;
       setProfilePostsLoading(true);
       Promise.all([
-        SocialService.getUserPosts(profile.id, profile.id),
-        SocialService.getFollowerCount(profile.id),
-        SocialService.getFollowingCount(profile.id),
+        SocialService.getUserPosts(pid, pid),
+        SocialService.getFollowerCount(pid),
+        SocialService.getFollowingCount(pid),
       ]).then(([posts, followers, following]) => {
-        setProfilePosts(posts);
-        setProfileFollowers(followers);
-        setProfileFollowing(following);
+        setProfilePosts(posts ?? []);
+        setProfileFollowers(followers ?? 0);
+        setProfileFollowing(following ?? 0);
+      }).catch((e) => {
+        console.warn('[Community] profile tab load error:', e);
       }).finally(() => setProfilePostsLoading(false));
     }
   }, [activeTab, loadNotifications, loadConversations, profile?.id]);

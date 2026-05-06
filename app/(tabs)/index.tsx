@@ -218,10 +218,15 @@ export default function WalletHome() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
-    if (assetSubTab === 'nfts') jobs.push(loadNFTs());
-    await Promise.all(jobs);
-    setRefreshing(false);
+    try {
+      const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
+      if (assetSubTab === 'nfts') jobs.push(loadNFTs());
+      await Promise.allSettled(jobs);
+    } catch (e) {
+      console.warn('[Home] onRefresh error:', e);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const formatBalance = (balance: number) => {
