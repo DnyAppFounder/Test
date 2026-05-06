@@ -214,18 +214,27 @@ export class ExternalWalletAdapter {
       }
 
       const wallet: ConnectedExternalWallet = JSON.parse(stored);
+      console.log('[ExternalWallet] Restoring session for:', wallet.id, wallet.address?.slice(0, 8));
 
-      // Only restore if the provider is still connected
+      // On web, attempt to verify the provider is injected.
+      // Extensions may not have injected yet at this point — DO NOT clear the session
+      // if the provider is absent; just return the stored session as-is so the user
+      // stays connected.  Only update the address if the provider IS available and
+      // the account changed.
       if (Platform.OS === 'web') {
         const provider = this.getProvider(wallet.id);
-        if (!provider) {
-          await AsyncStorage.removeItem(CONNECTED_WALLET_KEY);
-          return null;
-        }
-        // Verify publicKey still matches (wallet may have changed accounts)
-        if (provider.publicKey && provider.publicKey.toBase58() !== wallet.address) {
-          wallet.address = provider.publicKey.toBase58();
-          wallet.publicKey = wallet.address;
+        if (provider) {
+          console.log('[ExternalWallet] Provider detected for', wallet.id, '— verifying address');
+          if (provider.publicKey && provider.publicKey.toBase58() !== wallet.address) {
+            wallet.address = provider.publicKey.toBase58();
+            wallet.publicKey = wallet.address;
+            console.log('[ExternalWallet] Address updated to', wallet.address.slice(0, 8));
+          }
+        } else {
+          // Provider not injected yet — return stored session without modification
+          // so the wallet stays "connected" in the UI. Balance will be stale but safe.
+          console.log('[ExternalWallet] Provider not detected yet for', wallet.id, '— keeping stored session');
+          return wallet;
         }
       }
 
