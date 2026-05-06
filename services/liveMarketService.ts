@@ -27,6 +27,23 @@ export interface LiveToken {
 
 export type MarketCategory = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
 
+/**
+ * Deduplicate an array of LiveToken strictly by mint address (lowercase).
+ * When the same mint appears multiple times, keep the entry with the
+ * highest liquidity (most data-rich).
+ */
+function dedupTokens(tokens: LiveToken[]): LiveToken[] {
+  const seen = new Map<string, LiveToken>();
+  for (const t of tokens) {
+    const key = t.address.toLowerCase();
+    const existing = seen.get(key);
+    if (!existing || (t.liquidity || 0) > (existing.liquidity || 0)) {
+      seen.set(key, t);
+    }
+  }
+  return Array.from(seen.values());
+}
+
 class LiveMarketService {
   private convertDexPairToLiveToken(pair: DexPair): LiveToken {
     return {
@@ -51,60 +68,90 @@ class LiveMarketService {
 
   async getTokensByCategory(category: MarketCategory): Promise<LiveToken[]> {
     try {
-      let pairs: DexPair[] = [];
+      let raw: LiveToken[] = [];
 
       switch (category) {
-        case 'trending':
-          pairs = await dexScreenerService.getTrendingSolanaTokens();
+        case 'trending': {
+          const pairs = await dexScreenerService.getTrendingSolanaTokens();
+          raw = pairs.map(p => this.convertDexPairToLiveToken(p));
           break;
-        case 'new':
-          pairs = await dexScreenerService.getNewSolanaTokens();
+        }
+
+        case 'new': {
+          // New tokens: DexScreener new listings
+          const newPairs = await dexScreenerService.getNewSolanaTokens();
+          raw = newPairs.map(p => this.convertDexPairToLiveToken(p));
+          raw.sort((a, b) => (b.pairCreatedAt || 0) - (a.pairCreatedAt || 0));
           break;
-        case 'verified':
-          pairs = await dexScreenerService.getTrendingSolanaTokens();
+        }
+
+        case 'verified': {
+          // Verified = high-liquidity tokens from trending + Jupiter verified list
+          const [trendingPairs, jupVerified] = await Promise.allSettled([
+            dexScreenerService.getTrendingSolanaTokens(),
+            jupiterTokenListService.getVerifiedTokens(),
+          ]);
+          const trendingTokens = trendingPairs.status === 'fulfilled'
+            ? trendingPairs.value.map(p => this.convertDexPairToLiveToken(p))
+            : [];
+          // Enrich Jupiter verified tokens with DexScreener price data where available
+          const jupTokens: LiveToken[] = jupVerified.status === 'fulfilled'
+            ? jupVerified.value.slice(0, 50).map(jt => ({
+                id: jt.address,
+                address: jt.address,
+                name: jt.name,
+                symbol: jt.symbol,
+                image: jt.logoURI,
+                price: 0,
+                priceChange24h: 0,
+                volume24h: 0,
+                liquidity: 0,
+                chainId: 'solana',
+              }))
+            : [];
+          raw = dedupTokens([...trendingTokens, ...jupTokens])
+            .filter(t => t.liquidity > 10_000 || t.volume24h > 5_000);
           break;
-        case 'top_volume':
-          pairs = await dexScreenerService.getTrendingSolanaTokens();
+        }
+
+        case 'top_volume': {
+          const pairs = await dexScreenerService.getTrendingSolanaTokens();
+          raw = pairs.map(p => this.convertDexPairToLiveToken(p));
+          raw.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
           break;
-        case 'gainers':
-          pairs = await dexScreenerService.getTrendingSolanaTokens();
+        }
+
+        case 'gainers': {
+          const pairs = await dexScreenerService.getTrendingSolanaTokens();
+          raw = pairs
+            .map(p => this.convertDexPairToLiveToken(p))
+            .filter(t => t.priceChange24h > 0)
+            .sort((a, b) => b.priceChange24h - a.priceChange24h);
           break;
+        }
+
         case 'all':
-        default:
-          try {
-            pairs = await dexScreenerService.getTrendingSolanaTokens();
-          } catch (e) {
-            console.warn('Trending failed, trying boosted:', e);
-            try {
-              pairs = await dexScreenerService.getBoostedSolanaTokens();
-            } catch (e2) {
-              console.warn('Boosted failed:', e2);
-              pairs = [];
-            }
-          }
+        default: {
+          // All: trending + new tokens combined, deduplicated
+          const [trendingRes, newRes] = await Promise.allSettled([
+            dexScreenerService.getTrendingSolanaTokens(),
+            dexScreenerService.getNewSolanaTokens(),
+          ]);
+          const trending = trendingRes.status === 'fulfilled'
+            ? trendingRes.value.map(p => this.convertDexPairToLiveToken(p))
+            : [];
+          const newTokens = newRes.status === 'fulfilled'
+            ? newRes.value.map(p => this.convertDexPairToLiveToken(p))
+            : [];
+          raw = dedupTokens([...trending, ...newTokens]);
+          // Sort: trending first (by liquidity), then new
+          raw.sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0));
           break;
+        }
       }
 
-      const tokens = pairs.map((pair) => this.convertDexPairToLiveToken(pair));
-
-      if (category === 'top_volume') {
-        tokens.sort((a, b) => b.volume24h - a.volume24h);
-      }
-
-      if (category === 'gainers') {
-        tokens.sort((a, b) => b.priceChange24h - a.priceChange24h);
-        return tokens.filter((t) => t.priceChange24h > 0).slice(0, 100);
-      }
-
-      if (category === 'verified') {
-        return tokens.filter((t) =>
-          t.liquidity > 50000 &&
-          t.volume24h > 10000 &&
-          (t.marketCap && t.marketCap > 100000 || true)
-        ).slice(0, 100);
-      }
-
-      return tokens.slice(0, 100);
+      // Final strict deduplication before returning
+      return dedupTokens(raw).slice(0, 150);
     } catch (error) {
       console.error('Error fetching tokens by category:', error);
       return [];
@@ -113,11 +160,10 @@ class LiveMarketService {
 
   async searchTokens(query: string): Promise<LiveToken[]> {
     try {
-      // Registry search covers: DB (all discovered tokens) + DexScreener + Jupiter + on-chain
       const registryResults = await tokenRegistryService.search(query);
 
       if (registryResults.length > 0) {
-        return registryResults.map(rt => ({
+        const mapped: LiveToken[] = registryResults.map(rt => ({
           id: rt.mint,
           address: rt.mint,
           name: rt.name,
@@ -131,11 +177,11 @@ class LiveMarketService {
           pairAddress: rt.pairAddress,
           chainId: 'solana',
         }));
+        return dedupTokens(mapped);
       }
 
-      // Fallback: direct DexScreener search
       const dexPairs = await dexScreenerService.searchTokens(query);
-      return dexPairs.map(pair => this.convertDexPairToLiveToken(pair)).slice(0, 50);
+      return dedupTokens(dexPairs.map(pair => this.convertDexPairToLiveToken(pair))).slice(0, 50);
     } catch (error) {
       console.error('Error searching tokens:', error);
       return [];

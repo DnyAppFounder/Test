@@ -50,7 +50,6 @@ import { PortfolioChart } from '@/components/PortfolioChart';
 import { NFTService, NFT } from '@/services/nftService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import SparklineChart from '@/components/SparklineChart';
-import { useLiveDiscovery } from '@/hooks/useLiveDiscovery';
 
 type TabKey = 'market' | 'assets' | 'watchlist';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
@@ -74,18 +73,15 @@ export default function WalletHome() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('market');
   const [searchQuery, setSearchQuery] = useState('');
+  const [liveTokens, setLiveTokens] = useState<LiveToken[]>([]);
   const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([]);
   const [totalBalance, setTotalBalance] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [category, setCategory] = useState<CategoryKey>('all');
   const [watchlist, setWatchlist] = useState<WatchlistToken[]>([]);
   const [watchlistEnriched, setWatchlistEnriched] = useState<Map<string, LiveToken>>(new Map());
   const [error, setError] = useState<string | null>(null);
-
-  // Live token discovery — polls every 15s and merges new tokens without page reload
-  const { tokens: liveTokens, isRefreshing: discoveryRefreshing, refreshNow: refreshDiscovery } =
-    useLiveDiscovery(category as MarketCategory, activeTab === 'market');
-  const loading = discoveryRefreshing && liveTokens.length === 0;
   const [assetSubTab, setAssetSubTab] = useState<AssetSubTab>('tokens');
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [nfts, setNfts] = useState<NFT[]>([]);
@@ -101,6 +97,23 @@ export default function WalletHome() {
     }
   };
 
+  const loadMarketData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
+      if (tokens.length === 0) {
+        setError('Unable to load tokens. Please check your internet connection.');
+      } else {
+        setLiveTokens(tokens);
+      }
+    } catch (err: any) {
+      console.error('Error loading market data:', err);
+      setError(err.message || 'Failed to load tokens');
+    } finally {
+      setLoading(false);
+    }
+  }, [category]);
 
   const loadWalletAssets = useCallback(async () => {
     if (!activeAddress) {
@@ -177,6 +190,10 @@ export default function WalletHome() {
   }, [activeAddress]);
 
   useEffect(() => {
+    loadMarketData();
+  }, [loadMarketData]);
+
+  useEffect(() => {
     loadWalletAssets();
   }, [loadWalletAssets]);
 
@@ -202,8 +219,7 @@ export default function WalletHome() {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      refreshDiscovery();
-      const jobs: Promise<any>[] = [loadWalletAssets(), loadWatchlist()];
+      const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
       if (assetSubTab === 'nfts') jobs.push(loadNFTs());
       await Promise.allSettled(jobs);
     } catch (e) {
