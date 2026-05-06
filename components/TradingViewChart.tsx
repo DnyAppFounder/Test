@@ -250,11 +250,16 @@ export function TradingViewChart({
           }, 600);
         } catch {}
       };
-      ws.onerror = () => setWsConnected(false);
+      ws.onerror = () => { try { setWsConnected(false); } catch {} };
       ws.onclose = () => {
-        setWsConnected(false);
+        try { setWsConnected(false); } catch {}
         wsRef.current = null;
-        setTimeout(() => { if (tokenMint) connectWebSocket(); }, 5000);
+        const reconnectTimer = setTimeout(() => {
+          if (tokenMint && wsRef.current === null) connectWebSocket();
+        }, 5000);
+        // Store so we can cancel on unmount
+        if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
+        (wsRef as any)._reconnectTimer = reconnectTimer;
       };
     } catch { setWsConnected(false); }
   }, [tokenMint, flashPriceLine]);
@@ -276,7 +281,14 @@ export function TradingViewChart({
     connectWebSocket();
     return () => {
       if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
-      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+      if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onmessage = null;
+        try { wsRef.current.close(); } catch {}
+        wsRef.current = null;
+      }
     };
   }, [tokenMint]);
 

@@ -23,29 +23,40 @@ export function usePriceUpdates(
   const [isUpdating, setIsUpdating] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+  const priceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const updatePrice = async () => {
-    if (!enabled) return;
+    if (!enabled || !mountedRef.current) return;
 
-    setIsUpdating(true);
+    if (mountedRef.current) setIsUpdating(true);
     try {
       const newPrice = await fetchPrice();
 
-      if (newPrice !== null) {
-        setPreviousPrice(price);
+      if (!mountedRef.current) return;
 
-        if (price !== null) {
-          const change = ((newPrice - price) / price) * 100;
+      if (newPrice !== null) {
+        const prev = priceRef.current;
+        setPreviousPrice(prev);
+
+        if (prev !== null && prev !== 0) {
+          const change = ((newPrice - prev) / prev) * 100;
           setPriceChange(change);
         }
 
+        priceRef.current = newPrice;
         setPrice(newPrice);
         setLastUpdate(Date.now());
       }
     } catch (error) {
       console.error('Error updating price:', error);
     } finally {
-      setIsUpdating(false);
+      if (mountedRef.current) setIsUpdating(false);
     }
   };
 
