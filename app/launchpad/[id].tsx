@@ -11,12 +11,11 @@ import {
   Modal,
   Platform,
   Animated,
-  Alert,
   SafeAreaView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Rocket, Zap, Clock, Users, TrendingUp, CircleCheck as CheckCircle2, Circle as XCircle, ExternalLink, Copy, RefreshCw, DollarSign, Flame, TriangleAlert as AlertTriangle, Lock, CircleCheck as CheckIcon } from 'lucide-react-native';
+import { ArrowLeft, Rocket, Zap, Clock, Users, TrendingUp, CircleCheck as CheckCircle2, Circle as XCircle, ExternalLink, RefreshCw, DollarSign, Flame, TriangleAlert as AlertTriangle, Lock, CircleCheck as CheckIcon, ShieldCheck, ShieldAlert, Shield, TrendingDown, Droplets } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { launchpadService, LaunchpadToken } from '@/services/launchpadService';
@@ -29,6 +28,9 @@ import {
   formatTimeRemaining,
   PresaleStatus,
 } from '@/services/presaleService';
+import { dawenCurveService, CurveState } from '@/services/dawenCurveService';
+import { safetyService, SafetyScore } from '@/services/safetyService';
+import { burnRouterService, BurnStats } from '@/services/burnRouterService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 // Status pill config
@@ -208,7 +210,10 @@ export default function PresaleDetailScreen() {
   const [showBuy, setShowBuy] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [copiedTx, setCopiedTx] = useState(false);
+  const [curveState, setCurveState] = useState<CurveState | null>(null);
+  const [safetyScore, setSafetyScore] = useState<SafetyScore | null>(null);
+  const [burnStats, setBurnStats] = useState<BurnStats | null>(null);
+  const curveAnim = useRef(new Animated.Value(0)).current;
 
   // Countdown timer
   const [now, setNow] = useState(Date.now());
@@ -244,6 +249,23 @@ export default function PresaleDetailScreen() {
       // Animate progress bar
       const prog = Math.min(1, ps.amount_raised / ps.hard_cap);
       Animated.timing(progressAnim, { toValue: prog, duration: 800, useNativeDriver: false }).start();
+
+      // Load Phase 4 data in parallel
+      if (matchedToken?.mint_address) {
+        const [curve, safety, burns] = await Promise.all([
+          dawenCurveService.getCurveStateByMint(matchedToken.mint_address),
+          safetyService.getScore(matchedToken.mint_address),
+          burnRouterService.getBurnStats(matchedToken.mint_address),
+        ]);
+        setCurveState(curve);
+        setSafetyScore(safety);
+        setBurnStats(burns);
+
+        if (curve) {
+          const curveProg = curve.graduated ? 1 : Math.min(curve.market_cap_usd / curve.graduation_threshold, 1);
+          Animated.timing(curveAnim, { toValue: curveProg, duration: 800, useNativeDriver: false }).start();
+        }
+      }
     } catch (e) {
       console.warn('[PresaleDetail] load error:', e);
     } finally {
@@ -253,7 +275,7 @@ export default function PresaleDetailScreen() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Realtime subscription
+  // Realtime subscriptions
   useEffect(() => {
     if (!presale?.id) return;
     const unsub1 = presaleService.subscribeToPresale(presale.id, (updated) => {
@@ -267,6 +289,16 @@ export default function PresaleDetailScreen() {
     });
     return () => { unsub1(); unsub2(); };
   }, [presale?.id, activeAddress]);
+
+  useEffect(() => {
+    if (!token?.id) return;
+    const unsub = dawenCurveService.subscribeToCurve(token.id, (updated) => {
+      setCurveState(updated);
+      const curveProg = updated.graduated ? 1 : Math.min(updated.market_cap_usd / updated.graduation_threshold, 1);
+      Animated.timing(curveAnim, { toValue: curveProg, duration: 400, useNativeDriver: false }).start();
+    });
+    return unsub;
+  }, [token?.id]);
 
   const handleFinalize = async () => {
     if (!presale || !activeAddress) return;
@@ -470,6 +502,151 @@ export default function PresaleDetailScreen() {
             </View>
           ))}
         </View>
+
+        {/* DAWEN Curve Progress */}
+        {curveState && (
+          <View style={styles.curveCard}>
+            <View style={styles.curveHeader}>
+              <TrendingUp size={14} color={colors.primary} />
+              <Text style={styles.sectionTitle}>DAWEN Curve</Text>
+              {curveState.graduated && (
+                <View style={styles.graduatedBadge}>
+                  <Text style={styles.graduatedText}>GRADUATED</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.curveMcapRow}>
+              <View>
+                <Text style={styles.curveMcapLabel}>Market Cap</Text>
+                <Text style={styles.curveMcapValue}>{dawenCurveService.formatMarketCap(curveState.market_cap_usd)}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.curveMcapLabel}>Graduation at</Text>
+                <Text style={styles.curveMcapValue}>{dawenCurveService.formatMarketCap(curveState.graduation_threshold)}</Text>
+              </View>
+            </View>
+
+            <View style={styles.curveBarTrack}>
+              <Animated.View
+                style={[
+                  styles.curveBarFill,
+                  {
+                    width: curveAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+                    backgroundColor: curveState.graduated ? '#10B981' : colors.primary,
+                  },
+                ]}
+              />
+            </View>
+
+            <View style={styles.curveFooter}>
+              <Text style={styles.curveFooterText}>
+                {curveState.graduated
+                  ? 'Token graduated — liquidity pool created'
+                  : `${((curveState.market_cap_usd / curveState.graduation_threshold) * 100).toFixed(1)}% to graduation`
+                }
+              </Text>
+              {curveState.pool_address && (
+                <View style={styles.lpLiveBadge}>
+                  <Droplets size={11} color="#10B981" />
+                  <Text style={styles.lpLiveText}>LP Live</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Safety Score */}
+        {safetyScore && (
+          <View style={[styles.safetyCard, { borderColor: `${safetyService.getRiskColor(safetyScore.risk_score)}30` }]}>
+            <View style={styles.safetyHeader}>
+              {safetyScore.risk_score <= 25
+                ? <ShieldCheck size={16} color="#10B981" />
+                : safetyScore.risk_score <= 60
+                  ? <Shield size={16} color="#F59E0B" />
+                  : <ShieldAlert size={16} color="#EF4444" />
+              }
+              <Text style={styles.sectionTitle}>Safety Analysis</Text>
+              <View style={[styles.riskBadge, { backgroundColor: `${safetyService.getRiskColor(safetyScore.risk_score)}20` }]}>
+                <Text style={[styles.riskBadgeText, { color: safetyService.getRiskColor(safetyScore.risk_score) }]}>
+                  {safetyService.getRiskLabel(safetyScore.risk_score)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.safetyGrid}>
+              <View style={[styles.safetyItem, safetyScore.mint_authority_revoked && styles.safetyItemGreen]}>
+                {safetyScore.mint_authority_revoked
+                  ? <CheckIcon size={12} color="#10B981" />
+                  : <AlertTriangle size={12} color="#F59E0B" />
+                }
+                <Text style={[styles.safetyItemText, { color: safetyScore.mint_authority_revoked ? '#10B981' : '#F59E0B' }]}>
+                  Mint {safetyScore.mint_authority_revoked ? 'Revoked' : 'Active'}
+                </Text>
+              </View>
+              <View style={[styles.safetyItem, safetyScore.freeze_authority_revoked && styles.safetyItemGreen]}>
+                {safetyScore.freeze_authority_revoked
+                  ? <CheckIcon size={12} color="#10B981" />
+                  : <AlertTriangle size={12} color="#F59E0B" />
+                }
+                <Text style={[styles.safetyItemText, { color: safetyScore.freeze_authority_revoked ? '#10B981' : '#F59E0B' }]}>
+                  Freeze {safetyScore.freeze_authority_revoked ? 'Revoked' : 'Active'}
+                </Text>
+              </View>
+              <View style={[styles.safetyItem, safetyScore.lp_locked && styles.safetyItemGreen]}>
+                <Lock size={12} color={safetyScore.lp_locked ? '#10B981' : '#6B7280'} />
+                <Text style={[styles.safetyItemText, { color: safetyScore.lp_locked ? '#10B981' : '#6B7280' }]}>
+                  LP {safetyScore.lp_locked ? 'Locked' : 'Unlocked'}
+                </Text>
+              </View>
+              {safetyScore.top10_holders_pct > 0 && (
+                <View style={styles.safetyItem}>
+                  <Users size={12} color={safetyScore.top10_holders_pct > 80 ? '#EF4444' : '#9CA3AF'} />
+                  <Text style={[styles.safetyItemText, { color: safetyScore.top10_holders_pct > 80 ? '#EF4444' : '#9CA3AF' }]}>
+                    Top10: {safetyScore.top10_holders_pct.toFixed(0)}%
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {safetyScore.scam_signals.length > 0 && (
+              <View style={styles.signalList}>
+                {(safetyScore.scam_signals as string[]).map((s, i) => (
+                  <View key={i} style={styles.signalRow}>
+                    <AlertTriangle size={11} color="#F59E0B" />
+                    <Text style={styles.signalText}>{s}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Burn Stats */}
+        {burnStats && burnStats.burnCount > 0 && (
+          <View style={styles.burnCard}>
+            <View style={styles.burnHeader}>
+              <Flame size={14} color="#EF4444" />
+              <Text style={styles.sectionTitle}>Burn Activity</Text>
+            </View>
+            <View style={styles.burnRow}>
+              <View style={styles.burnItem}>
+                <Text style={styles.burnVal}>{burnRouterService.formatBurnAmount(burnStats.totalBurned)}</Text>
+                <Text style={styles.burnLbl}>Total Burned</Text>
+              </View>
+              <View style={styles.burnDivider} />
+              <View style={styles.burnItem}>
+                <Text style={styles.burnVal}>{burnRouterService.formatBurnAmount(burnStats.last24h)}</Text>
+                <Text style={styles.burnLbl}>24h Burned</Text>
+              </View>
+              <View style={styles.burnDivider} />
+              <View style={styles.burnItem}>
+                <Text style={styles.burnVal}>{burnStats.burnCount}</Text>
+                <Text style={styles.burnLbl}>Burn Events</Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* My Contribution */}
         {contribution && contribution.confirmed && (
@@ -761,6 +938,69 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
   },
   connectPromptText: { fontSize: 14, color: '#6B7280' },
+
+  // DAWEN Curve
+  curveCard: {
+    backgroundColor: '#12121A', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+    padding: 16, marginBottom: 12,
+  },
+  curveHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  graduatedBadge: {
+    backgroundColor: 'rgba(16,185,129,0.15)', borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  graduatedText: { fontSize: 10, fontWeight: '800', color: '#10B981' },
+  curveMcapRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  curveMcapLabel: { fontSize: 11, color: '#6B7280', marginBottom: 2 },
+  curveMcapValue: { fontSize: 16, fontWeight: '800', color: '#fff' },
+  curveBarTrack: {
+    height: 8, borderRadius: 4, backgroundColor: '#20202E',
+    overflow: 'hidden', marginBottom: 8,
+  },
+  curveBarFill: { height: 8, borderRadius: 4 },
+  curveFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  curveFooterText: { fontSize: 12, color: '#9CA3AF' },
+  lpLiveBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(16,185,129,0.12)', borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  lpLiveText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
+
+  // Safety
+  safetyCard: {
+    backgroundColor: '#12121A', borderRadius: 16,
+    borderWidth: 1,
+    padding: 16, marginBottom: 12,
+  },
+  safetyHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  riskBadge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
+  riskBadgeText: { fontSize: 11, fontWeight: '700' },
+  safetyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  safetyItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#0A0A0F', borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 5,
+  },
+  safetyItemGreen: { backgroundColor: 'rgba(16,185,129,0.08)' },
+  safetyItemText: { fontSize: 11, fontWeight: '600' },
+  signalList: { gap: 5, marginTop: 6 },
+  signalRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  signalText: { flex: 1, fontSize: 11, color: '#F59E0B', lineHeight: 15 },
+
+  // Burns
+  burnCard: {
+    backgroundColor: '#12121A', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.15)',
+    padding: 16, marginBottom: 12,
+  },
+  burnHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  burnRow: { flexDirection: 'row', backgroundColor: '#0A0A0F', borderRadius: 12, padding: 12 },
+  burnItem: { flex: 1, alignItems: 'center', gap: 3 },
+  burnDivider: { width: 1, backgroundColor: 'rgba(239,68,68,0.15)' },
+  burnVal: { fontSize: 14, fontWeight: '700', color: '#EF4444' },
+  burnLbl: { fontSize: 10, color: '#6B7280' },
 
   // Feed
   feedCard: {

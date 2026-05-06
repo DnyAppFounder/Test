@@ -19,7 +19,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users } from 'lucide-react-native';
+import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users, ShieldCheck, Shield, ShieldAlert } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { launchpadService, LaunchpadToken, LaunchpadStats } from '@/services/launchpadService';
@@ -38,6 +38,9 @@ import {
   formatTimeRemaining,
 } from '@/services/presaleService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import { trendingService, TrendingScore } from '@/services/trendingService';
+import { safetyService, SafetyScore } from '@/services/safetyService';
+import { dawenCurveService, CurveState } from '@/services/dawenCurveService';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -596,11 +599,14 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 
 // ─── Token Row ─────────────────────────────────────────────────────────────────
 function TokenRow({
-  token, rank, presale, onPress, onPresale,
+  token, rank, presale, trendScore, safeScore, curveState, onPress, onPresale,
 }: {
   token: LaunchpadToken;
   rank: number;
   presale?: Presale | null;
+  trendScore?: TrendingScore | null;
+  safeScore?: SafetyScore | null;
+  curveState?: CurveState | null;
   onPress: () => void;
   onPresale?: () => void;
 }) {
@@ -608,11 +614,15 @@ function TokenRow({
   const positive = change >= 0;
   const psStatus = presale ? computePresaleStatus(presale) : null;
   const psProgress = presale ? getPresaleProgress(presale) : null;
+  const ageHours = (Date.now() - new Date(token.created_at).getTime()) / 3_600_000;
+  const badge = trendScore ? trendingService.badge(trendScore, ageHours) : (ageHours < 2 ? 'NEW' : null);
 
   const STATUS_COLORS: Record<string, string> = {
     live: '#10b981', upcoming: '#F59E0B', successful: '#10b981',
     failed: '#ef4444', claim_live: colors.primary, finalized: '#6B7280',
   };
+
+  const safeColor = safeScore ? safetyService.getRiskColor(safeScore.risk_score) : null;
 
   return (
     <TouchableOpacity
@@ -630,7 +640,14 @@ function TokenRow({
         )
       }
       <View style={styles.tokenRowInfo}>
-        <Text style={styles.tokenRowName}>{token.name}</Text>
+        <View style={styles.tokenRowNameRow}>
+          <Text style={styles.tokenRowName} numberOfLines={1}>{token.name}</Text>
+          {badge && (
+            <View style={[styles.trendBadge, { backgroundColor: `${trendingService.badgeColor(badge)}20` }]}>
+              <Text style={[styles.trendBadgeText, { color: trendingService.badgeColor(badge) }]}>{badge}</Text>
+            </View>
+          )}
+        </View>
         {presale && psProgress ? (
           <View style={styles.psProgressMini}>
             <View style={styles.psProgressMiniBar}>
@@ -640,23 +657,49 @@ function TokenRow({
               {psProgress.hardCapPercent.toFixed(0)}% · {psStatus?.toUpperCase()}
             </Text>
           </View>
+        ) : curveState && !curveState.graduated ? (
+          <View style={styles.psProgressMini}>
+            <View style={styles.psProgressMiniBar}>
+              <View style={[styles.psProgressMiniFill, { width: `${Math.min((curveState.market_cap_usd / curveState.graduation_threshold) * 100, 100)}%` as any, backgroundColor: colors.primary }]} />
+            </View>
+            <Text style={styles.psStatusLabel}>
+              {((curveState.market_cap_usd / curveState.graduation_threshold) * 100).toFixed(0)}% to grad
+            </Text>
+          </View>
+        ) : curveState?.graduated ? (
+          <Text style={[styles.psStatusLabel, { color: '#10B981' }]}>GRADUATED</Text>
         ) : (
           <Text style={styles.tokenRowVol}>Vol {fmtUsd(token.total_supply * 0.001)}</Text>
         )}
       </View>
-      {presale ? (
-        <View style={[styles.tokenRowBadge, { backgroundColor: `${STATUS_COLORS[psStatus ?? 'upcoming']}20` }]}>
-          <Users size={10} color={STATUS_COLORS[psStatus ?? 'upcoming']} />
-          <Text style={[styles.tokenRowBadgeText, { color: STATUS_COLORS[psStatus ?? 'upcoming'] }]}>
-            {presale.buyer_count}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.tokenRowBadge}>
-          <Zap size={10} color={colors.warning} />
-          <Text style={styles.tokenRowBadgeText}>{Math.floor(token.total_supply / 1e6)}</Text>
-        </View>
-      )}
+
+      {/* Safety + presale badge cluster */}
+      <View style={styles.tokenRowBadges}>
+        {safeColor && (
+          <View style={[styles.safeMiniBadge, { backgroundColor: `${safeColor}18` }]}>
+            {(safeScore?.risk_score ?? 100) <= 25
+              ? <ShieldCheck size={9} color={safeColor} />
+              : (safeScore?.risk_score ?? 100) <= 60
+                ? <Shield size={9} color={safeColor} />
+                : <ShieldAlert size={9} color={safeColor} />
+            }
+          </View>
+        )}
+        {presale ? (
+          <View style={[styles.tokenRowBadge, { backgroundColor: `${STATUS_COLORS[psStatus ?? 'upcoming']}20` }]}>
+            <Users size={10} color={STATUS_COLORS[psStatus ?? 'upcoming']} />
+            <Text style={[styles.tokenRowBadgeText, { color: STATUS_COLORS[psStatus ?? 'upcoming'] }]}>
+              {presale.buyer_count}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.tokenRowBadge}>
+            <Zap size={10} color={colors.warning} />
+            <Text style={styles.tokenRowBadgeText}>{Math.floor(token.total_supply / 1e6)}</Text>
+          </View>
+        )}
+      </View>
+
       <View style={styles.tokenRowRight}>
         <Text style={styles.tokenRowPrice}>{fmtPrice(0.000003)}</Text>
         <Text style={[styles.tokenRowChange, { color: positive ? colors.success : colors.error }]}>
@@ -679,8 +722,10 @@ export default function LaunchpadScreen() {
   const [stats, setStats] = useState<LaunchpadStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  // Map tokenId → presale for inline presale indicators
   const [presaleMap, setPresaleMap] = useState<Map<string, Presale>>(new Map());
+  const [trendMap, setTrendMap] = useState<Map<string, TrendingScore>>(new Map());
+  const [safeMap, setSafeMap] = useState<Map<string, SafetyScore>>(new Map());
+  const [curveMap, setCurveMap] = useState<Map<string, CurveState>>(new Map());
 
   const loadData = useCallback(async () => {
     try {
@@ -698,6 +743,32 @@ export default function LaunchpadScreen() {
         const map = new Map<string, Presale>();
         activePresales.value.forEach(ps => map.set(ps.token_id, ps));
         setPresaleMap(map);
+      }
+
+      // Load Phase 4 data for tokens with mint addresses
+      const tokenList = tokenData.status === 'fulfilled' ? tokenData.value : [];
+      const mintsWithId = tokenList.filter(t => t.mint_address);
+
+      const [trendData, safeData, curveData] = await Promise.allSettled([
+        trendingService.getTopTokens(100),
+        Promise.all(mintsWithId.slice(0, 20).map(t => safetyService.getScore(t.mint_address!))),
+        Promise.all(mintsWithId.slice(0, 20).map(t => dawenCurveService.getCurveStateByMint(t.mint_address!))),
+      ]);
+
+      if (trendData.status === 'fulfilled') {
+        const tm = new Map<string, TrendingScore>();
+        trendData.value.forEach(ts => tm.set(ts.token_mint, ts));
+        setTrendMap(tm);
+      }
+      if (safeData.status === 'fulfilled') {
+        const sm = new Map<string, SafetyScore>();
+        safeData.value.forEach((s, i) => { if (s && mintsWithId[i]) sm.set(mintsWithId[i].mint_address!, s); });
+        setSafeMap(sm);
+      }
+      if (curveData.status === 'fulfilled') {
+        const cm = new Map<string, CurveState>();
+        curveData.value.forEach((c, i) => { if (c && mintsWithId[i]) cm.set(mintsWithId[i].id, c); });
+        setCurveMap(cm);
       }
     } catch {}
     finally { setLoading(false); }
@@ -886,12 +957,18 @@ export default function LaunchpadScreen() {
           ) : (
             tokens.map((token, i) => {
               const ps = presaleMap.get(token.id) ?? null;
+              const ts = token.mint_address ? trendMap.get(token.mint_address) ?? null : null;
+              const ss = token.mint_address ? safeMap.get(token.mint_address) ?? null : null;
+              const cs = curveMap.get(token.id) ?? null;
               return (
                 <TokenRow
                   key={token.id}
                   token={token}
                   rank={i + 1}
                   presale={ps}
+                  trendScore={ts}
+                  safeScore={ss}
+                  curveState={cs}
                   onPress={() => handleTokenPress(token)}
                   onPresale={ps ? () => router.push(`/launchpad/${ps.id}`) : undefined}
                 />
@@ -1093,15 +1170,25 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   tokenRowLogoText: { fontSize: 13, fontWeight: '700', color: colors.primary },
-  tokenRowInfo: { flex: 1 },
-  tokenRowName: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  tokenRowInfo: { flex: 1, minWidth: 0 },
+  tokenRowNameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  tokenRowName: { fontSize: 14, fontWeight: '700', color: '#fff', flexShrink: 1 },
   tokenRowVol: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  tokenRowBadges: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   tokenRowBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     backgroundColor: 'rgba(245,158,11,0.15)',
     borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3,
   },
   tokenRowBadgeText: { fontSize: 11, fontWeight: '700', color: '#F59E0B' },
+  safeMiniBadge: {
+    width: 18, height: 18, borderRadius: 6,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  trendBadge: {
+    borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2,
+  },
+  trendBadgeText: { fontSize: 9, fontWeight: '800' },
   tokenRowRight: { alignItems: 'flex-end' },
   tokenRowPrice: { fontSize: 13, fontWeight: '700', color: '#fff' },
   tokenRowChange: { fontSize: 12, fontWeight: '600', marginTop: 2 },
@@ -1109,8 +1196,8 @@ const styles = StyleSheet.create({
   // Presale mini progress inside token row
   psProgressMini: { gap: 3, marginTop: 3 },
   psProgressMiniBar: { height: 3, width: 80, backgroundColor: '#20202E', borderRadius: 2, overflow: 'hidden' },
-  psProgressMiniFill: { height: 3, backgroundColor: colors.primary, borderRadius: 2 },
-  psStatusLabel: { fontSize: 10, fontWeight: '700' },
+  psProgressMiniFill: { height: 3, backgroundColor: '#F59E0B', borderRadius: 2 },
+  psStatusLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', marginTop: 1 },
 
   // Empty
   emptyState: { alignItems: 'center', paddingVertical: 40, gap: 10 },
