@@ -253,26 +253,78 @@ interface CreateTokenModalProps {
   creatorWallet: string;
 }
 
+function ToggleRow({ label, sub, value, onToggle }: { label: string; sub?: string; value: boolean; onToggle: () => void }) {
+  return (
+    <TouchableOpacity style={mStyles.toggleRow} onPress={onToggle} activeOpacity={0.7}>
+      <View style={{ flex: 1 }}>
+        <Text style={mStyles.toggleLabel}>{label}</Text>
+        {sub ? <Text style={mStyles.toggleSub}>{sub}</Text> : null}
+      </View>
+      <View style={[mStyles.toggle, value && mStyles.toggleOn]}>
+        <View style={[mStyles.toggleKnob, value && mStyles.toggleKnobOn]} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle?: string }) {
+  return (
+    <View style={mStyles.sectionHeader}>
+      <View style={mStyles.sectionIcon}>{icon}</View>
+      <View>
+        <Text style={mStyles.sectionTitle}>{title}</Text>
+        {subtitle ? <Text style={mStyles.sectionSub}>{subtitle}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
 function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: CreateTokenModalProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>('easy');
   const [step, setStep] = useState<'form' | 'progress' | 'done' | 'presale'>('form');
   const [createdTokenId, setCreatedTokenId] = useState<string | null>(null);
 
+  // Core fields
   const [name, setName] = useState('');
   const [symbol, setSymbol] = useState('');
   const [description, setDescription] = useState('');
   const [totalSupply, setTotalSupply] = useState('1000000000');
+  const [imageUri, setImageUri] = useState<string | null>(null);
+
+  // Socials
   const [website, setWebsite] = useState('');
   const [telegram, setTelegram] = useState('');
   const [twitter, setTwitter] = useState('');
-  const [imageUri, setImageUri] = useState<string | null>(null);
 
+  // Advanced — token settings
   const [decimals, setDecimals] = useState('6');
   const [creatorAlloc, setCreatorAlloc] = useState('100000000');
   const [liquidityAlloc, setLiquidityAlloc] = useState('900000000');
   const [useToken2022, setUseToken2022] = useState(false);
   const [revokeMint, setRevokeMint] = useState(false);
   const [revokeFreeze, setRevokeFreeze] = useState(false);
+
+  // Advanced — liquidity
+  const [lpLockDays, setLpLockDays] = useState('30');
+  const [launchPrice, setLaunchPrice] = useState('');
+  const [listingPrice, setListingPrice] = useState('');
+
+  // Advanced — vesting
+  const [vestingEnabled, setVestingEnabled] = useState(false);
+  const [vestingCliffDays, setVestingCliffDays] = useState('30');
+  const [vestingDurationDays, setVestingDurationDays] = useState('365');
+  const [vestingStyle, setVestingStyle] = useState<'linear' | 'monthly' | 'cliff_only'>('linear');
+  const [vestingAmount, setVestingAmount] = useState('');
+
+  // Advanced — anti-bot
+  const [antiBotEnabled, setAntiBotEnabled] = useState(false);
+  const [maxWalletPct, setMaxWalletPct] = useState('2');
+  const [buyCooldown, setBuyCooldown] = useState('0');
+  const [tradingDelay, setTradingDelay] = useState('0');
+  const [launchDelay, setLaunchDelay] = useState('0');
+
+  // Advanced — burn
+  const [burnEnabled, setBurnEnabled] = useState(false);
 
   const [progress, setProgress] = useState<TokenCreationProgress | null>(null);
   const [result, setResult] = useState<{ mintAddress: string; txSig: string } | null>(null);
@@ -283,35 +335,26 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 
   useEffect(() => {
     if (progress) {
-      Animated.timing(progressAnim, {
-        toValue: progress.step / progress.totalSteps,
-        duration: 400,
-        useNativeDriver: false,
-      }).start();
+      Animated.timing(progressAnim, { toValue: progress.step / progress.totalSteps, duration: 400, useNativeDriver: false }).start();
     }
   }, [progress]);
 
   const reset = () => {
-    setStep('form'); setProgress(null); setResult(null); setError(null);
-    setCreatedTokenId(null);
-    setName(''); setSymbol(''); setDescription(''); setTotalSupply('1000000000');
-    setWebsite(''); setTelegram(''); setTwitter(''); setImageUri(null);
+    setStep('form'); setProgress(null); setResult(null); setError(null); setCreatedTokenId(null);
+    setName(''); setSymbol(''); setDescription(''); setTotalSupply('1000000000'); setImageUri(null);
+    setWebsite(''); setTelegram(''); setTwitter('');
     setDecimals('6'); setCreatorAlloc('100000000'); setLiquidityAlloc('900000000');
     setUseToken2022(false); setRevokeMint(false); setRevokeFreeze(false);
+    setLpLockDays('30'); setLaunchPrice(''); setListingPrice('');
+    setVestingEnabled(false); setVestingCliffDays('30'); setVestingDurationDays('365'); setVestingAmount('');
+    setAntiBotEnabled(false); setMaxWalletPct('2'); setBuyCooldown('0'); setTradingDelay('0'); setLaunchDelay('0');
+    setBurnEnabled(false);
     progressAnim.setValue(0);
   };
 
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow photo library access to upload a token logo.');
-      return;
-    }
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
+      mediaTypes: 'images', allowsEditing: true, aspect: [1, 1], quality: 0.8,
     });
     if (!res.canceled && res.assets[0]) setImageUri(res.assets[0].uri);
   };
@@ -330,6 +373,11 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
       if (isNaN(ca) || ca < 0) return 'Invalid creator allocation';
       if (isNaN(la) || la < 0) return 'Invalid liquidity allocation';
       if (ca + la > supply) return 'Allocations exceed total supply';
+      if (vestingEnabled && (!vestingAmount || parseFloat(vestingAmount) <= 0)) return 'Enter a valid vesting amount';
+      if (antiBotEnabled) {
+        const mw = parseFloat(maxWalletPct);
+        if (isNaN(mw) || mw < 0.1 || mw > 100) return 'Max wallet % must be 0.1–100';
+      }
     }
     return null;
   };
@@ -343,12 +391,11 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 
     const input: EasyModeInput | AdvancedModeInput = mode === 'easy'
       ? { mode: 'easy', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, imageUri: imageUri ?? undefined }
-      : { mode: 'advanced', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, decimals: parseInt(decimals), creatorAllocation: parseFloat(creatorAlloc), liquidityAllocation: parseFloat(liquidityAlloc), website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, useToken2022, revokeMintAuthority: revokeMint, revokeFreezeAuthority: revokeFreeze, imageUri: imageUri ?? undefined };
+      : { mode: 'advanced', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, decimals: parseInt(decimals), creatorAllocation: parseFloat(creatorAlloc), liquidityAllocation: parseFloat(liquidityAlloc), website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, useToken2022, revokeMintAuthority: revokeMint, revokeFreezeAuthority: revokeFreeze, imageUri: imageUri ?? undefined, burnSettings: burnEnabled };
 
     const res = await tokenCreationService.createToken(
-      input,
-      creatorWallet,
-      async () => { throw new Error('Wallet signing not available in this context. Please use the send flow to sign transactions.'); },
+      input, creatorWallet,
+      async () => { throw new Error('Wallet signing not available in this context. Please connect a wallet that supports transaction signing.'); },
       (p) => setProgress(p),
       imageUri ?? undefined
     );
@@ -377,43 +424,30 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
   return (
     <Modal visible={visible} animationType="slide" transparent={false} statusBarTranslucent>
       <SafeAreaView style={mStyles.safeArea}>
-        <KeyboardAvoidingView
-          style={mStyles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={0}
-        >
-          {/* Fixed header */}
+        <KeyboardAvoidingView style={mStyles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+          {/* Header */}
           <View style={mStyles.header}>
             <TouchableOpacity onPress={() => { reset(); onClose(); }} style={mStyles.backBtn}>
               <X size={22} color={colors.textMuted} />
             </TouchableOpacity>
             <View style={mStyles.headerCenter}>
               <Rocket size={18} color={colors.primary} />
-              <Text style={mStyles.headerTitle}>
-                {step === 'done' ? 'Token Launched!' : 'Launch Token'}
-              </Text>
+              <Text style={mStyles.headerTitle}>{step === 'done' ? 'Token Launched!' : 'Launch Token'}</Text>
             </View>
             <View style={mStyles.headerRight} />
           </View>
 
+          {/* ── FORM ── */}
           {step === 'form' && (
-            <ScrollView
-              style={mStyles.flex}
-              contentContainerStyle={mStyles.formContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
+            <ScrollView style={mStyles.flex} contentContainerStyle={mStyles.formContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
               {/* Mode selector */}
               <View style={mStyles.modeSelector}>
                 {(['easy', 'advanced'] as const).map(m => (
-                  <TouchableOpacity
-                    key={m}
-                    style={[mStyles.modeBtn, mode === m && mStyles.modeBtnActive]}
-                    onPress={() => setMode(m)}
-                  >
+                  <TouchableOpacity key={m} style={[mStyles.modeBtn, mode === m && mStyles.modeBtnActive]} onPress={() => setMode(m)}>
                     {m === 'easy'
-                      ? <Zap size={14} color={mode === m ? colors.white : colors.textMuted} />
-                      : <Settings2 size={14} color={mode === m ? colors.white : colors.textMuted} />
+                      ? <Zap size={14} color={mode === m ? '#fff' : colors.textMuted} />
+                      : <Settings2 size={14} color={mode === m ? '#fff' : colors.textMuted} />
                     }
                     <Text style={[mStyles.modeBtnText, mode === m && mStyles.modeBtnTextActive]}>
                       {m === 'easy' ? 'Easy Mode' : 'Advanced'}
@@ -422,79 +456,215 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
                 ))}
               </View>
 
-              {/* Logo */}
-              <TouchableOpacity style={mStyles.logoUpload} onPress={pickImage}>
-                {imageUri
-                  ? <Image source={{ uri: imageUri }} style={mStyles.logoPreview} />
-                  : (
-                    <View style={mStyles.logoPlaceholder}>
-                      <Upload size={22} color={colors.textMuted} />
-                      <Text style={mStyles.logoPlaceholderText}>Upload Logo</Text>
-                    </View>
-                  )
-                }
-              </TouchableOpacity>
+              {mode === 'easy' && (
+                <View style={mStyles.easyModeBanner}>
+                  <Zap size={14} color={colors.primary} />
+                  <Text style={mStyles.easyModeText}>Simple, fast launch. Like Pump.fun — just fill the basics and go.</Text>
+                </View>
+              )}
 
-              {error ? <Text style={mStyles.errorText}>{error}</Text> : null}
+              {/* ── SECTION 1: Token Identity ── */}
+              <View style={mStyles.section}>
+                <SectionHeader icon={<Sparkles size={15} color={colors.primary} />} title="Token Identity" subtitle="Name, symbol, logo, description" />
 
-              <Text style={mStyles.label}>Token Name *</Text>
-              <TextInput style={mStyles.input} placeholder="e.g. My Token" placeholderTextColor={colors.textMuted} value={name} onChangeText={setName} />
+                {/* Logo upload */}
+                <TouchableOpacity style={mStyles.logoUpload} onPress={pickImage}>
+                  {imageUri
+                    ? <Image source={{ uri: imageUri }} style={mStyles.logoPreview} />
+                    : (
+                      <View style={mStyles.logoPlaceholder}>
+                        <Upload size={22} color={colors.textMuted} />
+                        <Text style={mStyles.logoPlaceholderText}>Upload Logo</Text>
+                        <Text style={mStyles.logoPlaceholderSub}>1:1 ratio, PNG/JPG</Text>
+                      </View>
+                    )
+                  }
+                </TouchableOpacity>
 
-              <Text style={mStyles.label}>Symbol *</Text>
-              <TextInput style={mStyles.input} placeholder="e.g. MTK" placeholderTextColor={colors.textMuted} value={symbol} onChangeText={t => setSymbol(t.toUpperCase())} maxLength={10} autoCapitalize="characters" />
+                {error ? <Text style={mStyles.errorText}>{error}</Text> : null}
 
-              <Text style={mStyles.label}>Description *</Text>
-              <TextInput style={[mStyles.input, mStyles.textArea]} placeholder="Describe your token..." placeholderTextColor={colors.textMuted} value={description} onChangeText={setDescription} multiline numberOfLines={3} textAlignVertical="top" />
+                <Text style={mStyles.label}>Token Name *</Text>
+                <TextInput style={mStyles.input} placeholder="e.g. My Token" placeholderTextColor={colors.textMuted} value={name} onChangeText={setName} />
 
-              <Text style={mStyles.label}>Total Supply *</Text>
-              <TextInput style={mStyles.input} placeholder="1000000000" placeholderTextColor={colors.textMuted} value={totalSupply} onChangeText={setTotalSupply} keyboardType="numeric" />
+                <Text style={mStyles.label}>Symbol *</Text>
+                <TextInput style={mStyles.input} placeholder="e.g. MTK" placeholderTextColor={colors.textMuted} value={symbol} onChangeText={t => setSymbol(t.toUpperCase())} maxLength={10} autoCapitalize="characters" />
 
+                <Text style={mStyles.label}>Description *</Text>
+                <TextInput style={[mStyles.input, mStyles.textArea]} placeholder="Describe your token..." placeholderTextColor={colors.textMuted} value={description} onChangeText={setDescription} multiline numberOfLines={3} textAlignVertical="top" />
+
+                <Text style={mStyles.label}>Initial Supply *</Text>
+                <TextInput style={mStyles.input} placeholder="1,000,000,000" placeholderTextColor={colors.textMuted} value={totalSupply} onChangeText={setTotalSupply} keyboardType="numeric" />
+              </View>
+
+              {/* ── SECTION 2: Socials — both modes ── */}
+              <View style={mStyles.section}>
+                <SectionHeader icon={<Globe size={15} color={colors.textMuted} />} title="Social Links" subtitle="Optional" />
+                <View style={mStyles.socialRow}>
+                  <Globe size={16} color={colors.textMuted} />
+                  <TextInput style={mStyles.socialInput} placeholder="Website URL" placeholderTextColor={colors.textMuted} value={website} onChangeText={setWebsite} autoCapitalize="none" />
+                </View>
+                <View style={mStyles.socialRow}>
+                  <MessageCircle size={16} color={colors.textMuted} />
+                  <TextInput style={mStyles.socialInput} placeholder="Telegram URL" placeholderTextColor={colors.textMuted} value={telegram} onChangeText={setTelegram} autoCapitalize="none" />
+                </View>
+                <View style={mStyles.socialRow}>
+                  <Twitter size={16} color={colors.textMuted} />
+                  <TextInput style={mStyles.socialInput} placeholder="Twitter / X URL" placeholderTextColor={colors.textMuted} value={twitter} onChangeText={setTwitter} autoCapitalize="none" />
+                </View>
+              </View>
+
+              {/* ── ADVANCED SECTIONS ── */}
               {mode === 'advanced' && (
                 <>
-                  <Text style={mStyles.label}>Decimals (0–9)</Text>
-                  <TextInput style={mStyles.input} placeholder="6" placeholderTextColor={colors.textMuted} value={decimals} onChangeText={setDecimals} keyboardType="numeric" maxLength={1} />
+                  {/* Section 3: Token Settings */}
+                  <View style={mStyles.section}>
+                    <SectionHeader icon={<Settings2 size={15} color={colors.primary} />} title="Token Settings" subtitle="Decimals, supply, program" />
 
-                  <Text style={mStyles.label}>Creator Allocation</Text>
-                  <TextInput style={mStyles.input} placeholder="100000000" placeholderTextColor={colors.textMuted} value={creatorAlloc} onChangeText={setCreatorAlloc} keyboardType="numeric" />
-
-                  <Text style={mStyles.label}>Liquidity Allocation</Text>
-                  <TextInput style={mStyles.input} placeholder="900000000" placeholderTextColor={colors.textMuted} value={liquidityAlloc} onChangeText={setLiquidityAlloc} keyboardType="numeric" />
-
-                  {[
-                    { label: 'Use Token-2022', val: useToken2022, set: setUseToken2022 },
-                    { label: 'Revoke Mint Authority', val: revokeMint, set: setRevokeMint },
-                    { label: 'Revoke Freeze Authority', val: revokeFreeze, set: setRevokeFreeze },
-                  ].map(row => (
-                    <View key={row.label} style={mStyles.toggleRow}>
-                      <Text style={mStyles.toggleLabel}>{row.label}</Text>
-                      <TouchableOpacity style={[mStyles.toggle, row.val && mStyles.toggleOn]} onPress={() => row.set(v => !v)}>
-                        <View style={[mStyles.toggleKnob, row.val && mStyles.toggleKnobOn]} />
-                      </TouchableOpacity>
+                    <View style={mStyles.twoCol}>
+                      <View style={mStyles.twoColItem}>
+                        <Text style={mStyles.label}>Decimals (0–9)</Text>
+                        <TextInput style={mStyles.input} placeholder="6" placeholderTextColor={colors.textMuted} value={decimals} onChangeText={setDecimals} keyboardType="numeric" maxLength={1} />
+                      </View>
+                      <View style={mStyles.twoColItem}>
+                        <Text style={mStyles.label}>Program</Text>
+                        <TouchableOpacity style={[mStyles.input, mStyles.selectBtn]} onPress={() => setUseToken2022(v => !v)}>
+                          <Text style={mStyles.selectBtnText}>{useToken2022 ? 'Token-2022' : 'SPL Token'}</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  ))}
+
+                    <Text style={mStyles.label}>Creator Allocation</Text>
+                    <TextInput style={mStyles.input} placeholder="100,000,000" placeholderTextColor={colors.textMuted} value={creatorAlloc} onChangeText={setCreatorAlloc} keyboardType="numeric" />
+                    <Text style={mStyles.hint}>Tokens sent to your wallet at launch</Text>
+
+                    <Text style={mStyles.label}>Liquidity Allocation</Text>
+                    <TextInput style={mStyles.input} placeholder="900,000,000" placeholderTextColor={colors.textMuted} value={liquidityAlloc} onChangeText={setLiquidityAlloc} keyboardType="numeric" />
+                    <Text style={mStyles.hint}>Tokens reserved for the LP pool</Text>
+
+                    <ToggleRow label="Revoke Mint Authority" sub="Prevents minting more tokens. Safer for holders." value={revokeMint} onToggle={() => setRevokeMint(v => !v)} />
+                    <ToggleRow label="Revoke Freeze Authority" sub="Prevents freezing token accounts." value={revokeFreeze} onToggle={() => setRevokeFreeze(v => !v)} />
+                  </View>
+
+                  {/* Section 4: Liquidity */}
+                  <View style={mStyles.section}>
+                    <SectionHeader icon={<TrendingUp size={15} color="#10B981" />} title="Liquidity Management" subtitle="LP settings & lock duration" />
+
+                    <View style={mStyles.twoCol}>
+                      <View style={mStyles.twoColItem}>
+                        <Text style={mStyles.label}>Launch Price ($)</Text>
+                        <TextInput style={mStyles.input} placeholder="0.000003" placeholderTextColor={colors.textMuted} value={launchPrice} onChangeText={setLaunchPrice} keyboardType="decimal-pad" />
+                      </View>
+                      <View style={mStyles.twoColItem}>
+                        <Text style={mStyles.label}>Listing Price ($)</Text>
+                        <TextInput style={mStyles.input} placeholder="0.000005" placeholderTextColor={colors.textMuted} value={listingPrice} onChangeText={setListingPrice} keyboardType="decimal-pad" />
+                      </View>
+                    </View>
+
+                    <Text style={mStyles.label}>LP Lock Duration (days)</Text>
+                    <TextInput style={mStyles.input} placeholder="30" placeholderTextColor={colors.textMuted} value={lpLockDays} onChangeText={setLpLockDays} keyboardType="numeric" />
+                    <Text style={mStyles.hint}>Liquidity locked on Raydium/Meteora after launch</Text>
+
+                    <View style={mStyles.infoCard}>
+                      <Lock size={13} color="#10B981" />
+                      <Text style={mStyles.infoCardText}>LP will be locked for {lpLockDays || 30} days after finalization. Longer lock = higher trust score.</Text>
+                    </View>
+                  </View>
+
+                  {/* Section 5: Vesting */}
+                  <View style={mStyles.section}>
+                    <SectionHeader icon={<Clock size={15} color="#F59E0B" />} title="Token Vesting" subtitle="Lock team/creator tokens" />
+
+                    <ToggleRow label="Enable Vesting" sub="Lock a portion of tokens with a release schedule." value={vestingEnabled} onToggle={() => setVestingEnabled(v => !v)} />
+
+                    {vestingEnabled && (
+                      <>
+                        <Text style={mStyles.label}>Vesting Amount (tokens)</Text>
+                        <TextInput style={mStyles.input} placeholder="e.g. 100000000" placeholderTextColor={colors.textMuted} value={vestingAmount} onChangeText={setVestingAmount} keyboardType="numeric" />
+
+                        <View style={mStyles.twoCol}>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Cliff (days)</Text>
+                            <TextInput style={mStyles.input} placeholder="30" placeholderTextColor={colors.textMuted} value={vestingCliffDays} onChangeText={setVestingCliffDays} keyboardType="numeric" />
+                          </View>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Duration (days)</Text>
+                            <TextInput style={mStyles.input} placeholder="365" placeholderTextColor={colors.textMuted} value={vestingDurationDays} onChangeText={setVestingDurationDays} keyboardType="numeric" />
+                          </View>
+                        </View>
+
+                        <Text style={mStyles.label}>Unlock Style</Text>
+                        <View style={mStyles.modeSelector}>
+                          {(['linear', 'monthly', 'cliff_only'] as const).map(s => (
+                            <TouchableOpacity key={s} style={[mStyles.modeBtn, vestingStyle === s && mStyles.modeBtnActive]} onPress={() => setVestingStyle(s)}>
+                              <Text style={[mStyles.modeBtnText, vestingStyle === s && mStyles.modeBtnTextActive]}>
+                                {s === 'linear' ? 'Linear' : s === 'monthly' ? 'Monthly' : 'Cliff Only'}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+
+                        <View style={mStyles.vestingPreview}>
+                          <Text style={mStyles.vestingPreviewText}>
+                            {vestingAmount || '0'} tokens locked · cliff {vestingCliffDays}d · unlock over {vestingDurationDays}d ({vestingStyle})
+                          </Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
+
+                  {/* Section 6: Anti-Bot Protection */}
+                  <View style={mStyles.section}>
+                    <SectionHeader icon={<ShieldCheck size={15} color="#3B82F6" />} title="Anti-Bot Protection" subtitle="Sniper & bot deterrents" />
+
+                    <ToggleRow label="Enable Anti-Bot" sub="Apply launch protection rules." value={antiBotEnabled} onToggle={() => setAntiBotEnabled(v => !v)} />
+
+                    {antiBotEnabled && (
+                      <>
+                        <View style={mStyles.twoCol}>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Max Wallet (%)</Text>
+                            <TextInput style={mStyles.input} placeholder="2" placeholderTextColor={colors.textMuted} value={maxWalletPct} onChangeText={setMaxWalletPct} keyboardType="decimal-pad" />
+                          </View>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Buy Cooldown (s)</Text>
+                            <TextInput style={mStyles.input} placeholder="0" placeholderTextColor={colors.textMuted} value={buyCooldown} onChangeText={setBuyCooldown} keyboardType="numeric" />
+                          </View>
+                        </View>
+
+                        <View style={mStyles.twoCol}>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Trading Delay (s)</Text>
+                            <TextInput style={mStyles.input} placeholder="0" placeholderTextColor={colors.textMuted} value={tradingDelay} onChangeText={setTradingDelay} keyboardType="numeric" />
+                          </View>
+                          <View style={mStyles.twoColItem}>
+                            <Text style={mStyles.label}>Launch Delay (s)</Text>
+                            <TextInput style={mStyles.input} placeholder="0" placeholderTextColor={colors.textMuted} value={launchDelay} onChangeText={setLaunchDelay} keyboardType="numeric" />
+                          </View>
+                        </View>
+
+                        <View style={[mStyles.infoCard, { borderColor: 'rgba(59,130,246,0.2)' }]}>
+                          <ShieldCheck size={13} color="#3B82F6" />
+                          <Text style={mStyles.infoCardText}>
+                            Max {maxWalletPct || 2}% per wallet · {buyCooldown || 0}s cooldown between buys · {tradingDelay || 0}s trading delay after launch
+                          </Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
+
+                  {/* Section 7: Burn & Misc */}
+                  <View style={mStyles.section}>
+                    <SectionHeader icon={<Flame size={15} color="#EF4444" />} title="Token Mechanics" subtitle="Burn, flags" />
+                    <ToggleRow label="Enable Auto-Burn" sub="Burn a % of tokens on each trade." value={burnEnabled} onToggle={() => setBurnEnabled(v => !v)} />
+                  </View>
                 </>
               )}
 
-              <Text style={mStyles.divider}>Socials (optional)</Text>
-
-              <View style={mStyles.socialRow}>
-                <Globe size={16} color={colors.textMuted} />
-                <TextInput style={mStyles.socialInput} placeholder="Website URL" placeholderTextColor={colors.textMuted} value={website} onChangeText={setWebsite} autoCapitalize="none" />
-              </View>
-              <View style={mStyles.socialRow}>
-                <MessageCircle size={16} color={colors.textMuted} />
-                <TextInput style={mStyles.socialInput} placeholder="Telegram URL" placeholderTextColor={colors.textMuted} value={telegram} onChangeText={setTelegram} autoCapitalize="none" />
-              </View>
-              <View style={mStyles.socialRow}>
-                <Twitter size={16} color={colors.textMuted} />
-                <TextInput style={mStyles.socialInput} placeholder="Twitter / X URL" placeholderTextColor={colors.textMuted} value={twitter} onChangeText={setTwitter} autoCapitalize="none" />
-              </View>
-
-              {/* Cost estimate */}
+              {/* Cost card */}
               <View style={mStyles.costCard}>
                 <Text style={mStyles.costTitle}>Estimated Cost</Text>
                 {[
-                  ['Mint rent exemption', '~0.002 SOL'],
+                  ['Mint rent', '~0.002 SOL'],
                   ['Platform fee', '0.02 SOL'],
                   ['Network fee', '~0.000005 SOL'],
                   ['Total', '~0.022 SOL'],
@@ -515,6 +685,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
             </ScrollView>
           )}
 
+          {/* ── PROGRESS ── */}
           {step === 'progress' && progress && (
             <View style={mStyles.progressContainer}>
               <View style={mStyles.progressIconWrap}>
@@ -529,6 +700,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
             </View>
           )}
 
+          {/* ── DONE ── */}
           {step === 'done' && result && (
             <ScrollView contentContainerStyle={mStyles.doneContainer} showsVerticalScrollIndicator={false}>
               <View style={mStyles.doneIconWrap}>
@@ -541,10 +713,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
                 <Text style={mStyles.mintLabel}>Mint Address</Text>
                 <TouchableOpacity style={mStyles.mintRow} onPress={copyMint}>
                   <Text style={mStyles.mintAddr} numberOfLines={1} ellipsizeMode="middle">{result.mintAddress}</Text>
-                  {copiedMint
-                    ? <CheckCircleIcon size={16} color={colors.success} />
-                    : <Copy size={16} color={colors.textMuted} />
-                  }
+                  {copiedMint ? <CheckCircleIcon size={16} color={colors.success} /> : <Copy size={16} color={colors.textMuted} />}
                 </TouchableOpacity>
               </View>
 
@@ -555,20 +724,13 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
                 </TouchableOpacity>
               )}
 
-              {/* Setup Presale CTA */}
               {createdTokenId && (
-                <TouchableOpacity
-                  style={mStyles.presaleCta}
-                  onPress={() => setStep('presale')}
-                >
-                  <LinearGradient
-                    colors={['rgba(245,158,11,0.2)', 'rgba(217,119,6,0.1)']}
-                    style={mStyles.presaleCtaGrad}
-                  >
+                <TouchableOpacity style={mStyles.presaleCta} onPress={() => setStep('presale')}>
+                  <LinearGradient colors={['rgba(245,158,11,0.2)', 'rgba(217,119,6,0.1)']} style={mStyles.presaleCtaGrad}>
                     <Zap size={20} color={colors.warning} />
                     <View style={{ flex: 1 }}>
                       <Text style={mStyles.presaleCtaTitle}>Setup Presale</Text>
-                      <Text style={mStyles.presaleCtaSub}>Create a presale to raise SOL before listing</Text>
+                      <Text style={mStyles.presaleCtaSub}>Raise SOL before listing your token</Text>
                     </View>
                     <ChevronRight size={18} color={colors.warning} />
                   </LinearGradient>
@@ -990,6 +1152,18 @@ export default function LaunchpadScreen() {
             <Text style={styles.ctaBtnText}>Create Token</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Creator Dashboard CTA */}
+        {activeAddress && (
+          <TouchableOpacity style={styles.dashboardCta} onPress={() => router.push('/launchpad/creator-dashboard')}>
+            <BarChart3 size={18} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.dashboardCtaTitle}>Creator Dashboard</Text>
+              <Text style={styles.dashboardCtaSub}>Manage tokens, vesting, and analytics</Text>
+            </View>
+            <ChevronRight size={16} color={colors.primary} />
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       {/* Create Modal */}
@@ -1237,6 +1411,15 @@ const styles = StyleSheet.create({
     borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14,
   },
   ctaBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+
+  dashboardCta: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#12121A', borderRadius: 14,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+    padding: 14, marginBottom: 8, marginTop: 4,
+  },
+  dashboardCtaTitle: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  dashboardCtaSub: { fontSize: 12, color: '#6B7280', marginTop: 1 },
 });
 
 // ─── Modal Styles ─────────────────────────────────────────────────────────────
@@ -1419,6 +1602,63 @@ const mStyles = StyleSheet.create({
   },
   presaleCtaTitle: { fontSize: 15, fontWeight: '700', color: '#F59E0B' },
   presaleCtaSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+
+  // Sections
+  section: {
+    backgroundColor: '#12121A', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.1)',
+    padding: 16, marginBottom: 14,
+  },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
+  sectionIcon: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: '#0A0A0F',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  sectionSub: { fontSize: 11, color: '#6B7280', marginTop: 1 },
+
+  // Easy mode banner
+  easyModeBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    borderRadius: 10, padding: 10, marginBottom: 14,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
+  },
+  easyModeText: { flex: 1, fontSize: 12, color: '#9CA3AF', lineHeight: 17 },
+
+  // Two-column layout
+  twoCol: { flexDirection: 'row', gap: 10 },
+  twoColItem: { flex: 1 },
+
+  // Logo sub
+  logoPlaceholderSub: { fontSize: 9, color: '#4B5563' },
+
+  // Hints
+  hint: { fontSize: 11, color: '#4B5563', marginTop: -10, marginBottom: 12 },
+
+  // Select button (looks like input)
+  selectBtn: { justifyContent: 'center' },
+  selectBtnText: { fontSize: 15, color: colors.primary, fontWeight: '600' },
+
+  // Toggle sub
+  toggleSub: { fontSize: 11, color: '#6B7280', marginTop: 2, lineHeight: 15 },
+
+  // Info card (inline notices)
+  infoCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: 'rgba(16,185,129,0.06)',
+    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)',
+    padding: 10, marginTop: 4, marginBottom: 4,
+  },
+  infoCardText: { flex: 1, fontSize: 12, color: '#9CA3AF', lineHeight: 17 },
+
+  // Vesting preview
+  vestingPreview: {
+    backgroundColor: '#0A0A0F', borderRadius: 10, padding: 10, marginTop: 6,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.15)',
+  },
+  vestingPreviewText: { fontSize: 12, color: '#F59E0B', lineHeight: 17 },
 });
 
 // ─── Presale Setup Modal Styles ───────────────────────────────────────────────
