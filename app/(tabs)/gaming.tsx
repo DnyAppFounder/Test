@@ -19,7 +19,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown } from 'lucide-react-native';
+import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { launchpadService, LaunchpadToken, LaunchpadStats } from '@/services/launchpadService';
@@ -29,6 +29,14 @@ import {
   AdvancedModeInput,
   TokenCreationProgress,
 } from '@/services/tokenCreationService';
+import {
+  presaleService,
+  Presale,
+  validatePresaleInput,
+  computePresaleStatus,
+  getPresaleProgress,
+  formatTimeRemaining,
+} from '@/services/presaleService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -78,6 +86,162 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+// ─── Setup Presale Modal ──────────────────────────────────────────────────────
+interface SetupPresaleModalProps {
+  visible: boolean;
+  tokenId: string;
+  tokenSymbol: string;
+  totalSupply: number;
+  onClose: () => void;
+  onSuccess: (presaleId: string) => void;
+}
+
+function SetupPresaleModal({ visible, tokenId, tokenSymbol, totalSupply, onClose, onSuccess }: SetupPresaleModalProps) {
+  const router = useRouter();
+  const [softCap, setSoftCap] = useState('5');
+  const [hardCap, setHardCap] = useState('50');
+  const [minBuy, setMinBuy] = useState('0.1');
+  const [maxBuy, setMaxBuy] = useState('5');
+  const [launchPrice, setLaunchPrice] = useState('0.000003');
+  const [listingPrice, setListingPrice] = useState('0.000005');
+  const [tokensForSale, setTokensForSale] = useState(String(Math.floor(totalSupply * 0.5)));
+  const [liquidityPct, setLiquidityPct] = useState('60');
+  const [unsold, setUnsold] = useState<'burn' | 'return'>('burn');
+  const [startNow, setStartNow] = useState(true);
+  const [durationDays, setDurationDays] = useState('7');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    const startAt = startNow ? new Date() : new Date(Date.now() + 60 * 60 * 1000);
+    const endAt = new Date(startAt.getTime() + parseFloat(durationDays) * 86_400_000);
+
+    const input = {
+      tokenId,
+      softCap: parseFloat(softCap),
+      hardCap: parseFloat(hardCap),
+      minBuy: parseFloat(minBuy),
+      maxBuy: parseFloat(maxBuy),
+      launchPrice: parseFloat(launchPrice),
+      listingPrice: parseFloat(listingPrice),
+      tokensForSale: parseFloat(tokensForSale),
+      liquidityPercent: parseInt(liquidityPct),
+      unsoldBehavior: unsold,
+      startAt,
+      endAt,
+    };
+
+    const validationError = validatePresaleInput(input);
+    if (validationError) { setError(validationError); return; }
+
+    setError(null);
+    setLoading(true);
+    const ps = await presaleService.createPresale(input);
+    setLoading(false);
+
+    if (!ps) { setError('Failed to create presale'); return; }
+    onSuccess(ps.id);
+    router.push(`/launchpad/${ps.id}`);
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent={false} statusBarTranslucent>
+      <SafeAreaView style={mStyles.safeArea}>
+        <View style={mStyles.header}>
+          <TouchableOpacity onPress={onClose} style={mStyles.backBtn}>
+            <X size={22} color={colors.textMuted} />
+          </TouchableOpacity>
+          <View style={mStyles.headerCenter}>
+            <Zap size={16} color={colors.warning} />
+            <Text style={mStyles.headerTitle}>Setup Presale</Text>
+          </View>
+          <View style={mStyles.headerRight} />
+        </View>
+
+        <ScrollView style={mStyles.flex} contentContainerStyle={mStyles.formContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {error ? <Text style={mStyles.errorText}>{error}</Text> : null}
+
+          <View style={psStyles.infoCard}>
+            <Zap size={14} color={colors.warning} />
+            <Text style={psStyles.infoText}>Configure your presale for <Text style={{ color: colors.primary, fontWeight: '700' }}>{tokenSymbol}</Text>. Buyers send SOL and receive tokens after finalization.</Text>
+          </View>
+
+          <Text style={mStyles.label}>Soft Cap (SOL) *</Text>
+          <TextInput style={mStyles.input} placeholder="5" placeholderTextColor={colors.textMuted} value={softCap} onChangeText={setSoftCap} keyboardType="decimal-pad" />
+
+          <Text style={mStyles.label}>Hard Cap (SOL) *</Text>
+          <TextInput style={mStyles.input} placeholder="50" placeholderTextColor={colors.textMuted} value={hardCap} onChangeText={setHardCap} keyboardType="decimal-pad" />
+
+          <View style={psStyles.row}>
+            <View style={psStyles.halfField}>
+              <Text style={mStyles.label}>Min Buy (SOL)</Text>
+              <TextInput style={mStyles.input} placeholder="0.1" placeholderTextColor={colors.textMuted} value={minBuy} onChangeText={setMinBuy} keyboardType="decimal-pad" />
+            </View>
+            <View style={psStyles.halfField}>
+              <Text style={mStyles.label}>Max Buy (SOL)</Text>
+              <TextInput style={mStyles.input} placeholder="5" placeholderTextColor={colors.textMuted} value={maxBuy} onChangeText={setMaxBuy} keyboardType="decimal-pad" />
+            </View>
+          </View>
+
+          <View style={psStyles.row}>
+            <View style={psStyles.halfField}>
+              <Text style={mStyles.label}>Launch Price ($)</Text>
+              <TextInput style={mStyles.input} placeholder="0.000003" placeholderTextColor={colors.textMuted} value={launchPrice} onChangeText={setLaunchPrice} keyboardType="decimal-pad" />
+            </View>
+            <View style={psStyles.halfField}>
+              <Text style={mStyles.label}>Listing Price ($)</Text>
+              <TextInput style={mStyles.input} placeholder="0.000005" placeholderTextColor={colors.textMuted} value={listingPrice} onChangeText={setListingPrice} keyboardType="decimal-pad" />
+            </View>
+          </View>
+
+          <Text style={mStyles.label}>Tokens for Sale</Text>
+          <TextInput style={mStyles.input} placeholder={String(Math.floor(totalSupply * 0.5))} placeholderTextColor={colors.textMuted} value={tokensForSale} onChangeText={setTokensForSale} keyboardType="numeric" />
+
+          <Text style={mStyles.label}>Liquidity % (10–95)</Text>
+          <TextInput style={mStyles.input} placeholder="60" placeholderTextColor={colors.textMuted} value={liquidityPct} onChangeText={setLiquidityPct} keyboardType="numeric" maxLength={2} />
+
+          <Text style={mStyles.label}>Duration (days)</Text>
+          <TextInput style={mStyles.input} placeholder="7" placeholderTextColor={colors.textMuted} value={durationDays} onChangeText={setDurationDays} keyboardType="numeric" />
+
+          <Text style={mStyles.label}>Unsold Tokens</Text>
+          <View style={mStyles.modeSelector}>
+            {(['burn', 'return'] as const).map(opt => (
+              <TouchableOpacity key={opt} style={[mStyles.modeBtn, unsold === opt && mStyles.modeBtnActive]} onPress={() => setUnsold(opt)}>
+                <Text style={[mStyles.modeBtnText, unsold === opt && mStyles.modeBtnTextActive]}>
+                  {opt === 'burn' ? 'Burn Unsold' : 'Return to Creator'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <View style={mStyles.toggleRow}>
+            <Text style={mStyles.toggleLabel}>Start immediately</Text>
+            <TouchableOpacity style={[mStyles.toggle, startNow && mStyles.toggleOn]} onPress={() => setStartNow(v => !v)}>
+              <View style={[mStyles.toggleKnob, startNow && mStyles.toggleKnobOn]} />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity onPress={handleCreate} style={mStyles.launchBtn} disabled={loading}>
+            {loading
+              ? <ActivityIndicator color="#fff" style={{ paddingVertical: 14 }} />
+              : (
+                <LinearGradient colors={['#F59E0B', '#D97706']} style={mStyles.launchBtnGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                  <Zap size={18} color="#fff" />
+                  <Text style={mStyles.launchBtnText}>Create Presale</Text>
+                </LinearGradient>
+              )
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={onClose} style={psStyles.skipBtn}>
+            <Text style={psStyles.skipBtnText}>Skip for now</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // ─── Create Token Modal ────────────────────────────────────────────────────────
 interface CreateTokenModalProps {
   visible: boolean;
@@ -88,7 +252,8 @@ interface CreateTokenModalProps {
 
 function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: CreateTokenModalProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>('easy');
-  const [step, setStep] = useState<'form' | 'progress' | 'done'>('form');
+  const [step, setStep] = useState<'form' | 'progress' | 'done' | 'presale'>('form');
+  const [createdTokenId, setCreatedTokenId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [symbol, setSymbol] = useState('');
@@ -125,6 +290,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 
   const reset = () => {
     setStep('form'); setProgress(null); setResult(null); setError(null);
+    setCreatedTokenId(null);
     setName(''); setSymbol(''); setDescription(''); setTotalSupply('1000000000');
     setWebsite(''); setTelegram(''); setTwitter(''); setImageUri(null);
     setDecimals('6'); setCreatorAlloc('100000000'); setLiquidityAlloc('900000000');
@@ -186,6 +352,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 
     if (res.success && res.mintAddress && res.txSignature) {
       setResult({ mintAddress: res.mintAddress, txSig: res.txSignature });
+      if (res.tokenId) setCreatedTokenId(res.tokenId);
       setStep('done');
       onSuccess(res.mintAddress, res.txSignature);
     } else {
@@ -385,10 +552,41 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
                 </TouchableOpacity>
               )}
 
+              {/* Setup Presale CTA */}
+              {createdTokenId && (
+                <TouchableOpacity
+                  style={mStyles.presaleCta}
+                  onPress={() => setStep('presale')}
+                >
+                  <LinearGradient
+                    colors={['rgba(245,158,11,0.2)', 'rgba(217,119,6,0.1)']}
+                    style={mStyles.presaleCtaGrad}
+                  >
+                    <Zap size={20} color={colors.warning} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={mStyles.presaleCtaTitle}>Setup Presale</Text>
+                      <Text style={mStyles.presaleCtaSub}>Create a presale to raise SOL before listing</Text>
+                    </View>
+                    <ChevronRight size={18} color={colors.warning} />
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity style={mStyles.doneClose} onPress={() => { reset(); onClose(); }}>
                 <Text style={mStyles.doneCloseText}>Done</Text>
               </TouchableOpacity>
             </ScrollView>
+          )}
+
+          {step === 'presale' && createdTokenId && (
+            <SetupPresaleModal
+              visible={true}
+              tokenId={createdTokenId}
+              tokenSymbol={symbol.toUpperCase()}
+              totalSupply={parseFloat(totalSupply) || 1000000000}
+              onClose={() => { reset(); onClose(); }}
+              onSuccess={() => { reset(); onClose(); }}
+            />
           )}
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -397,11 +595,31 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
 }
 
 // ─── Token Row ─────────────────────────────────────────────────────────────────
-function TokenRow({ token, rank, onPress }: { token: LaunchpadToken; rank: number; onPress: () => void }) {
+function TokenRow({
+  token, rank, presale, onPress, onPresale,
+}: {
+  token: LaunchpadToken;
+  rank: number;
+  presale?: Presale | null;
+  onPress: () => void;
+  onPresale?: () => void;
+}) {
   const change = 0;
   const positive = change >= 0;
+  const psStatus = presale ? computePresaleStatus(presale) : null;
+  const psProgress = presale ? getPresaleProgress(presale) : null;
+
+  const STATUS_COLORS: Record<string, string> = {
+    live: '#10b981', upcoming: '#F59E0B', successful: '#10b981',
+    failed: '#ef4444', claim_live: colors.primary, finalized: '#6B7280',
+  };
+
   return (
-    <TouchableOpacity style={styles.tokenRow} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={styles.tokenRow}
+      onPress={presale && onPresale ? onPresale : onPress}
+      activeOpacity={0.8}
+    >
       <Text style={styles.tokenRank}>{rank}</Text>
       {token.image_url
         ? <Image source={{ uri: token.image_url }} style={styles.tokenRowLogo} />
@@ -413,12 +631,32 @@ function TokenRow({ token, rank, onPress }: { token: LaunchpadToken; rank: numbe
       }
       <View style={styles.tokenRowInfo}>
         <Text style={styles.tokenRowName}>{token.name}</Text>
-        <Text style={styles.tokenRowVol}>Vol {fmtUsd(token.total_supply * 0.001)}</Text>
+        {presale && psProgress ? (
+          <View style={styles.psProgressMini}>
+            <View style={styles.psProgressMiniBar}>
+              <View style={[styles.psProgressMiniFill, { width: `${psProgress.hardCapPercent}%` as any }]} />
+            </View>
+            <Text style={[styles.psStatusLabel, { color: STATUS_COLORS[psStatus ?? 'upcoming'] ?? '#6B7280' }]}>
+              {psProgress.hardCapPercent.toFixed(0)}% · {psStatus?.toUpperCase()}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.tokenRowVol}>Vol {fmtUsd(token.total_supply * 0.001)}</Text>
+        )}
       </View>
-      <View style={styles.tokenRowBadge}>
-        <Zap size={10} color={colors.warning} />
-        <Text style={styles.tokenRowBadgeText}>{Math.floor(token.total_supply / 1e6)}</Text>
-      </View>
+      {presale ? (
+        <View style={[styles.tokenRowBadge, { backgroundColor: `${STATUS_COLORS[psStatus ?? 'upcoming']}20` }]}>
+          <Users size={10} color={STATUS_COLORS[psStatus ?? 'upcoming']} />
+          <Text style={[styles.tokenRowBadgeText, { color: STATUS_COLORS[psStatus ?? 'upcoming'] }]}>
+            {presale.buyer_count}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.tokenRowBadge}>
+          <Zap size={10} color={colors.warning} />
+          <Text style={styles.tokenRowBadgeText}>{Math.floor(token.total_supply / 1e6)}</Text>
+        </View>
+      )}
       <View style={styles.tokenRowRight}>
         <Text style={styles.tokenRowPrice}>{fmtPrice(0.000003)}</Text>
         <Text style={[styles.tokenRowChange, { color: positive ? colors.success : colors.error }]}>
@@ -441,18 +679,26 @@ export default function LaunchpadScreen() {
   const [stats, setStats] = useState<LaunchpadStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  // Map tokenId → presale for inline presale indicators
+  const [presaleMap, setPresaleMap] = useState<Map<string, Presale>>(new Map());
 
   const loadData = useCallback(async () => {
     try {
       const tab = activeTab === 'featured' ? 'new' : activeTab as any;
-      const [tokenData, featuredData, statsData] = await Promise.allSettled([
+      const [tokenData, featuredData, statsData, activePresales] = await Promise.allSettled([
         launchpadService.getTokens(tab),
         launchpadService.getFeatured(),
         launchpadService.getStats(),
+        presaleService.getActivePresales(50),
       ]);
       if (tokenData.status === 'fulfilled') setTokens(tokenData.value);
       if (featuredData.status === 'fulfilled') setFeatured(featuredData.value);
       if (statsData.status === 'fulfilled') setStats(statsData.value);
+      if (activePresales.status === 'fulfilled') {
+        const map = new Map<string, Presale>();
+        activePresales.value.forEach(ps => map.set(ps.token_id, ps));
+        setPresaleMap(map);
+      }
     } catch {}
     finally { setLoading(false); }
   }, [activeTab]);
@@ -638,14 +884,19 @@ export default function LaunchpadScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            tokens.map((token, i) => (
-              <TokenRow
-                key={token.id}
-                token={token}
-                rank={i + 1}
-                onPress={() => handleTokenPress(token)}
-              />
-            ))
+            tokens.map((token, i) => {
+              const ps = presaleMap.get(token.id) ?? null;
+              return (
+                <TokenRow
+                  key={token.id}
+                  token={token}
+                  rank={i + 1}
+                  presale={ps}
+                  onPress={() => handleTokenPress(token)}
+                  onPresale={ps ? () => router.push(`/launchpad/${ps.id}`) : undefined}
+                />
+              );
+            })
           )}
         </View>
 
@@ -855,6 +1106,12 @@ const styles = StyleSheet.create({
   tokenRowPrice: { fontSize: 13, fontWeight: '700', color: '#fff' },
   tokenRowChange: { fontSize: 12, fontWeight: '600', marginTop: 2 },
 
+  // Presale mini progress inside token row
+  psProgressMini: { gap: 3, marginTop: 3 },
+  psProgressMiniBar: { height: 3, width: 80, backgroundColor: '#20202E', borderRadius: 2, overflow: 'hidden' },
+  psProgressMiniFill: { height: 3, backgroundColor: colors.primary, borderRadius: 2 },
+  psStatusLabel: { fontSize: 10, fontWeight: '700' },
+
   // Empty
   emptyState: { alignItems: 'center', paddingVertical: 40, gap: 10 },
   emptyTitle: { fontSize: 16, fontWeight: '600', color: '#fff' },
@@ -1059,4 +1316,37 @@ const mStyles = StyleSheet.create({
     borderRadius: 14, alignSelf: 'stretch', alignItems: 'center',
   },
   doneCloseText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+
+  presaleCta: {
+    alignSelf: 'stretch',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.3)',
+    overflow: 'hidden',
+  },
+  presaleCtaGrad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+  },
+  presaleCtaTitle: { fontSize: 15, fontWeight: '700', color: '#F59E0B' },
+  presaleCtaSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+});
+
+// ─── Presale Setup Modal Styles ───────────────────────────────────────────────
+const psStyles = StyleSheet.create({
+  infoCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+    padding: 12, marginBottom: 20,
+  },
+  infoText: { flex: 1, fontSize: 13, color: '#9CA3AF', lineHeight: 19 },
+  row: { flexDirection: 'row', gap: 10 },
+  halfField: { flex: 1 },
+  skipBtn: {
+    alignItems: 'center', paddingVertical: 14,
+  },
+  skipBtnText: { fontSize: 14, color: '#6B7280' },
 });
