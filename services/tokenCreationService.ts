@@ -179,9 +179,9 @@ class TokenCreationService {
 
       // 3. Create DB record (status = pending)
       progress(3, 'Preparing token record...');
-      const record = await launchpadService.createRecord({ ...normalized, imageUrl });
-      if (!record) {
-        return { success: false, error: 'Failed to create token record in database' };
+      const { data: record, error: recordError } = await launchpadService.createRecord({ ...normalized, imageUrl });
+      if (recordError || !record) {
+        return { success: false, error: recordError ?? 'Failed to create token record in database' };
       }
 
       // 4. Build + upload metadata JSON

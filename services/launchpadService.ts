@@ -134,37 +134,55 @@ class LaunchpadService {
     }
   }
 
-  async createRecord(input: CreateTokenInput): Promise<LaunchpadToken | null> {
-    try {
-      const { data, error } = await supabase
-        .from('launchpad_tokens')
-        .insert({
-          creator_wallet: input.creatorWallet,
-          token_program: input.tokenProgram ?? 'spl-token',
-          name: input.name,
-          symbol: input.symbol.toUpperCase(),
-          description: input.description,
-          decimals: input.decimals,
-          total_supply: input.totalSupply,
-          creator_allocation: input.creatorAllocation,
-          liquidity_allocation: input.liquidityAllocation,
-          status: 'pending',
-          website: input.website || null,
-          telegram: input.telegram || null,
-          twitter: input.twitter || null,
-          discord: input.discord || null,
-          image_url: input.imageUrl || null,
-          updated_at: new Date().toISOString(),
-        })
-        .select()
-        .maybeSingle();
-
-      if (error) throw error;
-      return data as LaunchpadToken | null;
-    } catch (e) {
-      console.error('[LaunchpadService] createRecord error:', e);
-      return null;
+  async createRecord(input: CreateTokenInput): Promise<{ data: LaunchpadToken | null; error: string | null }> {
+    if (!input.creatorWallet || input.creatorWallet.trim().length === 0) {
+      return { data: null, error: 'Creator wallet address is required' };
     }
+    if (!input.name || input.name.trim().length === 0) {
+      return { data: null, error: 'Token name is required' };
+    }
+    if (!input.symbol || input.symbol.trim().length === 0) {
+      return { data: null, error: 'Token symbol is required' };
+    }
+    if (!input.totalSupply || input.totalSupply <= 0) {
+      return { data: null, error: 'Total supply must be greater than 0' };
+    }
+
+    const { data, error } = await supabase
+      .from('launchpad_tokens')
+      .insert({
+        creator_wallet: input.creatorWallet,
+        token_program: input.tokenProgram ?? 'spl-token',
+        name: input.name.trim(),
+        symbol: input.symbol.toUpperCase().trim(),
+        description: input.description?.trim() ?? '',
+        decimals: input.decimals,
+        total_supply: input.totalSupply,
+        creator_allocation: input.creatorAllocation,
+        liquidity_allocation: input.liquidityAllocation,
+        status: 'pending',
+        website: input.website || null,
+        telegram: input.telegram || null,
+        twitter: input.twitter || null,
+        discord: input.discord || null,
+        image_url: input.imageUrl || null,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.error('[LaunchpadService] createRecord DB error:', error);
+      const msg = error.message || error.details || JSON.stringify(error);
+      return { data: null, error: `Database error: ${msg}` };
+    }
+
+    if (!data) {
+      console.error('[LaunchpadService] createRecord returned null data (possible RLS block)');
+      return { data: null, error: 'Insert succeeded but returned no data — check RLS policies' };
+    }
+
+    return { data: data as LaunchpadToken, error: null };
   }
 
   async updateRecord(id: string, updates: Partial<LaunchpadToken>): Promise<boolean> {
@@ -182,15 +200,25 @@ class LaunchpadService {
   async uploadImage(walletAddress: string, imageUri: string): Promise<string | null> {
     try {
       const response = await fetch(imageUri);
+      if (!response.ok) {
+        console.error('[LaunchpadService] uploadImage: failed to fetch image', response.status);
+        return null;
+      }
       const blob = await response.blob();
-      const ext = imageUri.split('.').pop()?.toLowerCase() || 'png';
+      // Strip query params and get extension from path only
+      const pathOnly = imageUri.split('?')[0];
+      const rawExt = pathOnly.split('.').pop()?.toLowerCase() ?? 'png';
+      const ext = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(rawExt) ? rawExt : 'png';
       const filename = `launchpad/${walletAddress}/${Date.now()}.${ext}`;
 
       const { error } = await supabase.storage
         .from('post-media')
         .upload(filename, blob, { contentType: `image/${ext}`, upsert: true });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[LaunchpadService] uploadImage storage error:', error);
+        return null;
+      }
 
       const { data: urlData } = supabase.storage
         .from('post-media')
@@ -213,7 +241,10 @@ class LaunchpadService {
         .from('post-media')
         .upload(filename, blob, { contentType: 'application/json', upsert: true });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[LaunchpadService] uploadMetadata storage error:', error);
+        return null;
+      }
 
       const { data: urlData } = supabase.storage
         .from('post-media')
