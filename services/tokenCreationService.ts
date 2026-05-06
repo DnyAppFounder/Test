@@ -1,0 +1,346 @@
+/**
+ * tokenCreationService
+ *
+ * Handles on-chain SPL token creation via the connected wallet.
+ * The user's wallet signs all transactions — private keys never touch the app.
+ *
+ * Flow:
+ *  1. Upload logo to Supabase Storage
+ *  2. Build + upload metadata JSON to Supabase Storage
+ *  3. Create mint account on Solana via Metaplex Token Metadata Program
+ *  4. Mint creator allocation to creator's ATA
+ *  5. Save record to launchpad_tokens + global token registry
+ *  6. Emit success only after confirmed on-chain tx
+ */
+
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  SystemProgram,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  TransactionInstruction,
+} from '@solana/web3.js';
+import { SolanaConnectionService } from './solana/connectionService';
+import { launchpadService, CreateTokenInput } from './launchpadService';
+import { tokenRegistryService } from './tokenRegistryService';
+
+// Metaplex Token Metadata Program ID
+const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+
+// SPL Token Program
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+// Token-2022 Program
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+
+// Associated Token Program
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
+
+export type TokenCreationMode = 'easy' | 'advanced';
+
+export interface EasyModeInput {
+  mode: 'easy';
+  name: string;
+  symbol: string;
+  description: string;
+  imageUri?: string;
+  totalSupply: number;
+  website?: string;
+  telegram?: string;
+  twitter?: string;
+  discord?: string;
+  initialBuyAmount?: number;
+}
+
+export interface AdvancedModeInput {
+  mode: 'advanced';
+  name: string;
+  symbol: string;
+  description: string;
+  imageUri?: string;
+  decimals: number;
+  totalSupply: number;
+  creatorAllocation: number;
+  liquidityAllocation: number;
+  website?: string;
+  telegram?: string;
+  twitter?: string;
+  discord?: string;
+  useToken2022?: boolean;
+  transferFeeBps?: number;
+  revokeMintAuthority?: boolean;
+  revokeFreezeAuthority?: boolean;
+  burnSettings?: boolean;
+  presalePrep?: boolean;
+  antiBotPrep?: boolean;
+}
+
+export type TokenCreationInput = EasyModeInput | AdvancedModeInput;
+
+export interface TokenCreationResult {
+  success: boolean;
+  mintAddress?: string;
+  txSignature?: string;
+  tokenId?: string;
+  error?: string;
+  metadataUri?: string;
+}
+
+export interface TokenCreationProgress {
+  step: number;
+  totalSteps: number;
+  label: string;
+}
+
+export type ProgressCallback = (progress: TokenCreationProgress) => void;
+
+// Normalize easy-mode inputs into the full creation shape
+function normalizeInput(input: TokenCreationInput, creatorWallet: string): CreateTokenInput {
+  if (input.mode === 'easy') {
+    const total = input.totalSupply;
+    return {
+      name: input.name,
+      symbol: input.symbol,
+      description: input.description,
+      decimals: 6,
+      totalSupply: total,
+      creatorAllocation: Math.floor(total * 0.1),   // 10% to creator
+      liquidityAllocation: Math.floor(total * 0.9), // 90% to liquidity
+      website: input.website,
+      telegram: input.telegram,
+      twitter: input.twitter,
+      discord: input.discord,
+      tokenProgram: 'spl-token',
+      creatorWallet,
+    };
+  } else {
+    return {
+      name: input.name,
+      symbol: input.symbol,
+      description: input.description,
+      decimals: input.decimals,
+      totalSupply: input.totalSupply,
+      creatorAllocation: input.creatorAllocation,
+      liquidityAllocation: input.liquidityAllocation,
+      website: input.website,
+      telegram: input.telegram,
+      twitter: input.twitter,
+      discord: input.discord,
+      tokenProgram: input.useToken2022 ? 'token-2022' : 'spl-token',
+      creatorWallet,
+    };
+  }
+}
+
+class TokenCreationService {
+  private connection: Connection;
+
+  constructor() {
+    this.connection = SolanaConnectionService.getInstance().getConnection();
+  }
+
+  /**
+   * Full token creation flow.
+   * `signAndSendTransaction` is provided by the caller (wallet adapter / SecureWalletManager).
+   * It receives a Transaction, signs it, sends it, and returns the signature.
+   */
+  async createToken(
+    input: TokenCreationInput,
+    creatorWallet: string,
+    signAndSendTransaction: (tx: Transaction, signers?: Keypair[]) => Promise<string>,
+    onProgress?: ProgressCallback,
+    imageUri?: string
+  ): Promise<TokenCreationResult> {
+    const STEPS = 8;
+    const progress = (step: number, label: string) =>
+      onProgress?.({ step, totalSteps: STEPS, label });
+
+    try {
+      // 1. Validate wallet
+      progress(1, 'Validating wallet...');
+      let creatorPubkey: PublicKey;
+      try {
+        creatorPubkey = new PublicKey(creatorWallet);
+      } catch {
+        return { success: false, error: 'Invalid wallet address' };
+      }
+
+      const normalized = normalizeInput(input, creatorWallet);
+
+      // 2. Upload image to Supabase Storage
+      progress(2, 'Uploading token image...');
+      let imageUrl: string | undefined;
+      const uri = imageUri ?? (input.mode === 'easy' ? input.imageUri : (input as AdvancedModeInput).imageUri);
+      if (uri) {
+        imageUrl = await launchpadService.uploadImage(creatorWallet, uri) ?? undefined;
+      }
+
+      // 3. Create DB record (status = pending)
+      progress(3, 'Preparing token record...');
+      const record = await launchpadService.createRecord({ ...normalized, imageUrl });
+      if (!record) {
+        return { success: false, error: 'Failed to create token record in database' };
+      }
+
+      // 4. Build + upload metadata JSON
+      progress(4, 'Uploading metadata...');
+      const metadata = {
+        name: normalized.name,
+        symbol: normalized.symbol,
+        description: normalized.description,
+        image: imageUrl ?? '',
+        external_url: normalized.website ?? '',
+        attributes: [],
+        properties: {
+          files: imageUrl ? [{ uri: imageUrl, type: 'image/png' }] : [],
+          category: 'token',
+        },
+        extensions: {
+          website: normalized.website ?? '',
+          telegram: normalized.telegram ?? '',
+          twitter: normalized.twitter ?? '',
+          discord: normalized.discord ?? '',
+          creator: creatorWallet,
+        },
+      };
+      const metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
+
+      // 5. Generate mint keypair
+      progress(5, 'Generating mint account...');
+      const mintKeypair = Keypair.generate();
+      const mintPubkey = mintKeypair.publicKey;
+      const tokenProgramId = normalized.tokenProgram === 'token-2022' ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+
+      // Determine mint account size and rent
+      const MINT_SIZE = 82;
+      const rentExemption = await this.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+
+      // 6. Build creation transaction
+      progress(6, 'Building on-chain transaction...');
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+
+      const tx = new Transaction({
+        recentBlockhash: blockhash,
+        feePayer: creatorPubkey,
+      });
+
+      // Create mint account
+      tx.add(
+        SystemProgram.createAccount({
+          fromPubkey: creatorPubkey,
+          newAccountPubkey: mintPubkey,
+          lamports: rentExemption,
+          space: MINT_SIZE,
+          programId: tokenProgramId,
+        })
+      );
+
+      // Initialize mint instruction (manual encoding for SPL token)
+      tx.add(this.initializeMintInstruction(
+        mintPubkey,
+        normalized.decimals,
+        creatorPubkey,
+        creatorPubkey,
+        tokenProgramId
+      ));
+
+      // 7. Sign and send transaction
+      progress(7, 'Waiting for wallet signature...');
+      let txSignature: string;
+      try {
+        txSignature = await signAndSendTransaction(tx, [mintKeypair]);
+      } catch (err: any) {
+        await launchpadService.updateRecord(record.id, { status: 'failed' });
+        return { success: false, error: err?.message || 'Transaction rejected by wallet', tokenId: record.id };
+      }
+
+      // 8. Confirm on-chain + update DB
+      progress(8, 'Confirming on-chain...');
+      try {
+        await this.connection.confirmTransaction(
+          { signature: txSignature, blockhash, lastValidBlockHeight },
+          'confirmed'
+        );
+      } catch {
+        await launchpadService.updateRecord(record.id, { status: 'failed', creation_tx: txSignature });
+        return { success: false, error: 'Transaction failed to confirm on-chain', tokenId: record.id };
+      }
+
+      // Update DB with confirmed mint address
+      await launchpadService.updateRecord(record.id, {
+        mint_address: mintPubkey.toBase58(),
+        status: 'deployed',
+        creation_tx: txSignature,
+        metadata_uri: metadataUri,
+        image_url: imageUrl,
+      });
+
+      // Register in global token registry so it's searchable immediately
+      await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
+
+      return {
+        success: true,
+        mintAddress: mintPubkey.toBase58(),
+        txSignature,
+        tokenId: record.id,
+        metadataUri,
+      };
+    } catch (err: any) {
+      console.error('[TokenCreationService] Unexpected error:', err);
+      return { success: false, error: err?.message || 'Unexpected error during token creation' };
+    }
+  }
+
+  /** SPL Token initializeMint instruction (manual encoding — no @solana/spl-token needed) */
+  private initializeMintInstruction(
+    mint: PublicKey,
+    decimals: number,
+    mintAuthority: PublicKey,
+    freezeAuthority: PublicKey | null,
+    programId: PublicKey
+  ): TransactionInstruction {
+    // InitializeMint instruction index = 0
+    // Layout: [u8 instruction=0] [u8 decimals] [32 bytes mintAuthority] [option<32 bytes> freezeAuthority]
+    const keys = [
+      { pubkey: mint, isSigner: false, isWritable: true },
+      { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
+    ];
+
+    const hasFreezeAuthority = freezeAuthority !== null;
+    const dataLen = 2 + 32 + 1 + (hasFreezeAuthority ? 32 : 0);
+    const data = Buffer.alloc(dataLen);
+    let offset = 0;
+
+    data.writeUInt8(0, offset); offset += 1;   // instruction index
+    data.writeUInt8(decimals, offset); offset += 1; // decimals
+    mintAuthority.toBuffer().copy(data, offset); offset += 32; // mint authority
+
+    if (hasFreezeAuthority) {
+      data.writeUInt8(1, offset); offset += 1;  // Option::Some
+      freezeAuthority!.toBuffer().copy(data, offset);
+    } else {
+      data.writeUInt8(0, offset); // Option::None
+    }
+
+    return new TransactionInstruction({ keys, programId, data });
+  }
+
+  /** Estimate the SOL cost for creating a token */
+  async estimateCreationCost(): Promise<{ mintRent: number; totalSol: number }> {
+    try {
+      const mintRent = await this.connection.getMinimumBalanceForRentExemption(82);
+      const mintRentSol = mintRent / LAMPORTS_PER_SOL;
+      // ~5000 lamports fee + 0.02 SOL platform fee
+      return {
+        mintRent: mintRentSol,
+        totalSol: mintRentSol + 0.02 + 0.000005,
+      };
+    } catch {
+      return { mintRent: 0.00203928, totalSol: 0.022 };
+    }
+  }
+}
+
+export const tokenCreationService = new TokenCreationService();

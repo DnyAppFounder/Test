@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Wallet, Globe, Gamepad2, Compass, Settings } from 'lucide-react-native';
+import { Wallet, Globe, Rocket, Compass, Settings } from 'lucide-react-native';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useEffect, useRef } from 'react';
 import { colors } from '@/constants/theme';
@@ -186,9 +186,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="gaming"
         options={{
-          title: t.tabs.gaming,
+          title: 'Launchpad',
           tabBarIcon: ({ size, color }) => (
-            <AnimatedTabIcon icon={Gamepad2} size={size} color={color} />
+            <AnimatedTabIcon icon={Rocket} size={size} color={color} />
           ),
         }}
       />
