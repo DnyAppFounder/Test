@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -36,7 +36,6 @@ import { TokenDiscussionComponent } from '@/components/TokenDiscussion';
 import { watchlistService } from '@/services/watchlistService';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
-import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 type BottomTab = 'chat' | 'activity' | 'transactions' | 'holders';
@@ -66,20 +65,25 @@ export default function TokenDetailScreen() {
   const [holdersLoading, setHoldersLoading] = useState(false);
   const [totalSupply, setTotalSupply] = useState<number>(0);
 
-  const { price: livePrice } = usePriceUpdates(
-    async () => {
-      if (!address) return null;
+  // Silently refresh only price/volume numbers every 30s — no full token replace,
+  // no loading state, no visual disruption.
+  const priceRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!address) return;
+    const refresh = async () => {
       try {
         const data = await liveMarketService.getTokenDetail(address);
-        if (data) {
-          setToken(data);
-          return data.price;
-        }
+        if (!data) return;
+        setToken(prev => {
+          if (!prev) return prev;
+          if (prev.price === data.price && prev.priceChange24h === data.priceChange24h) return prev;
+          return { ...prev, price: data.price, priceChange24h: data.priceChange24h, volume24h: data.volume24h, liquidity: data.liquidity };
+        });
       } catch {}
-      return null;
-    },
-    { interval: 15000, enabled: !!address }
-  );
+    };
+    priceRefreshRef.current = setInterval(refresh, 30_000);
+    return () => { if (priceRefreshRef.current) clearInterval(priceRefreshRef.current); };
+  }, [address]);
 
   useEffect(() => {
     if (address) {
@@ -230,7 +234,7 @@ export default function TokenDetailScreen() {
     );
   }
 
-  const displayPrice = livePrice || token.price;
+  const displayPrice = token.price;
   const shortAddr = token.address
     ? `${token.address.slice(0, 6)}...${token.address.slice(-4)}`
     : '';

@@ -243,10 +243,19 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       balance: asset.balance,
       balanceUSD: asset.value,
     }));
-    setTokens(tokensFromChain);
-    setTotalBalance(result.totalValue);
+    // Only update state when values actually changed to prevent cascading re-renders
+    setTokens(prev => {
+      const sameLength = prev.length === tokensFromChain.length;
+      const sameValues = sameLength && prev.every((t, i) =>
+        t.id === tokensFromChain[i].id &&
+        t.balance === tokensFromChain[i].balance &&
+        t.balanceUSD === tokensFromChain[i].balanceUSD
+      );
+      return sameValues ? prev : tokensFromChain;
+    });
+    setTotalBalance(prev => prev === result.totalValue ? prev : result.totalValue);
     if (typeof result.nativeBalance === 'number') {
-      setNativeBalance(result.nativeBalance);
+      setNativeBalance(prev => prev === result.nativeBalance ? prev : result.nativeBalance as number);
     }
   }, []);
 

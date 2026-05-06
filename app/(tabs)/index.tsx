@@ -98,18 +98,22 @@ export default function WalletHome() {
   };
 
   const loadMarketData = useCallback(async () => {
-    setLoading(true);
+    // Only show spinner on first load (no tokens yet); subsequent fetches are silent
+    setLiveTokens(prev => { if (prev.length === 0) setLoading(true); return prev; });
     setError(null);
     try {
       const tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
       if (tokens.length === 0) {
-        setError('Unable to load tokens. Please check your internet connection.');
+        setLiveTokens(prev => {
+          if (prev.length === 0) setError('Unable to load tokens. Please check your internet connection.');
+          return prev;
+        });
       } else {
         setLiveTokens(tokens);
       }
     } catch (err: any) {
       console.error('Error loading market data:', err);
-      setError(err.message || 'Failed to load tokens');
+      setLiveTokens(prev => { if (prev.length === 0) setError(err.message || 'Failed to load tokens'); return prev; });
     } finally {
       setLoading(false);
     }
@@ -123,20 +127,14 @@ export default function WalletHome() {
       return;
     }
 
-    setAssetsLoading(true);
+    // Only show spinner on first load; subsequent refreshes keep existing data visible
+    setWalletAssets(prev => { if (prev.length === 0) setAssetsLoading(true); return prev; });
     setAssetsError(null);
     try {
-      console.log('[MyAssets] Loading wallet assets for:', activeAddress);
       const result = await walletAssetLoader.loadWalletAssets('solana', activeAddress);
-      console.log('[MyAssets] Assets loaded:', result.assets.length, '| Total value:', result.totalValue, '| Error:', result.error || 'none');
-
-      if (result.error) {
-        setAssetsError(result.error);
-      }
-
+      if (result.error) setAssetsError(result.error);
       setWalletAssets(result.assets);
       setTotalBalance(result.totalValue);
-
       if (result.totalValue > 0) {
         await PortfolioHistoryService.recordSnapshot(activeAddress, result.totalValue);
       }
@@ -205,8 +203,7 @@ export default function WalletHome() {
   useFocusEffect(
     useCallback(() => {
       loadWatchlist();
-      if (activeAddress) loadWalletAssets();
-    }, [loadWatchlist, loadWalletAssets, activeAddress])
+    }, [loadWatchlist])
   );
 
   // Load NFTs when assets tab is active

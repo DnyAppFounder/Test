@@ -154,7 +154,6 @@ export function TradingViewChart({
   const dotPulse = useRef(new Animated.Value(1)).current;
   const priceLineFlash = useRef(new Animated.Value(0)).current;
 
-  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef         = useRef<WebSocket | null>(null);
   const livePriceRef  = useRef<number | null>(null);
@@ -322,13 +321,6 @@ export function TradingViewChart({
     setLivePrice(null);
     setCrosshair(null);
     loadData(timeframe, false);
-  }, [tokenMint, timeframe]);
-
-  // Silent refresh every 20s to keep candles fresh
-  useEffect(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => loadData(timeframe, true), 20_000);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [tokenMint, timeframe]);
 
   // Connect WebSocket once we have the resolved pair address
