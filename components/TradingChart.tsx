@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
 import Svg, { Line, Rect, Path, Text as SvgText } from 'react-native-svg';
-import { RefreshCw } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
-import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
+import { CandleData, TimeFrame } from '@/services/chartDataService';
+import { realtimeChartService, CandleUpdateListener } from '@/services/realtimeChartService';
 
 const CHART_HEIGHT = 380;
 const CHART_PADDING = 50;
@@ -19,39 +19,61 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   const [loading, setLoading] = useState(true);
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('15m');
   const [chartWidth, setChartWidth] = useState(Dimensions.get('window').width - 48);
-  const [chartType, setChartType] = useState<'candle' | 'line'>('candle');
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const refreshIntervalRef = useRef<any>(null);
+  const [chartType] = useState<'candle' | 'line'>('candle');
 
   const timeFrames: TimeFrame[] = ['1m', '5m', '15m', '1H', '4H', '1D'];
 
-  useEffect(() => {
-    loadChartData();
+  // Keep stable ref to the listener so we can unsubscribe cleanly
+  const listenerRef = useRef<CandleUpdateListener | null>(null);
+  const currentTokenRef = useRef<string>('');
+  const currentTfRef = useRef<TimeFrame>('15m');
 
-    if (autoRefresh) {
-      refreshIntervalRef.current = setInterval(() => {
-        loadChartData();
-      }, 30000);
+  const handleCandleUpdate = useCallback((updated: CandleData[]) => {
+    setCandles(updated);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!tokenAddress) return;
+
+    // Unsubscribe previous listener if token/timeframe changed
+    if (listenerRef.current) {
+      realtimeChartService.unsubscribe(
+        currentTokenRef.current,
+        currentTfRef.current,
+        listenerRef.current
+      );
     }
+
+    currentTokenRef.current = tokenAddress;
+    currentTfRef.current = timeFrame;
+    listenerRef.current = handleCandleUpdate;
+
+    setLoading(true);
+
+    realtimeChartService
+      .subscribe(tokenAddress, timeFrame, handleCandleUpdate)
+      .then((initial) => {
+        if (initial.length > 0) {
+          setCandles(initial);
+          setLoading(false);
+        }
+        // If empty, loading stays true until first realtime/historical delivery
+      })
+      .catch((err) => {
+        console.error('[TradingChart] Subscribe error:', err);
+        setLoading(false);
+      });
 
     return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
+      if (listenerRef.current) {
+        realtimeChartService.unsubscribe(tokenAddress, timeFrame, listenerRef.current);
+        listenerRef.current = null;
       }
     };
-  }, [tokenAddress, timeFrame, autoRefresh]);
+  }, [tokenAddress, timeFrame]);
 
-  const loadChartData = async () => {
-    setLoading(true);
-    try {
-      const data = await chartDataService.getOHLCVData(tokenAddress, timeFrame);
-      setCandles(data);
-    } catch (error) {
-      console.error('Error loading chart data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // ─── Candlestick renderer (unchanged) ──────────────────────────────────────
 
   const renderCandlestickChart = () => {
     if (candles.length === 0) return null;
@@ -72,7 +94,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     };
 
     const volumes = candles.map((c) => c.volume);
-    const maxVolume = Math.max(...volumes);
+    const maxVolume = Math.max(...volumes) || 1;
 
     const volumeToHeight = (volume: number) => {
       return (volume / maxVolume) * VOLUME_HEIGHT;
@@ -85,7 +107,6 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           const y = CHART_PADDING + ratio * priceChartHeight;
           const price = maxPrice - ratio * priceRange;
           const priceLabel = price < 1 ? price.toFixed(6) : price.toFixed(2);
-
           return (
             <>
               <Line
@@ -116,28 +137,19 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           const x = CHART_PADDING + index * candleWidth + candleWidth / 2;
           const isGreen = candle.close >= candle.open;
           const color = isGreen ? colors.success : colors.error;
-
-          const openY = priceToY(candle.open);
+          const openY  = priceToY(candle.open);
           const closeY = priceToY(candle.close);
-          const highY = priceToY(candle.high);
-          const lowY = priceToY(candle.low);
-
-          const bodyTop = Math.min(openY, closeY);
+          const highY  = priceToY(candle.high);
+          const lowY   = priceToY(candle.low);
+          const bodyTop    = Math.min(openY, closeY);
           const bodyHeight = Math.abs(closeY - openY) || 1;
-
           return (
             <>
-              {/* Wick */}
               <Line
                 key={`wick-${index}`}
-                x1={x}
-                y1={highY}
-                x2={x}
-                y2={lowY}
-                stroke={color}
-                strokeWidth="1.5"
+                x1={x} y1={highY} x2={x} y2={lowY}
+                stroke={color} strokeWidth="1.5"
               />
-              {/* Body */}
               <Rect
                 key={`body-${index}`}
                 x={x - bodyWidth / 2}
@@ -157,16 +169,15 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           const x = CHART_PADDING + index * candleWidth + candleWidth / 2;
           const isGreen = candle.close >= candle.open;
           const color = isGreen ? 'rgba(20, 241, 149, 0.3)' : 'rgba(255, 77, 79, 0.3)';
-          const volumeHeight = volumeToHeight(candle.volume);
+          const volHeight = volumeToHeight(candle.volume);
           const volumeY = CHART_HEIGHT - CHART_PADDING;
-
           return (
             <Rect
               key={`volume-${index}`}
               x={x - bodyWidth / 2}
-              y={volumeY - volumeHeight}
+              y={volumeY - volHeight}
               width={bodyWidth}
-              height={volumeHeight}
+              height={volHeight}
               fill={color}
             />
           );
@@ -174,6 +185,8 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       </Svg>
     );
   };
+
+  // ─── Line chart renderer (unchanged) ───────────────────────────────────────
 
   const renderLineChart = () => {
     if (candles.length === 0) return null;
@@ -183,7 +196,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     const minPrice = Math.min(...prices);
     const priceRange = maxPrice - minPrice || 1;
 
-    const usableWidth = chartWidth - CHART_PADDING * 2;
+    const usableWidth  = chartWidth - CHART_PADDING * 2;
     const usableHeight = CHART_HEIGHT - CHART_PADDING * 2;
 
     const priceToY = (price: number) => {
@@ -191,57 +204,59 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       return CHART_HEIGHT - CHART_PADDING - normalized * usableHeight;
     };
 
-    const points = candles.map((candle, index) => {
-      const x = CHART_PADDING + (index / (candles.length - 1)) * usableWidth;
-      const y = priceToY(candle.close);
-      return { x, y };
-    });
+    const points = candles.map((candle, index) => ({
+      x: CHART_PADDING + (index / (candles.length - 1)) * usableWidth,
+      y: priceToY(candle.close),
+    }));
 
-    const pathData = points.reduce((acc, point, index) => {
-      if (index === 0) {
-        return `M ${point.x} ${point.y}`;
-      }
-      return `${acc} L ${point.x} ${point.y}`;
-    }, '');
+    const pathData = points.reduce((acc, point, index) =>
+      index === 0 ? `M ${point.x} ${point.y}` : `${acc} L ${point.x} ${point.y}`,
+      ''
+    );
 
     const isUp = candles[candles.length - 1].close >= candles[0].close;
     const lineColor = isUp ? colors.success : colors.error;
 
     return (
       <Svg width={chartWidth} height={CHART_HEIGHT}>
-        {/* Grid lines */}
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-          const y = CHART_PADDING + ratio * usableHeight;
-          return (
-            <Line
-              key={i}
-              x1={CHART_PADDING}
-              y1={y}
-              x2={chartWidth - CHART_PADDING}
-              y2={y}
-              stroke="rgba(255,255,255,0.05)"
-              strokeWidth="1"
-            />
-          );
-        })}
-
-        {/* Line chart */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => (
+          <Line
+            key={i}
+            x1={CHART_PADDING}
+            y1={CHART_PADDING + ratio * usableHeight}
+            x2={chartWidth - CHART_PADDING}
+            y2={CHART_PADDING + ratio * usableHeight}
+            stroke="rgba(255,255,255,0.05)"
+            strokeWidth="1"
+          />
+        ))}
         <Path d={pathData} stroke={lineColor} strokeWidth="2" fill="none" />
       </Svg>
     );
   };
 
+  // ─── Header stats ───────────────────────────────────────────────────────────
+
   const latestCandle = candles[candles.length - 1];
-  const firstCandle = candles[0];
-  const priceChange = latestCandle && firstCandle ? ((latestCandle.close - firstCandle.open) / firstCandle.open) * 100 : 0;
+  const firstCandle  = candles[0];
+  const priceChange  = latestCandle && firstCandle
+    ? ((latestCandle.close - firstCandle.open) / firstCandle.open) * 100
+    : 0;
   const isPositive = priceChange >= 0;
 
+  // ─── Render ─────────────────────────────────────────────────────────────────
+
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      onLayout={(e) => setChartWidth(e.nativeEvent.layout.width - 0)}
+    >
       <View style={styles.header}>
         <View style={styles.priceSection}>
           {currentPrice !== undefined && (
-            <Text style={styles.currentPrice}>${currentPrice.toFixed(currentPrice < 1 ? 6 : 2)}</Text>
+            <Text style={styles.currentPrice}>
+              ${currentPrice.toFixed(currentPrice < 1 ? 6 : 2)}
+            </Text>
           )}
           {latestCandle && (
             <Text style={[styles.priceChange, isPositive ? styles.priceChangePositive : styles.priceChangeNegative]}>
@@ -250,13 +265,11 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           )}
         </View>
 
-        <TouchableOpacity
-          style={[styles.refreshButton, autoRefresh && styles.refreshButtonActive]}
-          onPress={() => setAutoRefresh(!autoRefresh)}
-          activeOpacity={0.7}
-        >
-          <RefreshCw size={16} color={autoRefresh ? colors.success : colors.textMuted} strokeWidth={2} />
-        </TouchableOpacity>
+        {/* Live indicator instead of refresh button */}
+        <View style={styles.liveIndicator}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>LIVE</Text>
+        </View>
       </View>
 
       <View style={styles.timeFrameSelector}>
@@ -276,6 +289,10 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={colors.primary} />
             <Text style={styles.loadingText}>Loading chart...</Text>
+          </View>
+        ) : candles.length === 0 ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>No chart data available</Text>
           </View>
         ) : chartType === 'candle' ? (
           renderCandlestickChart()
@@ -319,19 +336,28 @@ const styles = StyleSheet.create({
   priceChangeNegative: {
     color: colors.error,
   },
-  refreshButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceLight,
-    justifyContent: 'center',
+  liveIndicator: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: 'rgba(16,185,129,0.3)',
   },
-  refreshButtonActive: {
-    backgroundColor: colors.successMuted,
-    borderColor: colors.success,
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+  },
+  liveText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.success,
+    letterSpacing: 0.5,
   },
   timeFrameSelector: {
     flexDirection: 'row',
