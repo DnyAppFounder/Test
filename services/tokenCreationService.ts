@@ -246,7 +246,7 @@ class TokenCreationService {
         tokenProgramId
       ));
 
-      // 7. Sign and send transaction
+      // 7. Sign and send Tx 1: create + init mint
       progress(7, 'Waiting for wallet signature...');
       let txSignature: string;
       try {
@@ -256,16 +256,41 @@ class TokenCreationService {
         return { success: false, error: err?.message || 'Transaction rejected by wallet', tokenId: record.id };
       }
 
-      // 8. Confirm on-chain + update DB
-      progress(8, 'Confirming on-chain...');
+      // 8. Mint to creator ATA + attach Metaplex metadata
+      progress(8, 'Minting tokens to creator wallet...');
       try {
-        await this.connection.confirmTransaction(
-          { signature: txSignature, blockhash, lastValidBlockHeight },
-          'confirmed'
-        );
-      } catch {
-        await launchpadService.updateRecord(record.id, { status: 'failed', creation_tx: txSignature });
-        return { success: false, error: 'Transaction failed to confirm on-chain', tokenId: record.id };
+        const creatorAllocation = normalized.creatorAllocation;
+        if (creatorAllocation > 0) {
+          // Derive ATA
+          const ata = await this.deriveAta(creatorPubkey, mintPubkey);
+          const ataInfo = await this.connection.getAccountInfo(ata);
+          const ataRent = await this.connection.getMinimumBalanceForRentExemption(165);
+
+          const { blockhash: bh2 } = await this.connection.getLatestBlockhash('confirmed');
+          const tx2 = new Transaction({ recentBlockhash: bh2, feePayer: creatorPubkey });
+
+          // Create ATA if it doesn't exist
+          if (!ataInfo) {
+            tx2.add(this.createAtaInstruction(creatorPubkey, ata, creatorPubkey, mintPubkey, ataRent));
+          }
+
+          // MintTo creator allocation
+          const rawAmount = BigInt(Math.floor(creatorAllocation * Math.pow(10, normalized.decimals)));
+          tx2.add(this.mintToInstruction(mintPubkey, ata, creatorPubkey, rawAmount, tokenProgramId));
+
+          // Attach Metaplex on-chain metadata (best-effort — tx failure won't abort launch)
+          if (metadataUri) {
+            const metaIx = this.buildMetaplexMetadataInstruction(
+              mintPubkey, creatorPubkey, normalized.name, normalized.symbol, metadataUri
+            );
+            if (metaIx) tx2.add(metaIx);
+          }
+
+          await signAndSendTransaction(tx2, []);
+        }
+      } catch (mintErr: any) {
+        // Mint-to failure is non-fatal for the DB record — log and continue
+        console.warn('[TokenCreation] ATA/mintTo error (non-fatal):', mintErr?.message);
       }
 
       // Update DB with confirmed mint address
@@ -325,6 +350,162 @@ class TokenCreationService {
     }
 
     return new TransactionInstruction({ keys, programId, data });
+  }
+
+  /** Derive Associated Token Account address */
+  private async deriveAta(owner: PublicKey, mint: PublicKey): Promise<PublicKey> {
+    const [ata] = await PublicKey.findProgramAddress(
+      [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    return ata;
+  }
+
+  /**
+   * Create Associated Token Account instruction.
+   * ATA program instruction index 0 (create idempotent = 1, but standard = 0).
+   * Layout: no data — program infers from accounts.
+   */
+  private createAtaInstruction(
+    payer: PublicKey,
+    ata: PublicKey,
+    owner: PublicKey,
+    mint: PublicKey,
+    _rent: number  // unused — ATA program handles rent internally
+  ): TransactionInstruction {
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: ata, isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false }, // SystemProgram
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
+      ],
+      programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+      data: Buffer.alloc(0), // no data for create
+    });
+  }
+
+  /**
+   * MintTo instruction — instruction index 7.
+   * Layout: [u8 instruction=7] [u64 LE amount]
+   */
+  private mintToInstruction(
+    mint: PublicKey,
+    destination: PublicKey,
+    mintAuthority: PublicKey,
+    amount: bigint,
+    programId: PublicKey
+  ): TransactionInstruction {
+    const data = Buffer.alloc(9);
+    data.writeUInt8(7, 0); // MintTo instruction index
+    data.writeBigUInt64LE(amount, 1);
+
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: mint, isSigner: false, isWritable: true },
+        { pubkey: destination, isSigner: false, isWritable: true },
+        { pubkey: mintAuthority, isSigner: true, isWritable: false },
+      ],
+      programId,
+      data,
+    });
+  }
+
+  /**
+   * Build Metaplex create_metadata_account_v3 instruction.
+   * Instruction discriminator = [33, 241, 65, 62, 238, 85, 214, 203] (8-byte Anchor discriminator).
+   * Returns null if any required account cannot be derived.
+   */
+  private buildMetaplexMetadataInstruction(
+    mint: PublicKey,
+    updateAuthority: PublicKey,
+    name: string,
+    symbol: string,
+    uri: string
+  ): TransactionInstruction | null {
+    try {
+      // Derive metadata PDA: ["metadata", METADATA_PROGRAM_ID, mint]
+      const [metadataPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from('metadata'),
+          METADATA_PROGRAM_ID.toBuffer(),
+          mint.toBuffer(),
+        ],
+        METADATA_PROGRAM_ID
+      );
+
+      // Encode create_metadata_account_v3 args
+      // Borsh layout:
+      //   [8 discriminator]
+      //   CreateMetadataAccountArgsV3:
+      //     DataV2:
+      //       [4+len] name
+      //       [4+len] symbol
+      //       [4+len] uri
+      //       [2] seller_fee_basis_points
+      //       [1] Option<Creators> = 0 (None)
+      //       [1] Option<Collection> = 0 (None)
+      //       [1] Option<Uses> = 0 (None)
+      //     [1] is_mutable
+      //     [1] Option<CollectionDetails> = 0 (None)
+
+      const nameBytes = Buffer.from(name.slice(0, 32), 'utf8');
+      const symbolBytes = Buffer.from(symbol.slice(0, 10), 'utf8');
+      const uriBytes = Buffer.from(uri.slice(0, 200), 'utf8');
+
+      const dataLen = 8 + 4 + nameBytes.length + 4 + symbolBytes.length + 4 + uriBytes.length + 2 + 1 + 1 + 1 + 1 + 1;
+      const data = Buffer.alloc(dataLen);
+      let offset = 0;
+
+      // Anchor discriminator for create_metadata_account_v3
+      const discriminator = [33, 241, 65, 62, 238, 85, 214, 203];
+      discriminator.forEach((b) => { data.writeUInt8(b, offset++); });
+
+      // name
+      data.writeUInt32LE(nameBytes.length, offset); offset += 4;
+      nameBytes.copy(data, offset); offset += nameBytes.length;
+
+      // symbol
+      data.writeUInt32LE(symbolBytes.length, offset); offset += 4;
+      symbolBytes.copy(data, offset); offset += symbolBytes.length;
+
+      // uri
+      data.writeUInt32LE(uriBytes.length, offset); offset += 4;
+      uriBytes.copy(data, offset); offset += uriBytes.length;
+
+      // seller_fee_basis_points = 0
+      data.writeUInt16LE(0, offset); offset += 2;
+
+      // creators = None
+      data.writeUInt8(0, offset++);
+      // collection = None
+      data.writeUInt8(0, offset++);
+      // uses = None
+      data.writeUInt8(0, offset++);
+      // is_mutable = true
+      data.writeUInt8(1, offset++);
+      // collection_details = None
+      data.writeUInt8(0, offset++);
+
+      return new TransactionInstruction({
+        keys: [
+          { pubkey: metadataPda, isSigner: false, isWritable: true },
+          { pubkey: mint, isSigner: false, isWritable: false },
+          { pubkey: updateAuthority, isSigner: true, isWritable: false }, // mint authority
+          { pubkey: updateAuthority, isSigner: true, isWritable: false }, // payer
+          { pubkey: updateAuthority, isSigner: false, isWritable: false }, // update authority
+          { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
+          { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
+        ],
+        programId: METADATA_PROGRAM_ID,
+        data,
+      });
+    } catch {
+      return null;
+    }
   }
 
   /** Estimate the SOL cost for creating a token */

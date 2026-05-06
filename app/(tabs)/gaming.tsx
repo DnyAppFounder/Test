@@ -37,6 +37,7 @@ import {
   getPresaleProgress,
   formatTimeRemaining,
 } from '@/services/presaleService';
+import { launchpadSigningService } from '@/services/launchpadSigningService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { trendingService, TrendingScore } from '@/services/trendingService';
 import { safetyService, SafetyScore } from '@/services/safetyService';
@@ -251,6 +252,7 @@ interface CreateTokenModalProps {
   onClose: () => void;
   onSuccess: (mintAddress: string, txSig: string) => void;
   creatorWallet: string;
+  activeWallet: import('@/contexts/WalletContext').UnifiedWallet | null;
 }
 
 function ToggleRow({ label, sub, value, onToggle }: { label: string; sub?: string; value: boolean; onToggle: () => void }) {
@@ -279,7 +281,7 @@ function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title
   );
 }
 
-function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: CreateTokenModalProps) {
+function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWallet }: CreateTokenModalProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>('easy');
   const [step, setStep] = useState<'form' | 'progress' | 'done' | 'presale'>('form');
   const [createdTokenId, setCreatedTokenId] = useState<string | null>(null);
@@ -393,9 +395,25 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet }: Create
       ? { mode: 'easy', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, imageUri: imageUri ?? undefined }
       : { mode: 'advanced', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, decimals: parseInt(decimals), creatorAllocation: parseFloat(creatorAlloc), liquidityAllocation: parseFloat(liquidityAlloc), website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, useToken2022, revokeMintAuthority: revokeMint, revokeFreezeAuthority: revokeFreeze, imageUri: imageUri ?? undefined, burnSettings: burnEnabled };
 
+    if (!activeWallet) {
+      setError('No active wallet. Please connect or create a wallet first.');
+      setStep('form');
+      return;
+    }
+
+    let signAndSend: (tx: import('@solana/web3.js').Transaction, signers?: import('@solana/web3.js').Keypair[]) => Promise<string>;
+    try {
+      const signer = await launchpadSigningService.getSigner(activeWallet);
+      signAndSend = launchpadSigningService.makeSignAndSend(signer);
+    } catch (sigErr: any) {
+      setError(sigErr?.message ?? 'Failed to initialize wallet signer');
+      setStep('form');
+      return;
+    }
+
     const res = await tokenCreationService.createToken(
       input, creatorWallet,
-      async () => { throw new Error('Wallet signing not available in this context. Please connect a wallet that supports transaction signing.'); },
+      signAndSend,
       (p) => setProgress(p),
       imageUri ?? undefined
     );
@@ -876,7 +894,7 @@ function TokenRow({
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function LaunchpadScreen() {
   const router = useRouter();
-  const { activeAddress } = useWallet();
+  const { activeAddress, activeWallet } = useWallet();
 
   const [activeTab, setActiveTab] = useState<LaunchTab>('featured');
   const [tokens, setTokens] = useState<LaunchpadToken[]>([]);
@@ -1172,6 +1190,7 @@ export default function LaunchpadScreen() {
         onClose={() => setShowCreate(false)}
         onSuccess={handleCreateSuccess}
         creatorWallet={activeAddress ?? ''}
+        activeWallet={activeWallet}
       />
     </View>
   );

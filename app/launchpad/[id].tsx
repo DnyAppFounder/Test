@@ -31,6 +31,7 @@ import {
 import { dawenCurveService, CurveState } from '@/services/dawenCurveService';
 import { safetyService, SafetyScore } from '@/services/safetyService';
 import { burnRouterService, BurnStats } from '@/services/burnRouterService';
+import { launchpadSigningService } from '@/services/launchpadSigningService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 // Status pill config
@@ -53,13 +54,14 @@ function shortAddr(a: string) {
 
 // ─── Buy Modal ────────────────────────────────────────────────────────────────
 function BuyModal({
-  visible, presale, token, wallet, nativeBalance,
+  visible, presale, token, wallet, activeWallet, nativeBalance,
   onClose, onSuccess,
 }: {
   visible: boolean;
   presale: Presale;
   token: LaunchpadToken;
   wallet: string;
+  activeWallet: import('@/contexts/WalletContext').UnifiedWallet | null;
   nativeBalance: number;
   onClose: () => void;
   onSuccess: () => void;
@@ -92,9 +94,25 @@ function BuyModal({
     setError(null);
     setLoading(true);
 
+    if (!activeWallet) {
+      setError('No active wallet connected.');
+      setLoading(false);
+      return;
+    }
+
+    let buySignAndSend: (tx: import('@solana/web3.js').Transaction, signers?: import('@solana/web3.js').Keypair[]) => Promise<string>;
+    try {
+      const signer = await launchpadSigningService.getSigner(activeWallet);
+      buySignAndSend = launchpadSigningService.makeSignAndSend(signer);
+    } catch (sigErr: any) {
+      setError(sigErr?.message ?? 'Failed to initialize wallet signer');
+      setLoading(false);
+      return;
+    }
+
     const res = await presaleService.buyPresale(
       { presaleId: presale.id, tokenId: presale.token_id, wallet, solAmount: sol },
-      async () => { throw new Error('Wallet signing integration required. Connect a wallet that supports transaction signing.'); }
+      buySignAndSend
     );
 
     setLoading(false);
@@ -200,7 +218,7 @@ function BuyModal({
 export default function PresaleDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { activeAddress, nativeBalance } = useWallet();
+  const { activeAddress, activeWallet, nativeBalance } = useWallet();
 
   const [presale, setPresale] = useState<Presale | null>(null);
   const [token, setToken] = useState<LaunchpadToken | null>(null);
@@ -300,15 +318,27 @@ export default function PresaleDetailScreen() {
     return unsub;
   }, [token?.id]);
 
+  const getPresaleSigner = async (): Promise<((tx: import('@solana/web3.js').Transaction, signers?: import('@solana/web3.js').Keypair[]) => Promise<string>) | null> => {
+    if (!activeWallet) {
+      setActionError('No active wallet connected.');
+      return null;
+    }
+    try {
+      const signer = await launchpadSigningService.getSigner(activeWallet);
+      return launchpadSigningService.makeSignAndSend(signer);
+    } catch (e: any) {
+      setActionError(e?.message ?? 'Failed to initialize wallet signer');
+      return null;
+    }
+  };
+
   const handleFinalize = async () => {
     if (!presale || !activeAddress) return;
     setActionLoading(true);
     setActionError(null);
-    const res = await presaleService.finalizePresale(
-      presale.id,
-      activeAddress,
-      async () => { throw new Error('Wallet signing integration required.'); }
-    );
+    const signAndSend = await getPresaleSigner();
+    if (!signAndSend) { setActionLoading(false); return; }
+    const res = await presaleService.finalizePresale(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Finalize failed');
     else load();
@@ -318,11 +348,9 @@ export default function PresaleDetailScreen() {
     if (!presale || !activeAddress) return;
     setActionLoading(true);
     setActionError(null);
-    const res = await presaleService.claimTokens(
-      presale.id,
-      activeAddress,
-      async () => { throw new Error('Wallet signing integration required.'); }
-    );
+    const signAndSend = await getPresaleSigner();
+    if (!signAndSend) { setActionLoading(false); return; }
+    const res = await presaleService.claimTokens(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Claim failed');
     else load();
@@ -332,11 +360,9 @@ export default function PresaleDetailScreen() {
     if (!presale || !activeAddress) return;
     setActionLoading(true);
     setActionError(null);
-    const res = await presaleService.refundContribution(
-      presale.id,
-      activeAddress,
-      async () => { throw new Error('Wallet signing integration required.'); }
-    );
+    const signAndSend = await getPresaleSigner();
+    if (!signAndSend) { setActionLoading(false); return; }
+    const res = await presaleService.refundContribution(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Refund failed');
     else load();
@@ -779,6 +805,7 @@ export default function PresaleDetailScreen() {
           presale={presale}
           token={token}
           wallet={activeAddress ?? ''}
+          activeWallet={activeWallet}
           nativeBalance={nativeBalance}
           onClose={() => setShowBuy(false)}
           onSuccess={load}
