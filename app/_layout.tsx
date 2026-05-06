@@ -7,6 +7,7 @@ import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { WalletProvider } from '@/contexts/WalletContext';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { ProfileProvider } from '@/contexts/ProfileContext';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
@@ -28,11 +29,16 @@ export default function RootLayout() {
       try {
         if (fontsLoaded || fontError) {
           setAppIsReady(true);
-          // Kick off background token discovery after app is ready
-          // Fire-and-forget — never blocks the UI
+          // Background token discovery — fully isolated, never crashes the app
           setTimeout(() => {
-            tokenRegistryService.runBackgroundDiscovery().catch(() => {});
-          }, 3000);
+            try {
+              tokenRegistryService.runBackgroundDiscovery().catch((e) => {
+                console.warn('[App] Background discovery error:', e?.message);
+              });
+            } catch (e) {
+              console.warn('[App] Background discovery threw:', e);
+            }
+          }, 5000);
         }
       } catch (e) {
         console.warn('Error during app preparation:', e);
@@ -55,26 +61,33 @@ export default function RootLayout() {
 
   return (
     <View style={styles.root} onLayout={onLayoutRootView}>
-      <LanguageProvider>
-        <WalletProvider>
-          <ProfileProvider>
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: styles.screenContent,
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="onboarding" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="chat/[id]" />
-            <Stack.Screen name="create-post" />
-            <Stack.Screen name="+not-found" />
-          </Stack>
-          <StatusBar style="light" />
-          </ProfileProvider>
-        </WalletProvider>
-      </LanguageProvider>
+      <ErrorBoundary fallbackLabel="App error — please refresh">
+        <LanguageProvider>
+          <WalletProvider>
+            <ProfileProvider>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: styles.screenContent,
+                }}
+              >
+                <Stack.Screen name="index" />
+                <Stack.Screen name="onboarding" />
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="chat/[id]" />
+                <Stack.Screen name="create-post" />
+                {/* Route aliases — keep these so direct URL access doesn't 404 */}
+                <Stack.Screen name="discover" />
+                <Stack.Screen name="wallet" />
+                <Stack.Screen name="messages" />
+                <Stack.Screen name="settings" />
+                <Stack.Screen name="+not-found" />
+              </Stack>
+              <StatusBar style="light" />
+            </ProfileProvider>
+          </WalletProvider>
+        </LanguageProvider>
+      </ErrorBoundary>
     </View>
   );
 }
