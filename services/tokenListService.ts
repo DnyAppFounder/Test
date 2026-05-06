@@ -1,5 +1,6 @@
 import { jupiterTokenListService, JupiterToken } from './jupiter/tokenListService';
 import { dexScreenerService } from './dexscreener/tokenDiscoveryService';
+import { tokenRegistryService } from './tokenRegistryService';
 
 const DTEST_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
@@ -66,7 +67,7 @@ class MergedTokenListService {
       }
     }
 
-    // Always ensure DTEST is present with correct data
+    // Always ensure DTEST is present
     map.set(DTEST_TOKEN.address, DTEST_TOKEN);
 
     const merged = Array.from(map.values());
@@ -75,38 +76,81 @@ class MergedTokenListService {
     return merged;
   }
 
+  /**
+   * Search tokens using the global registry first (broadest coverage),
+   * falling back to in-memory Jupiter list.
+   */
   async searchTokens(query: string): Promise<JupiterToken[]> {
     if (!query.trim()) return [];
     const q = query.toLowerCase().trim();
 
-    const dtestMatch =
-      'dtest'.includes(q) ||
-      'dawen testnet'.includes(q) ||
-      DTEST_TOKEN.address.toLowerCase().includes(q);
+    // DTEST shortcut
+    const dtestMatch = 'dtest'.includes(q) || 'dawen testnet'.includes(q) || DTEST_TOKEN.address.toLowerCase().includes(q);
 
+    // Registry search (covers all sources: Jupiter + DexScreener + Birdeye + Raydium + Meteora + on-chain)
+    try {
+      const regResults = await tokenRegistryService.search(query);
+      if (regResults.length > 0) {
+        const asJupiter: JupiterToken[] = regResults.map(rt => ({
+          address:  rt.mint,
+          chainId:  101,
+          decimals: rt.decimals,
+          name:     rt.name,
+          symbol:   rt.symbol,
+          logoURI:  rt.logoUri,
+          tags:     rt.isVerified ? ['verified'] : ['community'],
+        }));
+
+        const resultMap = new Map<string, JupiterToken>();
+        if (dtestMatch) resultMap.set(DTEST_TOKEN.address, DTEST_TOKEN);
+        for (const t of asJupiter) resultMap.set(t.address, t);
+
+        return Array.from(resultMap.values()).slice(0, 50);
+      }
+    } catch {}
+
+    // Fallback: in-memory Jupiter list
     const allTokens = await this.getAllTokens();
     const matches = allTokens.filter(
-      (t) =>
+      t =>
         t.address !== DTEST_TOKEN.address &&
-        (t.name.toLowerCase().includes(q) ||
-          t.symbol.toLowerCase().includes(q) ||
-          t.address.toLowerCase().includes(q))
+        (t.name.toLowerCase().includes(q) || t.symbol.toLowerCase().includes(q) || t.address.toLowerCase().includes(q))
     );
-
     const result = dtestMatch ? [DTEST_TOKEN, ...matches] : matches;
     return result.slice(0, 50);
   }
 
   async getTokenByAddress(address: string): Promise<JupiterToken | null> {
     if (address === DTEST_TOKEN.address) return DTEST_TOKEN;
+
+    // Try in-memory first
     const allTokens = await this.getAllTokens();
-    return allTokens.find((t) => t.address === address) ?? null;
+    const inMemory = allTokens.find(t => t.address === address);
+    if (inMemory) return inMemory;
+
+    // Try registry (covers on-chain validation + DAS)
+    try {
+      const regToken = await tokenRegistryService.getByMint(address);
+      if (regToken) {
+        return {
+          address:  regToken.mint,
+          chainId:  101,
+          decimals: regToken.decimals,
+          name:     regToken.name,
+          symbol:   regToken.symbol,
+          logoURI:  regToken.logoUri,
+          tags:     regToken.isVerified ? ['verified'] : ['community'],
+        };
+      }
+    } catch {}
+
+    return null;
   }
 
   async getVerifiedTokens(): Promise<JupiterToken[]> {
     const allTokens = await this.getAllTokens();
     return allTokens.filter(
-      (t) =>
+      t =>
         t.address === DTEST_TOKEN.address ||
         t.tags?.includes('verified') ||
         t.tags?.includes('community')

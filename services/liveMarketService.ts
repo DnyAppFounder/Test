@@ -1,5 +1,6 @@
 import { dexScreenerService, DexPair } from './dexscreener/tokenDiscoveryService';
 import { jupiterTokenListService, JupiterToken } from './jupiter/tokenListService';
+import { tokenRegistryService } from './tokenRegistryService';
 
 export interface LiveToken {
   id: string;
@@ -112,43 +113,29 @@ class LiveMarketService {
 
   async searchTokens(query: string): Promise<LiveToken[]> {
     try {
-      const [dexPairs, jupiterTokens] = await Promise.all([
-        dexScreenerService.searchTokens(query),
-        jupiterTokenListService.searchTokens(query),
-      ]);
+      // Registry search covers: DB (all discovered tokens) + DexScreener + Jupiter + on-chain
+      const registryResults = await tokenRegistryService.search(query);
 
-      const dexTokens = dexPairs.map((pair) => this.convertDexPairToLiveToken(pair));
+      if (registryResults.length > 0) {
+        return registryResults.map(rt => ({
+          id: rt.mint,
+          address: rt.mint,
+          name: rt.name,
+          symbol: rt.symbol,
+          image: rt.logoUri,
+          price: rt.priceUsd ?? 0,
+          priceChange24h: rt.priceChange24h ?? 0,
+          volume24h: rt.volume24h ?? 0,
+          liquidity: rt.liquidityUsd ?? 0,
+          marketCap: rt.marketCap,
+          pairAddress: rt.pairAddress,
+          chainId: 'solana',
+        }));
+      }
 
-      const jupiterEnriched = await Promise.all(
-        jupiterTokens.slice(0, 10).map(async (jToken) => {
-          const dexData = await dexScreenerService.getTokenByAddress(jToken.address);
-          if (dexData.length > 0) {
-            return this.convertDexPairToLiveToken(dexData[0]);
-          }
-
-          return {
-            id: jToken.address,
-            address: jToken.address,
-            name: jToken.name,
-            symbol: jToken.symbol,
-            image: jToken.logoURI,
-            price: 0,
-            priceChange24h: 0,
-            volume24h: 0,
-            liquidity: 0,
-            chainId: 'solana',
-          };
-        })
-      );
-
-      const combinedMap = new Map<string, LiveToken>();
-      [...dexTokens, ...jupiterEnriched].forEach((token) => {
-        if (!combinedMap.has(token.address) || token.price > 0) {
-          combinedMap.set(token.address, token);
-        }
-      });
-
-      return Array.from(combinedMap.values()).slice(0, 50);
+      // Fallback: direct DexScreener search
+      const dexPairs = await dexScreenerService.searchTokens(query);
+      return dexPairs.map(pair => this.convertDexPairToLiveToken(pair)).slice(0, 50);
     } catch (error) {
       console.error('Error searching tokens:', error);
       return [];

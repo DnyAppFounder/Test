@@ -5,6 +5,7 @@ import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
 import { walletAssetLoader } from '@/services/walletAssetLoader';
+import { tokenRegistryService } from '@/services/tokenRegistryService';
 
 export type WalletType = 'created' | 'imported' | 'connected';
 
@@ -214,6 +215,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, [connectedWallet]);
 
   const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number; nativeBalance?: number }) => {
+    // Register wallet-owned mints in the background registry
+    const splMints = result.assets.filter(a => !a.isNative && a.address).map(a => a.address as string);
+    if (splMints.length > 0) {
+      tokenRegistryService.registerWalletMints(splMints).catch(() => {});
+    }
+
     const tokensFromChain: Token[] = result.assets.map((asset) => ({
       id: asset.id,
       blockchain_id: 'solana',
