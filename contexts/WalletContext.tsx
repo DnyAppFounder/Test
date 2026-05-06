@@ -171,15 +171,23 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const restoreExternalWallet = useCallback(async () => {
     const restored = await ExternalWalletAdapter.restoreSession();
     if (restored) {
+      console.log('[WalletContext] Restored session for', restored.id, restored.address?.slice(0, 8));
       setConnectedWallet(restored);
+    } else {
+      console.log('[WalletContext] No external wallet session to restore');
     }
   }, []);
 
   const connectExternalWallet = useCallback(async (id: ExternalWalletId) => {
     setIsLoading(true);
     try {
+      console.log('[WalletContext] Connecting external wallet:', id);
       const wallet = await ExternalWalletAdapter.connectExtension(id);
+      console.log('[WalletContext] Wallet connect success:', wallet.address);
       setConnectedWallet(wallet);
+    } catch (err) {
+      console.error('[WalletContext] Wallet connect failed:', err);
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -187,6 +195,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const disconnectExternalWallet = useCallback(async () => {
     if (connectedWallet) {
+      console.log('[WalletContext] User manually disconnecting wallet:', connectedWallet.id);
       await ExternalWalletAdapter.disconnectExtension(connectedWallet.id);
       setConnectedWallet(null);
     }
@@ -296,10 +305,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     const initialize = async () => {
+      if (!mounted) return;
+      console.log('[WalletContext] Initializing — loading accounts and restoring session');
+      await loadAccounts();
+      await restoreExternalWallet();
       if (mounted) {
-        await loadAccounts();
-        await restoreExternalWallet();
         setIsInitialized(true);
+        console.log('[WalletContext] Initialized');
       }
     };
     initialize();
