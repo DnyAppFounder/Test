@@ -11,9 +11,12 @@ export default function Index() {
   useEffect(() => {
     AsyncStorage.getItem(ONBOARDING_KEY)
       .then((completed) => {
-        setTarget(completed === 'true' ? '/(tabs)' : '/onboarding');
+        const dest = completed === 'true' ? '/(tabs)' : '/onboarding';
+        console.log('[App] onboarding_completed =', completed, '→ routing to', dest);
+        setTarget(dest);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn('[App] AsyncStorage read failed:', err);
         setTarget('/onboarding');
       });
   }, []);
