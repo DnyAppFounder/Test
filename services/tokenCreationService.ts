@@ -158,86 +158,118 @@ class TokenCreationService {
       onProgress?.({ step, totalSteps: STEPS, label });
 
     try {
-      // 1. Validate wallet
+      // 1. Validate wallet — emit progress immediately so the UI is never blank
       progress(1, 'Validating wallet...');
+      if (!creatorWallet || creatorWallet.trim().length === 0) {
+        return { success: false, error: 'Wallet signer unavailable: no wallet address provided' };
+      }
       let creatorPubkey: PublicKey;
       try {
         creatorPubkey = new PublicKey(creatorWallet);
-      } catch {
-        return { success: false, error: 'Invalid wallet address' };
+      } catch (e) {
+        console.error('[TokenCreation] Invalid wallet address:', e);
+        return { success: false, error: 'Wallet signer unavailable: invalid Solana address' };
       }
 
       const normalized = normalizeInput(input, creatorWallet);
 
-      // 2. Upload image to Supabase Storage
+      // 2. Upload image to Supabase Storage (non-fatal — token can launch without logo)
       progress(2, 'Uploading token image...');
       let imageUrl: string | undefined;
       const uri = imageUri ?? (input.mode === 'easy' ? input.imageUri : (input as AdvancedModeInput).imageUri);
       if (uri) {
-        imageUrl = await launchpadService.uploadImage(creatorWallet, uri) ?? undefined;
+        try {
+          imageUrl = await launchpadService.uploadImage(creatorWallet, uri) ?? undefined;
+          if (!imageUrl) {
+            console.warn('[TokenCreation] Image upload returned null — continuing without image');
+          }
+        } catch (imgErr: any) {
+          console.warn('[TokenCreation] Image upload threw (non-fatal):', imgErr?.message);
+        }
       }
 
-      // 3. Create DB record (status = pending)
-      progress(3, 'Preparing token record...');
+      // 3. Create DB record (status = pending) — FATAL if this fails
+      progress(3, 'Creating launch record in database...');
       const { data: record, error: recordError } = await launchpadService.createRecord({ ...normalized, imageUrl });
       if (recordError || !record) {
-        return { success: false, error: recordError ?? 'Failed to create token record in database' };
+        const msg = recordError ?? 'Database launch record failed — no record returned';
+        console.error('[TokenCreation] createRecord failed:', msg);
+        return { success: false, error: msg };
       }
 
-      // 4. Build + upload metadata JSON
-      progress(4, 'Uploading metadata...');
-      const metadata = {
-        name: normalized.name,
-        symbol: normalized.symbol,
-        description: normalized.description,
-        image: imageUrl ?? '',
-        external_url: normalized.website ?? '',
-        attributes: [],
-        properties: {
-          files: imageUrl ? [{ uri: imageUrl, type: 'image/png' }] : [],
-          category: 'token',
-        },
-        extensions: {
-          website: normalized.website ?? '',
-          telegram: normalized.telegram ?? '',
-          twitter: normalized.twitter ?? '',
-          discord: normalized.discord ?? '',
-          creator: creatorWallet,
-        },
-      };
-      const metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
+      // 4. Build + upload metadata JSON (non-fatal — mint can proceed without metadata URI)
+      progress(4, 'Uploading token metadata...');
+      let metadataUri: string | undefined;
+      try {
+        const metadata = {
+          name: normalized.name,
+          symbol: normalized.symbol,
+          description: normalized.description,
+          image: imageUrl ?? '',
+          external_url: normalized.website ?? '',
+          attributes: [],
+          properties: {
+            files: imageUrl ? [{ uri: imageUrl, type: 'image/png' }] : [],
+            category: 'token',
+          },
+          extensions: {
+            website: normalized.website ?? '',
+            telegram: normalized.telegram ?? '',
+            twitter: normalized.twitter ?? '',
+            discord: normalized.discord ?? '',
+            creator: creatorWallet,
+          },
+        };
+        metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
+        if (!metadataUri) {
+          console.warn('[TokenCreation] Metadata upload returned null — continuing without metadata URI');
+        }
+      } catch (metaErr: any) {
+        console.warn('[TokenCreation] Metadata upload threw (non-fatal):', metaErr?.message);
+      }
 
-      // 5. Generate mint keypair
-      progress(5, 'Generating mint account...');
+      // 5. Verify RPC connection and generate mint keypair
+      progress(5, 'Connecting to Solana network...');
+      let rentExemption: number;
+      let blockhash: string;
+      let lastValidBlockHeight: number;
+      try {
+        const MINT_SIZE = 82;
+        rentExemption = await this.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+        const bh = await this.connection.getLatestBlockhash('confirmed');
+        blockhash = bh.blockhash;
+        lastValidBlockHeight = bh.lastValidBlockHeight;
+      } catch (rpcErr: any) {
+        console.error('[TokenCreation] RPC connection failed:', rpcErr);
+        await launchpadService.updateRecord(record.id, { status: 'failed' });
+        return {
+          success: false,
+          error: `RPC transaction failed: ${rpcErr?.message || 'Cannot connect to Solana network'}`,
+          tokenId: record.id,
+        };
+      }
+
       const mintKeypair = Keypair.generate();
       const mintPubkey = mintKeypair.publicKey;
       const tokenProgramId = normalized.tokenProgram === 'token-2022' ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
 
-      // Determine mint account size and rent
-      const MINT_SIZE = 82;
-      const rentExemption = await this.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
-
       // 6. Build creation transaction
       progress(6, 'Building on-chain transaction...');
-      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
-
       const tx = new Transaction({
         recentBlockhash: blockhash,
         feePayer: creatorPubkey,
       });
 
-      // Create mint account
       tx.add(
         SystemProgram.createAccount({
           fromPubkey: creatorPubkey,
           newAccountPubkey: mintPubkey,
           lamports: rentExemption,
-          space: MINT_SIZE,
+          space: 82,
           programId: tokenProgramId,
         })
       );
 
-      // Initialize mint instruction (manual encoding for SPL token)
       tx.add(this.initializeMintInstruction(
         mintPubkey,
         normalized.decimals,
@@ -252,33 +284,34 @@ class TokenCreationService {
       try {
         txSignature = await signAndSendTransaction(tx, [mintKeypair]);
       } catch (err: any) {
+        console.error('[TokenCreation] Tx 1 (createMint) rejected:', err);
         await launchpadService.updateRecord(record.id, { status: 'failed' });
-        return { success: false, error: err?.message || 'Transaction rejected by wallet', tokenId: record.id };
+        const msg = err?.message || 'Transaction rejected by wallet';
+        return {
+          success: false,
+          error: `RPC transaction failed: ${msg}`,
+          tokenId: record.id,
+        };
       }
 
-      // 8. Mint to creator ATA + attach Metaplex metadata
+      // 8. Mint to creator ATA + attach Metaplex metadata (non-fatal — token is already created)
       progress(8, 'Minting tokens to creator wallet...');
       try {
         const creatorAllocation = normalized.creatorAllocation;
         if (creatorAllocation > 0) {
-          // Derive ATA
           const ata = await this.deriveAta(creatorPubkey, mintPubkey);
           const ataInfo = await this.connection.getAccountInfo(ata);
           const ataRent = await this.connection.getMinimumBalanceForRentExemption(165);
-
           const { blockhash: bh2 } = await this.connection.getLatestBlockhash('confirmed');
           const tx2 = new Transaction({ recentBlockhash: bh2, feePayer: creatorPubkey });
 
-          // Create ATA if it doesn't exist
           if (!ataInfo) {
             tx2.add(this.createAtaInstruction(creatorPubkey, ata, creatorPubkey, mintPubkey, ataRent));
           }
 
-          // MintTo creator allocation
           const rawAmount = BigInt(Math.floor(creatorAllocation * Math.pow(10, normalized.decimals)));
           tx2.add(this.mintToInstruction(mintPubkey, ata, creatorPubkey, rawAmount, tokenProgramId));
 
-          // Attach Metaplex on-chain metadata (best-effort — tx failure won't abort launch)
           if (metadataUri) {
             const metaIx = this.buildMetaplexMetadataInstruction(
               mintPubkey, creatorPubkey, normalized.name, normalized.symbol, metadataUri
@@ -289,8 +322,7 @@ class TokenCreationService {
           await signAndSendTransaction(tx2, []);
         }
       } catch (mintErr: any) {
-        // Mint-to failure is non-fatal for the DB record — log and continue
-        console.warn('[TokenCreation] ATA/mintTo error (non-fatal):', mintErr?.message);
+        console.warn('[TokenCreation] ATA/mintTo (non-fatal, mint already created):', mintErr?.message);
       }
 
       // Update DB with confirmed mint address
@@ -302,7 +334,7 @@ class TokenCreationService {
         image_url: imageUrl,
       });
 
-      // Register in global token registry so it's searchable immediately
+      // Register in global token registry
       await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
 
       return {

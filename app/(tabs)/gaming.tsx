@@ -19,7 +19,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users, ShieldCheck, Shield, ShieldAlert } from 'lucide-react-native';
+import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users, ShieldCheck, Shield, ShieldAlert, CircleX as XCircle } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { launchpadService, LaunchpadToken, LaunchpadStats } from '@/services/launchpadService';
@@ -385,31 +385,40 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   };
 
   const handleCreate = async () => {
-    const err = validate();
-    if (err) { setError(err); return; }
-    setError(null);
-    setStep('progress');
-    const supply = parseFloat(totalSupply);
-
-    const input: EasyModeInput | AdvancedModeInput = mode === 'easy'
-      ? { mode: 'easy', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, imageUri: imageUri ?? undefined }
-      : { mode: 'advanced', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, decimals: parseInt(decimals), creatorAllocation: parseFloat(creatorAlloc), liquidityAllocation: parseFloat(liquidityAlloc), website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, useToken2022, revokeMintAuthority: revokeMint, revokeFreezeAuthority: revokeFreeze, imageUri: imageUri ?? undefined, burnSettings: burnEnabled };
+    // ── Pre-flight validation ──────────────────────────────────────────────────
+    const formErr = validate();
+    if (formErr) { setError(formErr); return; }
 
     if (!activeWallet) {
-      setError('No active wallet. Please connect or create a wallet first.');
-      setStep('form');
+      setError('Wallet signer unavailable: no wallet connected. Please create or import a wallet first.');
       return;
     }
 
+    if (!creatorWallet || creatorWallet.trim().length === 0) {
+      setError('Wallet signer unavailable: wallet address is empty.');
+      return;
+    }
+
+    // ── Pre-flight: obtain signer before showing progress screen ──────────────
     let signAndSend: (tx: import('@solana/web3.js').Transaction, signers?: import('@solana/web3.js').Keypair[]) => Promise<string>;
     try {
       const signer = await launchpadSigningService.getSigner(activeWallet);
       signAndSend = launchpadSigningService.makeSignAndSend(signer);
     } catch (sigErr: any) {
-      setError(sigErr?.message ?? 'Failed to initialize wallet signer');
-      setStep('form');
+      console.error('[CreateToken] Signer init failed:', sigErr);
+      setError(`Wallet signer unavailable: ${sigErr?.message ?? 'could not initialize signer'}`);
       return;
     }
+
+    // ── All pre-flight checks passed — enter progress screen ──────────────────
+    setError(null);
+    setProgress({ step: 1, totalSteps: 8, label: 'Initializing launch...' });
+    setStep('progress');
+
+    const supply = parseFloat(totalSupply);
+    const input: EasyModeInput | AdvancedModeInput = mode === 'easy'
+      ? { mode: 'easy', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, imageUri: imageUri ?? undefined }
+      : { mode: 'advanced', name: name.trim(), symbol: symbol.trim().toUpperCase(), description: description.trim(), totalSupply: supply, decimals: parseInt(decimals), creatorAllocation: parseFloat(creatorAlloc), liquidityAllocation: parseFloat(liquidityAlloc), website: website.trim() || undefined, telegram: telegram.trim() || undefined, twitter: twitter.trim() || undefined, useToken2022, revokeMintAuthority: revokeMint, revokeFreezeAuthority: revokeFreeze, imageUri: imageUri ?? undefined, burnSettings: burnEnabled };
 
     const res = await tokenCreationService.createToken(
       input, creatorWallet,
@@ -424,8 +433,11 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
       setStep('done');
       onSuccess(res.mintAddress, res.txSignature);
     } else {
-      setError(res.error ?? 'Token creation failed');
-      setStep('form');
+      // Stay on progress screen but show error inline — do NOT silently go back to form
+      const errMsg = res.error ?? 'Token creation failed';
+      console.error('[CreateToken] Launch failed:', errMsg);
+      setError(errMsg);
+      setStep('progress'); // keep progress screen visible with error shown
     }
   };
 
@@ -704,17 +716,36 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
           )}
 
           {/* ── PROGRESS ── */}
-          {step === 'progress' && progress && (
+          {step === 'progress' && (
             <View style={mStyles.progressContainer}>
-              <View style={mStyles.progressIconWrap}>
-                <Rocket size={40} color={colors.primary} />
-              </View>
-              <Text style={mStyles.progressTitle}>Launching Token…</Text>
-              <Text style={mStyles.progressLabel}>{progress.label}</Text>
-              <View style={mStyles.progressBar}>
-                <Animated.View style={[mStyles.progressFill, { width: barWidth }]} />
-              </View>
-              <Text style={mStyles.progressSteps}>Step {progress.step} of {progress.totalSteps}</Text>
+              {error ? (
+                <>
+                  <View style={[mStyles.progressIconWrap, { backgroundColor: 'rgba(239,68,68,0.15)' }]}>
+                    <XCircle size={40} color={colors.error} />
+                  </View>
+                  <Text style={[mStyles.progressTitle, { color: colors.error }]}>Launch Failed</Text>
+                  <View style={mStyles.progressErrorBox}>
+                    <Text style={mStyles.progressErrorText}>{error}</Text>
+                  </View>
+                  <TouchableOpacity style={mStyles.progressRetryBtn} onPress={() => { setError(null); setStep('form'); }}>
+                    <Text style={mStyles.progressRetryText}>Back to Form</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <View style={mStyles.progressIconWrap}>
+                    <Rocket size={40} color={colors.primary} />
+                  </View>
+                  <Text style={mStyles.progressTitle}>Launching Token…</Text>
+                  <Text style={mStyles.progressLabel}>{progress?.label ?? 'Initializing...'}</Text>
+                  <View style={mStyles.progressBar}>
+                    <Animated.View style={[mStyles.progressFill, { width: barWidth }]} />
+                  </View>
+                  <Text style={mStyles.progressSteps}>
+                    {progress ? `Step ${progress.step} of ${progress.totalSteps}` : 'Preparing...'}
+                  </Text>
+                </>
+              )}
             </View>
           )}
 
@@ -1571,6 +1602,29 @@ const mStyles = StyleSheet.create({
   },
   progressFill: { height: 8, borderRadius: 4, backgroundColor: colors.primary },
   progressSteps: { fontSize: 13, color: '#6B7280' },
+  progressErrorBox: {
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.3)',
+    borderRadius: 10,
+    padding: 14,
+    width: '100%',
+  },
+  progressErrorText: {
+    fontSize: 13,
+    color: colors.error,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  progressRetryBtn: {
+    marginTop: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.4)',
+  },
+  progressRetryText: { fontSize: 14, color: colors.error, fontWeight: '600' },
 
   doneContainer: { padding: 24, alignItems: 'center', gap: 14, paddingBottom: 48 },
   doneIconWrap: {
