@@ -142,6 +142,8 @@ export function TradingViewChart({
   const [wsConnected, setWsConnected] = useState(false);
   const [showModePanel, setShowModePanel] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
+  // Resolved best pair address for this token (used for WS + price polling)
+  const [resolvedPairAddr, setResolvedPairAddr] = useState<string | null>(pairAddress ?? null);
 
   // Crosshair state
   const [crosshair, setCrosshair] = useState<{
@@ -152,16 +154,51 @@ export function TradingViewChart({
   const dotPulse = useRef(new Animated.Value(1)).current;
   const priceLineFlash = useRef(new Animated.Value(0)).current;
 
-  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wsRef       = useRef<WebSocket | null>(null);
-  const livePriceRef = useRef<number | null>(null);
+  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef         = useRef<WebSocket | null>(null);
+  const livePriceRef  = useRef<number | null>(null);
   const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const svgContainerRef = useRef<View>(null);
-  const svgOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const candlesRef = useRef<CandleData[]>([]);
+  const svgOffsetRef  = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const candlesRef    = useRef<CandleData[]>([]);
+  const pairAddrRef   = useRef<string | null>(pairAddress ?? null);
 
   useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
+  useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
+
+  // Resolve best pair address from DexScreener when token mint changes
+  useEffect(() => {
+    if (!tokenMint) return;
+    // If we already have a pairAddress prop, use it directly
+    if (pairAddress) {
+      setResolvedPairAddr(pairAddress);
+      pairAddrRef.current = pairAddress;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`,
+          { signal: AbortSignal.timeout(8000) }
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const pairs: any[] = (data.pairs || []).filter((p: any) => p.chainId === 'solana');
+        if (pairs.length === 0 || cancelled) return;
+        pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        const addr = pairs[0].pairAddress;
+        console.log(`[TradingViewChart] Resolved pair ${addr} for mint=${tokenMint?.slice(0, 8)}`);
+        if (!cancelled) {
+          setResolvedPairAddr(addr);
+          pairAddrRef.current = addr;
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [tokenMint, pairAddress]);
 
   // Pulse live dot
   useEffect(() => {
@@ -213,41 +250,58 @@ export function TradingViewChart({
     }
   }, [tokenMint]);
 
-  const connectWebSocket = useCallback(() => {
-    if (!tokenMint || typeof WebSocket === 'undefined') return;
+  // Apply a live price update to state — updates last candle in-place
+  const applyLivePrice = useCallback((price: number) => {
+    if (!price || price <= 0) return;
+    const prev = livePriceRef.current;
+    if (prev === price) return;
+    livePriceRef.current = price;
+    setLivePrice(price);
+    flashPriceLine();
+    setCandles(cs => {
+      if (!cs.length) return cs;
+      const last = cs[cs.length - 1];
+      if (last.close === price) return cs;
+      const updated = [...cs];
+      updated[updated.length - 1] = {
+        ...last,
+        close: price,
+        high:  Math.max(last.high, price),
+        low:   Math.min(last.low, price),
+      };
+      return updated;
+    });
+  }, [flashPriceLine]);
+
+  const connectWebSocket = useCallback((pairAddr: string) => {
+    if (typeof WebSocket === 'undefined') return;
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
     try {
-      const ws = new WebSocket('wss://io.dexscreener.com/dex/screener/pair/solana/' + tokenMint);
+      // DexScreener WS uses pair address, not token mint
+      const wsUrl = `wss://io.dexscreener.com/dex/screener/pair/solana/${pairAddr}`;
+      console.log(`[TradingViewChart] WS connecting to pair=${pairAddr.slice(0, 8)}`);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
-      ws.onopen = () => setWsConnected(true);
+      ws.onopen = () => {
+        setWsConnected(true);
+        console.log(`[TradingViewChart] WS connected pair=${pairAddr.slice(0, 8)}`);
+      };
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          // DexScreener sends { pair: { priceUsd: "0.001234", ... } }
           const np = msg?.pair?.priceUsd ? parseFloat(msg.pair.priceUsd) : null;
           if (!np || isNaN(np) || np <= 0) return;
-          livePriceRef.current = np;
-          if (wsDebounceRef.current) return;
+          if (wsDebounceRef.current) {
+            livePriceRef.current = np;
+            return;
+          }
           wsDebounceRef.current = setTimeout(() => {
             wsDebounceRef.current = null;
-            const price = livePriceRef.current;
-            if (!price) return;
-            setLivePrice(price);
-            flashPriceLine();
-            // Update last candle close/high/low in-place — no new candle needed
-            setCandles(prev => {
-              if (!prev.length) return prev;
-              const last = prev[prev.length - 1];
-              if (last.close === price) return prev;
-              const updated = [...prev];
-              updated[updated.length - 1] = {
-                ...last,
-                close: price,
-                high:  Math.max(last.high, price),
-                low:   Math.min(last.low, price),
-              };
-              return updated;
-            });
-          }, 600);
+            const price = livePriceRef.current ?? np;
+            applyLivePrice(price);
+          }, 400);
+          livePriceRef.current = np;
         } catch {}
       };
       ws.onerror = () => { try { setWsConnected(false); } catch {} };
@@ -255,14 +309,14 @@ export function TradingViewChart({
         try { setWsConnected(false); } catch {}
         wsRef.current = null;
         const reconnectTimer = setTimeout(() => {
-          if (tokenMint && wsRef.current === null) connectWebSocket();
+          const currentPair = pairAddrRef.current;
+          if (currentPair && wsRef.current === null) connectWebSocket(currentPair);
         }, 5000);
-        // Store so we can cancel on unmount
         if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
         (wsRef as any)._reconnectTimer = reconnectTimer;
       };
     } catch { setWsConnected(false); }
-  }, [tokenMint, flashPriceLine]);
+  }, [applyLivePrice]);
 
   useEffect(() => {
     setLivePrice(null);
@@ -270,15 +324,17 @@ export function TradingViewChart({
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
-  // Silent refresh every 60s
+  // Silent refresh every 20s to keep candles fresh
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => loadData(timeframe, true), 60000);
+    timerRef.current = setInterval(() => loadData(timeframe, true), 20_000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [tokenMint, timeframe]);
 
+  // Connect WebSocket once we have the resolved pair address
   useEffect(() => {
-    connectWebSocket();
+    if (!resolvedPairAddr) return;
+    connectWebSocket(resolvedPairAddr);
     return () => {
       if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
       if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
@@ -289,8 +345,41 @@ export function TradingViewChart({
         try { wsRef.current.close(); } catch {}
         wsRef.current = null;
       }
+      setWsConnected(false);
     };
-  }, [tokenMint]);
+  }, [resolvedPairAddr]);
+
+  // REST price polling fallback — runs every 10s regardless of WS state
+  // Ensures the price line moves even if WS is blocked or pair is low-activity
+  useEffect(() => {
+    if (!tokenMint) return;
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+
+    const fetchPrice = async () => {
+      try {
+        const pair = pairAddrRef.current;
+        const url = pair
+          ? `https://api.dexscreener.com/latest/dex/pairs/solana/${pair}`
+          : `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) return;
+        const data = await res.json();
+        const pairData = data.pair ?? data.pairs?.[0];
+        if (!pairData) return;
+        const p = parseFloat(pairData.priceUsd || '0');
+        if (p > 0) applyLivePrice(p);
+      } catch {}
+    };
+
+    // First poll after 2s, then every 10s
+    const firstPoll = setTimeout(fetchPrice, 2000);
+    pollTimerRef.current = setInterval(fetchPrice, 10_000);
+
+    return () => {
+      clearTimeout(firstPoll);
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, [tokenMint, applyLivePrice]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
   const plotW = chartWidth - PAD.left - PAD.right;

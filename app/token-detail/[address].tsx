@@ -26,6 +26,7 @@ import {
 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
+import { tokenRegistryService } from '@/services/tokenRegistryService';
 import { SolanaConnectionService } from '@/services/solana/connectionService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { TradingViewChart, TokenInfo } from '@/components/TradingViewChart';
@@ -101,10 +102,37 @@ export default function TokenDetailScreen() {
   const loadTokenDetail = async (addr: string) => {
     setLoading(true);
     try {
-      const data = await liveMarketService.getTokenDetail(addr);
+      // Primary: DexScreener live data
+      let data = await liveMarketService.getTokenDetail(addr);
+
+      if (!data) {
+        // Fallback: resolve from global token registry (covers wallet-owned tokens
+        // that may not have a DexScreener listing yet)
+        const reg = await tokenRegistryService.getByMint(addr);
+        if (reg) {
+          data = {
+            id: reg.mint,
+            address: reg.mint,
+            name: reg.name,
+            symbol: reg.symbol,
+            image: reg.logoUri,
+            price: reg.priceUsd ?? 0,
+            priceChange24h: reg.priceChange24h ?? 0,
+            volume24h: reg.volume24h ?? 0,
+            liquidity: reg.liquidityUsd ?? 0,
+            marketCap: reg.marketCap,
+            pairAddress: reg.pairAddress,
+            chainId: 'solana',
+          };
+        }
+      }
+
       setToken(data);
-    } catch {}
-    finally { setLoading(false); }
+    } catch (e) {
+      console.warn('[TokenDetail] loadTokenDetail error:', e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onRefresh = async () => {

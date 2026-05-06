@@ -1,5 +1,6 @@
 import { SolanaWalletService } from './solana/walletService';
 import { jupiterTokenListService } from './jupiter/tokenListService';
+import { tokenRegistryService } from './tokenRegistryService';
 
 export interface WalletAsset {
   id: string;
@@ -92,6 +93,13 @@ class WalletAssetLoaderService {
 
       // Resolve missing logos in background (don't block display)
       this.resolveLogosInBackground(tokenAssets);
+
+      // Register all wallet-owned mints into the global token registry so they
+      // become searchable and show proper metadata instead of "Token not found"
+      const walletMints = tokenAssets.map(a => a.address).filter(Boolean);
+      if (walletMints.length > 0) {
+        tokenRegistryService.registerWalletMints(walletMints).catch(() => {});
+      }
 
       return {
         assets: allAssets,
