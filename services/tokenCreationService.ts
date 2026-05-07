@@ -49,8 +49,10 @@ const PLATFORM_FEE_SOL     = 0.02;
 const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 
 // Account sizes for rent calculation
-const MINT_ACCOUNT_SIZE = 82;
-const ATA_ACCOUNT_SIZE  = 165;
+// SPL Token mint = 82 bytes; Token-2022 mint base = 234 bytes (82 + extension header)
+const MINT_ACCOUNT_SIZE      = 82;
+const MINT_ACCOUNT_SIZE_2022 = 234;
+const ATA_ACCOUNT_SIZE       = 165;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -329,8 +331,11 @@ class TokenCreationService {
       try {
         console.log('[TokenCreation] Fetching rent exemptions and blockhash...');
         // All three calls go through direct HTTP, no Connection object
+        const mintSize = normalized.tokenProgram === 'token-2022'
+          ? MINT_ACCOUNT_SIZE_2022
+          : MINT_ACCOUNT_SIZE;
         [mintRentLamports, ataRentLamports] = await Promise.all([
-          getRentExemption(MINT_ACCOUNT_SIZE),
+          getRentExemption(mintSize),
           getRentExemption(ATA_ACCOUNT_SIZE),
         ]);
         const bhResult = await getLatestBlockhash();
@@ -375,14 +380,14 @@ class TokenCreationService {
       // ── Step 6: Build single transaction ───────────────────────────────────
       progress(6, 'Building on-chain transaction...');
 
-      const mintKeypair = Keypair.generate();
-      const mintPubkey  = mintKeypair.publicKey;
-      const tokenProgramId = normalized.tokenProgram === 'token-2022'
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
+      const mintKeypair    = Keypair.generate();
+      const mintPubkey     = mintKeypair.publicKey;
+      const isToken2022    = normalized.tokenProgram === 'token-2022';
+      const tokenProgramId = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+      const mintAccountSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
 
       console.log('[TokenCreation] Generated mint keypair:', mintPubkey.toBase58());
-      console.log('[TokenCreation] Token program:', normalized.tokenProgram);
+      console.log('[TokenCreation] Token program:', normalized.tokenProgram, '| Mint size:', mintAccountSize);
 
       const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
       console.log('[TokenCreation] Creator ATA:', ata.toBase58());
@@ -391,12 +396,12 @@ class TokenCreationService {
       // a fresh one right before signing, ensuring it's never stale.
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
-      // 1. Create mint account
+      // 1. Create mint account (SystemProgram allocates space, assigns to token program)
       tx.add(SystemProgram.createAccount({
         fromPubkey: creatorPubkey,
         newAccountPubkey: mintPubkey,
         lamports: mintRentLamports,
-        space: MINT_ACCOUNT_SIZE,
+        space: mintAccountSize,
         programId: tokenProgramId,
       }));
 
@@ -555,6 +560,20 @@ class TokenCreationService {
     });
   }
 
+  /**
+   * ATA program v1.1+ CreateAssociatedTokenAccount instruction.
+   *
+   * Account order (6 accounts — SysvarRent was removed in v1.1+):
+   *   0. payer          — funds the account, signer, writable
+   *   1. ata            — the new ATA address, writable (not a signer — derived PDA)
+   *   2. owner          — wallet that will own the tokens, not a signer
+   *   3. mint           — the token mint
+   *   4. system_program — for account creation
+   *   5. token_program  — SPL Token or Token-2022
+   *
+   * data = [] (0 bytes) = CreateAssociatedTokenAccount (fails if already exists)
+   * data = [1] = CreateAssociatedTokenAccountIdempotent (succeeds if exists)
+   */
   private buildCreateAtaIx(
     payer: PublicKey,
     ata: PublicKey,
@@ -570,7 +589,6 @@ class TokenCreationService {
         { pubkey: mint,              isSigner: false, isWritable: false },
         { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: tokenProgramId,    isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       ],
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
       data: Buffer.alloc(0),
