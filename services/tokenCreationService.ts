@@ -12,11 +12,18 @@
  *   5. CreateMetadataAccountV3      — Metaplex on-chain metadata
  *   6. SystemProgram.transfer       — 0.02 SOL platform fee
  *
- * The mint keypair partialSigns first; the user wallet signs as fee payer.
+ * All RPC calls go through SolanaConnectionService.rpcCall() — a direct HTTP
+ * fetch to the Supabase proxy — NOT through the @solana/web3.js Connection
+ * object. This avoids the WebSocket connection that Connection always opens
+ * (which fails against the Supabase Edge Function proxy) and gives us clean,
+ * reliable HTTP-only RPC calls with proper auth headers.
+ *
+ * The signing service (launchpadSigningService) uses the Connection object
+ * only for sendRawTransaction and getSignatureStatuses, both of which are
+ * standard HTTP JSON-RPC calls that work fine through the proxy.
  */
 
 import {
-  Connection,
   PublicKey,
   Transaction,
   SystemProgram,
@@ -29,21 +36,21 @@ import { launchpadService, CreateTokenInput } from './launchpadService';
 import { tokenRegistryService } from './tokenRegistryService';
 
 // ── Program IDs ───────────────────────────────────────────────────────────────
-const METADATA_PROGRAM_ID     = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
-const TOKEN_PROGRAM_ID        = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const TOKEN_2022_PROGRAM_ID   = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const METADATA_PROGRAM_ID        = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+const TOKEN_PROGRAM_ID           = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID      = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
-const SYSTEM_PROGRAM_ID       = new PublicKey('11111111111111111111111111111111');
-const SYSVAR_RENT_PUBKEY      = new PublicKey('SysvarRent111111111111111111111111111111111');
+const SYSTEM_PROGRAM_ID          = new PublicKey('11111111111111111111111111111111');
+const SYSVAR_RENT_PUBKEY         = new PublicKey('SysvarRent111111111111111111111111111111111');
 
 // ── Platform fee ──────────────────────────────────────────────────────────────
-const PLATFORM_FEE_WALLET = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
-const PLATFORM_FEE_SOL    = 0.02;
+const PLATFORM_FEE_WALLET  = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
+const PLATFORM_FEE_SOL     = 0.02;
 const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 
 // Account sizes for rent calculation
-const MINT_ACCOUNT_SIZE     = 82;
-const ATA_ACCOUNT_SIZE      = 165;
+const MINT_ACCOUNT_SIZE = 82;
+const ATA_ACCOUNT_SIZE  = 165;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -106,9 +113,9 @@ export interface TokenCreationProgress {
 export type ProgressCallback = (progress: TokenCreationProgress) => void;
 
 export interface LaunchCostEstimate {
-  networkAndMintCost: number; // SOL — mint rent + ATA rent + tx fees
-  platformFee: number;        // SOL — always 0.02
-  total: number;              // SOL
+  networkAndMintCost: number;
+  platformFee: number;
+  total: number;
 }
 
 // ── Input normalizer ──────────────────────────────────────────────────────────
@@ -150,21 +157,50 @@ function normalizeInput(input: TokenCreationInput, creatorWallet: string): Creat
   }
 }
 
+// ── RPC helpers (direct HTTP — no Connection object) ─────────────────────────
+
+/**
+ * Fetch the minimum lamports for rent exemption via direct JSON-RPC call.
+ * Uses SolanaConnectionService.rpcCall() which sends an authorized HTTP POST
+ * to the Supabase proxy. Does NOT use the @solana/web3.js Connection object.
+ */
+async function getRentExemption(dataSize: number): Promise<number> {
+  const connSvc = SolanaConnectionService.getInstance();
+  const result = await connSvc.rpcCall('getMinimumBalanceForRentExemption', [dataSize]);
+  return typeof result === 'number' ? result : Number(result);
+}
+
+/**
+ * Fetch the latest confirmed blockhash via direct JSON-RPC call.
+ */
+async function getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+  const connSvc = SolanaConnectionService.getInstance();
+  const result = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  return {
+    blockhash: result.value.blockhash,
+    lastValidBlockHeight: result.value.lastValidBlockHeight,
+  };
+}
+
+/**
+ * Fetch wallet balance in lamports via direct JSON-RPC call.
+ */
+async function getBalance(pubkey: string): Promise<number> {
+  const connSvc = SolanaConnectionService.getInstance();
+  const result = await connSvc.rpcCall('getBalance', [pubkey, { commitment: 'confirmed' }]);
+  return typeof result === 'object' ? result.value : result;
+}
+
 // ── Service ───────────────────────────────────────────────────────────────────
 
 class TokenCreationService {
-  private connection: Connection;
-
-  constructor() {
-    this.connection = SolanaConnectionService.getInstance().getConnection();
-  }
 
   /**
-   * Full token creation flow — single transaction.
+   * Full token creation flow — single transaction, direct HTTP RPC only.
    *
-   * `signAndSendTransaction` is provided by launchpadSigningService.
-   * It receives the Transaction plus extraSigners (mintKeypair), signs with all
-   * keys, sends the raw transaction, and polls confirmation over HTTP.
+   * signAndSendTransaction is provided by launchpadSigningService.
+   * It fetches a fresh blockhash, signs with all keypairs, sends via
+   * connection.sendRawTransaction(), and polls confirmation via HTTP.
    */
   async createToken(
     input: TokenCreationInput,
@@ -188,8 +224,7 @@ class TokenCreationService {
       let creatorPubkey: PublicKey;
       try {
         creatorPubkey = new PublicKey(creatorWallet);
-      } catch (e) {
-        console.error('[TokenCreation] Invalid wallet address:', e);
+      } catch {
         return { success: false, error: 'Wallet signer unavailable: invalid Solana address' };
       }
 
@@ -198,7 +233,6 @@ class TokenCreationService {
       console.log('[TokenCreation] Creator wallet:', creatorPubkey.toBase58());
       console.log('[TokenCreation] RPC URL:', connSvc.getRpcUrl().slice(0, 80));
       console.log('[TokenCreation] Mode:', connSvc.isUsingProxy() ? 'Supabase proxy' : 'direct');
-      console.log('[TokenCreation] ══════════════════════════════════════');
 
       const normalized = normalizeInput(input, creatorWallet);
 
@@ -206,17 +240,19 @@ class TokenCreationService {
       progress(2, 'Uploading token image...');
 
       let imageUrl: string | undefined;
-      const uri = imageUri ?? (input.mode === 'easy' ? input.imageUri : (input as AdvancedModeInput).imageUri);
+      const uri = imageUri ?? (input.mode === 'easy'
+        ? input.imageUri
+        : (input as AdvancedModeInput).imageUri);
       if (uri) {
         try {
           imageUrl = await launchpadService.uploadImage(creatorWallet, uri) ?? undefined;
-          if (!imageUrl) {
-            console.warn('[TokenCreation] Image upload returned null — continuing without image');
-          } else {
+          if (imageUrl) {
             console.log('[TokenCreation] Image uploaded:', imageUrl.slice(0, 60));
+          } else {
+            console.warn('[TokenCreation] Image upload returned null — continuing without image');
           }
         } catch (imgErr: any) {
-          console.warn('[TokenCreation] Image upload threw (non-fatal):', imgErr?.message);
+          console.warn('[TokenCreation] Image upload (non-fatal):', imgErr?.message);
         }
       }
 
@@ -228,7 +264,7 @@ class TokenCreationService {
         imageUrl,
       });
       if (recordError || !record) {
-        const msg = recordError ?? 'Database launch record failed — no record returned';
+        const msg = recordError ?? 'Database launch record failed';
         console.error('[TokenCreation] createRecord failed:', msg);
         return { success: false, error: `Database error: ${msg}` };
       }
@@ -259,24 +295,19 @@ class TokenCreationService {
           },
         };
         metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
-        if (!metadataUri) {
-          console.warn('[TokenCreation] Metadata upload returned null — continuing without metadata URI');
-        } else {
+        if (metadataUri) {
           console.log('[TokenCreation] Metadata uploaded:', metadataUri.slice(0, 60));
+        } else {
+          console.warn('[TokenCreation] Metadata upload returned null — continuing without URI');
         }
       } catch (metaErr: any) {
-        console.warn('[TokenCreation] Metadata upload threw (non-fatal):', metaErr?.message);
+        console.warn('[TokenCreation] Metadata upload (non-fatal):', metaErr?.message);
       }
 
-      // ── Step 5: RPC connectivity check + rent + blockhash ──────────────────
+      // ── Step 5: RPC connectivity + rent + blockhash ─────────────────────────
       progress(5, 'Connecting to Solana network...');
 
-      let mintRentLamports: number;
-      let ataRentLamports: number;
-      let blockhash: string;
-      let lastValidBlockHeight: number;
-
-      // Verify RPC is reachable before anything else
+      // Verify RPC is reachable with a cheap call first
       console.log('[TokenCreation] Verifying RPC connectivity...');
       try {
         const blockHeight = await connSvc.rpcCall('getBlockHeight', []);
@@ -286,28 +317,29 @@ class TokenCreationService {
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
-          error: `RPC connection failed: ${healthErr?.message || 'cannot reach Solana network'}`,
+          error: `Cannot reach Solana network: ${healthErr?.message || 'RPC unreachable'}`,
           tokenId: record.id,
         };
       }
 
+      let mintRentLamports: number;
+      let ataRentLamports: number;
+      let blockhash: string;
+
       try {
-        console.log('[TokenCreation] Fetching rent exemption values...');
+        console.log('[TokenCreation] Fetching rent exemptions and blockhash...');
+        // All three calls go through direct HTTP, no Connection object
         [mintRentLamports, ataRentLamports] = await Promise.all([
-          this.connection.getMinimumBalanceForRentExemption(MINT_ACCOUNT_SIZE),
-          this.connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE),
+          getRentExemption(MINT_ACCOUNT_SIZE),
+          getRentExemption(ATA_ACCOUNT_SIZE),
         ]);
+        const bhResult = await getLatestBlockhash();
+        blockhash = bhResult.blockhash;
         console.log('[TokenCreation] Mint rent:', mintRentLamports, 'lamports');
         console.log('[TokenCreation] ATA rent:', ataRentLamports, 'lamports');
-
-        console.log('[TokenCreation] Fetching latest blockhash...');
-        const bhResult = await this.connection.getLatestBlockhash('confirmed');
-        blockhash = bhResult.blockhash;
-        lastValidBlockHeight = bhResult.lastValidBlockHeight;
-        console.log('[TokenCreation] Blockhash:', blockhash, '| lastValidBlockHeight:', lastValidBlockHeight);
+        console.log('[TokenCreation] Blockhash:', blockhash);
       } catch (rpcErr: any) {
         console.error('[TokenCreation] RPC call failed:', rpcErr);
-        console.error('[TokenCreation] Full RPC error:', JSON.stringify(rpcErr, null, 2));
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
@@ -317,18 +349,18 @@ class TokenCreationService {
       }
 
       // SOL balance check
-      const txFeeEstimate = 0.000015; // ~3 signatures × 5000 lamports
+      const txFeeEstimate = 0.000015;
       const requiredSol =
         (mintRentLamports + ataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL +
         txFeeEstimate;
 
       let balanceSol = 0;
       try {
-        const lamports = await this.connection.getBalance(creatorPubkey, 'confirmed');
+        const lamports = await getBalance(creatorPubkey.toBase58());
         balanceSol = lamports / LAMPORTS_PER_SOL;
         console.log('[TokenCreation] Wallet balance:', balanceSol.toFixed(6), 'SOL | Required:', requiredSol.toFixed(6), 'SOL');
       } catch (balErr: any) {
-        console.warn('[TokenCreation] Balance check failed (non-fatal):', balErr?.message);
+        console.warn('[TokenCreation] Balance check (non-fatal):', balErr?.message);
       }
 
       if (balanceSol > 0 && balanceSol < requiredSol) {
@@ -344,7 +376,7 @@ class TokenCreationService {
       progress(6, 'Building on-chain transaction...');
 
       const mintKeypair = Keypair.generate();
-      const mintPubkey = mintKeypair.publicKey;
+      const mintPubkey  = mintKeypair.publicKey;
       const tokenProgramId = normalized.tokenProgram === 'token-2022'
         ? TOKEN_2022_PROGRAM_ID
         : TOKEN_PROGRAM_ID;
@@ -352,10 +384,11 @@ class TokenCreationService {
       console.log('[TokenCreation] Generated mint keypair:', mintPubkey.toBase58());
       console.log('[TokenCreation] Token program:', normalized.tokenProgram);
 
-      // Derive ATA from public key — no RPC call needed
       const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
       console.log('[TokenCreation] Creator ATA:', ata.toBase58());
 
+      // Use the blockhash we fetched — the signing service will replace it with
+      // a fresh one right before signing, ensuring it's never stale.
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
       // 1. Create mint account
@@ -375,7 +408,7 @@ class TokenCreationService {
       // 3. Create creator ATA
       tx.add(this.buildCreateAtaIx(creatorPubkey, ata, creatorPubkey, mintPubkey, tokenProgramId));
 
-      // 4. Mint full creator allocation to ATA
+      // 4. Mint creator allocation to ATA
       if (normalized.creatorAllocation > 0) {
         const rawAmount = BigInt(
           Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
@@ -395,7 +428,7 @@ class TokenCreationService {
         }
       }
 
-      // 6. Platform fee transfer — FATAL if fails (entire tx rejects)
+      // 6. Platform fee transfer — if this instruction fails, the ENTIRE tx fails
       tx.add(SystemProgram.transfer({
         fromPubkey: creatorPubkey,
         toPubkey: PLATFORM_FEE_WALLET,
@@ -404,81 +437,43 @@ class TokenCreationService {
 
       console.log('[TokenCreation] Transaction built:', tx.instructions.length, 'instructions');
       console.log('[TokenCreation] Platform fee:', PLATFORM_FEE_SOL, 'SOL →', PLATFORM_FEE_WALLET.toBase58());
-      console.log('[TokenCreation] feePayer:', creatorPubkey.toBase58());
-      console.log('[TokenCreation] recentBlockhash:', blockhash);
-
-      // ── Simulate transaction ─────────────────────────────────────────────────
-      // partialSign with mintKeypair so simulation has a valid sig for it.
-      // The signer will re-sign everything with a fresh blockhash before sending.
-      console.log('[TokenCreation] Simulating transaction...');
-      try {
-        tx.partialSign(mintKeypair);
-
-        // simulateTransaction(tx, signers) — pass empty array to skip sig verification
-        // which lets us simulate without the fee-payer signature
-        const simResult = await this.connection.simulateTransaction(tx);
-        const simLogs = simResult.value.logs ?? [];
-        console.log('[TokenCreation] Simulation result err:', simResult.value.err ?? 'none');
-        console.log('[TokenCreation] Simulation logs:', simLogs);
-
-        if (simResult.value.err) {
-          const simErr = JSON.stringify(simResult.value.err);
-          const logHint = simLogs.find(l =>
-            l.includes('Error') || l.includes('failed') || l.includes('insufficient')
-          ) ?? '';
-          console.error('[TokenCreation] Simulation failed. Error:', simErr);
-          console.error('[TokenCreation] Simulation logs:', simLogs);
-          await launchpadService.updateRecord(record.id, { status: 'failed' });
-          return {
-            success: false,
-            error: `Transaction simulation failed: ${logHint || simErr}`,
-            tokenId: record.id,
-          };
-        }
-        console.log('[TokenCreation] Simulation passed');
-      } catch (simErr: any) {
-        // Non-fatal — some RPC endpoints don't support simulation fully
-        console.warn('[TokenCreation] Simulation threw (non-fatal, proceeding):', simErr?.message);
-      }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
+      // The signing service fetches a FRESH blockhash before signing so the
+      // blockhash we set above is only a placeholder — it will be replaced.
+      // mintKeypair is passed as extraSigner so the service signs with both keys.
       progress(7, 'Waiting for wallet signature...');
       console.log('[TokenCreation] Requesting wallet signature...');
 
       let txSignature: string;
       try {
-        // mintKeypair is extraSigner — signing service signs with both keypairs + fresh blockhash
         txSignature = await signAndSendTransaction(tx, [mintKeypair]);
       } catch (err: any) {
-        console.error('[TokenCreation] Transaction failed:', err);
-        console.error('[TokenCreation] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+        console.error('[TokenCreation] Transaction failed:', err?.message);
+        console.error('[TokenCreation] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
         await launchpadService.updateRecord(record.id, { status: 'failed' });
 
         const raw = err?.message || String(err);
-        let friendlyMsg: string;
+        let msg: string;
         if (raw.includes('blockhash') || raw.includes('BlockhashNotFound'))
-          friendlyMsg = 'Blockhash expired — please retry';
+          msg = 'Blockhash expired — please retry';
         else if (raw.includes('0x1') || raw.includes('insufficient lamports') || raw.includes('Insufficient'))
-          friendlyMsg = `Insufficient SOL to cover transaction fees (need ~${requiredSol.toFixed(4)} SOL)`;
+          msg = `Insufficient SOL to cover transaction fees (need ~${requiredSol.toFixed(4)} SOL)`;
         else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied') || raw.includes('User rejected'))
-          friendlyMsg = 'Transaction cancelled — wallet rejected the signature request';
+          msg = 'Transaction cancelled — wallet rejected the signature request';
         else if (raw.includes('timeout') || raw.includes('timed out'))
-          friendlyMsg = 'RPC timeout — Solana network is congested, please retry';
+          msg = 'RPC timeout — Solana network is congested, please retry';
         else if (raw.includes('simulation'))
-          friendlyMsg = `Transaction simulation failed: ${raw}`;
+          msg = `Transaction simulation failed: ${raw}`;
         else
-          friendlyMsg = `Transaction failed: ${raw}`;
+          msg = `Transaction failed: ${raw}`;
 
-        return {
-          success: false,
-          error: friendlyMsg,
-          tokenId: record.id,
-        };
+        return { success: false, error: msg, tokenId: record.id };
       }
 
-      console.log('[TokenCreation] ✓ Transaction confirmed. Signature:', txSignature);
+      console.log('[TokenCreation] Transaction confirmed:', txSignature);
 
-      // ── Save confirmed launch to DB ─────────────────────────────────────────
+      // ── Save to DB ──────────────────────────────────────────────────────────
       await launchpadService.updateRecord(record.id, {
         mint_address: mintPubkey.toBase58(),
         status: 'deployed',
@@ -487,12 +482,10 @@ class TokenCreationService {
         image_url: imageUrl,
       });
 
-      // Record the launch transaction
       await launchpadService.recordLaunchTransaction(
         record.id, creatorWallet, txSignature, PLATFORM_FEE_SOL
       );
 
-      // Register in global token registry
       await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
 
       return {
@@ -509,12 +502,12 @@ class TokenCreationService {
     }
   }
 
-  /** Fetch real rent values and compute the cost breakdown shown in the UI */
+  /** Fetch real cost estimate for the UI cost card */
   async estimateLaunchCost(): Promise<LaunchCostEstimate> {
     try {
       const [mintRent, ataRent] = await Promise.all([
-        this.connection.getMinimumBalanceForRentExemption(MINT_ACCOUNT_SIZE),
-        this.connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE),
+        getRentExemption(MINT_ACCOUNT_SIZE),
+        getRentExemption(ATA_ACCOUNT_SIZE),
       ]);
       const networkAndMintCost = (mintRent + ataRent) / LAMPORTS_PER_SOL + 0.000015;
       return {
@@ -523,18 +516,12 @@ class TokenCreationService {
         total: networkAndMintCost + PLATFORM_FEE_SOL,
       };
     } catch {
-      // Fallback values if RPC is unreachable
-      return {
-        networkAndMintCost: 0.00386,
-        platformFee: PLATFORM_FEE_SOL,
-        total: 0.02386,
-      };
+      return { networkAndMintCost: 0.00386, platformFee: PLATFORM_FEE_SOL, total: 0.02386 };
     }
   }
 
   // ── Instruction builders ────────────────────────────────────────────────────
 
-  /** SPL Token InitializeMint — instruction index 0 */
   private buildInitializeMintIx(
     mint: PublicKey,
     decimals: number,
@@ -547,28 +534,27 @@ class TokenCreationService {
     const data = Buffer.alloc(dataLen);
     let offset = 0;
 
-    data.writeUInt8(0, offset++);           // instruction = InitializeMint
+    data.writeUInt8(0, offset++);
     data.writeUInt8(decimals, offset++);
     mintAuthority.toBuffer().copy(data, offset); offset += 32;
 
     if (hasFreezeAuth) {
-      data.writeUInt8(1, offset++);         // Option::Some
+      data.writeUInt8(1, offset++);
       freezeAuthority!.toBuffer().copy(data, offset);
     } else {
-      data.writeUInt8(0, offset);           // Option::None
+      data.writeUInt8(0, offset);
     }
 
     return new TransactionInstruction({
       keys: [
-        { pubkey: mint,                       isSigner: false, isWritable: true  },
-        { pubkey: SYSVAR_RENT_PUBKEY,         isSigner: false, isWritable: false },
+        { pubkey: mint,             isSigner: false, isWritable: true  },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       ],
       programId,
       data,
     });
   }
 
-  /** Create Associated Token Account — ATA program v1 (instruction byte = none, inferred) */
   private buildCreateAtaIx(
     payer: PublicKey,
     ata: PublicKey,
@@ -578,12 +564,12 @@ class TokenCreationService {
   ): TransactionInstruction {
     return new TransactionInstruction({
       keys: [
-        { pubkey: payer,           isSigner: true,  isWritable: true  },
-        { pubkey: ata,             isSigner: false, isWritable: true  },
-        { pubkey: owner,           isSigner: false, isWritable: false },
-        { pubkey: mint,            isSigner: false, isWritable: false },
+        { pubkey: payer,             isSigner: true,  isWritable: true  },
+        { pubkey: ata,               isSigner: false, isWritable: true  },
+        { pubkey: owner,             isSigner: false, isWritable: false },
+        { pubkey: mint,              isSigner: false, isWritable: false },
         { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: tokenProgramId,  isSigner: false, isWritable: false },
+        { pubkey: tokenProgramId,    isSigner: false, isWritable: false },
         { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       ],
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -591,7 +577,6 @@ class TokenCreationService {
     });
   }
 
-  /** SPL Token MintTo — instruction index 7 */
   private buildMintToIx(
     mint: PublicKey,
     destination: PublicKey,
@@ -602,7 +587,6 @@ class TokenCreationService {
     const data = Buffer.alloc(9);
     data.writeUInt8(7, 0);
     data.writeBigUInt64LE(amount, 1);
-
     return new TransactionInstruction({
       keys: [
         { pubkey: mint,          isSigner: false, isWritable: true  },
@@ -614,11 +598,6 @@ class TokenCreationService {
     });
   }
 
-  /**
-   * Metaplex create_metadata_account_v3 (Anchor discriminator 8 bytes).
-   * Account order matches the Metaplex program interface exactly.
-   * Returns null on any encoding error — metadata is non-fatal.
-   */
   private buildMetaplexMetadataIx(
     mint: PublicKey,
     updateAuthority: PublicKey,
@@ -636,32 +615,21 @@ class TokenCreationService {
       const symbolBytes = Buffer.from(symbol.slice(0, 10), 'utf8');
       const uriBytes    = Buffer.from(uri.slice(0, 200), 'utf8');
 
-      // DataV2 borsh encoding + CreateMetadataAccountArgsV3
       const dataLen =
-        8 +                          // Anchor discriminator
-        4 + nameBytes.length +       // name
-        4 + symbolBytes.length +     // symbol
-        4 + uriBytes.length +        // uri
-        2 +                          // seller_fee_basis_points
-        1 +                          // creators Option::None
-        1 +                          // collection Option::None
-        1 +                          // uses Option::None
-        1 +                          // is_mutable
-        1;                           // collection_details Option::None
+        8 + 4 + nameBytes.length + 4 + symbolBytes.length + 4 + uriBytes.length +
+        2 + 1 + 1 + 1 + 1 + 1;
 
       const data = Buffer.alloc(dataLen);
       let offset = 0;
 
-      // Anchor discriminator for create_metadata_account_v3
       [33, 241, 65, 62, 238, 85, 214, 203].forEach(b => { data.writeUInt8(b, offset++); });
-
       data.writeUInt32LE(nameBytes.length, offset);   offset += 4;
       nameBytes.copy(data, offset);                   offset += nameBytes.length;
       data.writeUInt32LE(symbolBytes.length, offset); offset += 4;
       symbolBytes.copy(data, offset);                 offset += symbolBytes.length;
       data.writeUInt32LE(uriBytes.length, offset);    offset += 4;
       uriBytes.copy(data, offset);                    offset += uriBytes.length;
-      data.writeUInt16LE(0, offset);                  offset += 2; // seller_fee_basis_points
+      data.writeUInt16LE(0, offset);                  offset += 2;
       data.writeUInt8(0, offset++); // creators = None
       data.writeUInt8(0, offset++); // collection = None
       data.writeUInt8(0, offset++); // uses = None
@@ -670,12 +638,12 @@ class TokenCreationService {
 
       return new TransactionInstruction({
         keys: [
-          { pubkey: metadataPda,    isSigner: false, isWritable: true  }, // metadata PDA
-          { pubkey: mint,           isSigner: false, isWritable: false }, // mint
-          { pubkey: updateAuthority, isSigner: true, isWritable: false }, // mint authority (signer)
-          { pubkey: updateAuthority, isSigner: true, isWritable: true  }, // payer (signer, writable)
-          { pubkey: updateAuthority, isSigner: false, isWritable: false }, // update authority
-          { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: metadataPda,     isSigner: false, isWritable: true  },
+          { pubkey: mint,            isSigner: false, isWritable: false },
+          { pubkey: updateAuthority, isSigner: true,  isWritable: false },
+          { pubkey: updateAuthority, isSigner: true,  isWritable: true  },
+          { pubkey: updateAuthority, isSigner: false, isWritable: false },
+          { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: false },
           { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
         ],
         programId: METADATA_PROGRAM_ID,
@@ -686,7 +654,6 @@ class TokenCreationService {
     }
   }
 
-  /** Derive ATA address (no RPC call needed) */
   private async deriveAta(
     owner: PublicKey,
     mint: PublicKey,

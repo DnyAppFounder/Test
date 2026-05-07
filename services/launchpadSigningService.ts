@@ -99,12 +99,14 @@ class LaunchpadSigningService {
 
     const connection = this.connection;
 
+    const connSvc = SolanaConnectionService.getInstance();
+
     return {
       publicKey: keypair.publicKey.toBase58(),
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        // Always fetch a fresh blockhash right before signing
-        const { blockhash, lastValidBlockHeight } =
-          await connection.getLatestBlockhash('confirmed');
+        // Fetch a fresh blockhash via direct HTTP (no Connection WebSocket path)
+        const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+        const blockhash = bhResult.value.blockhash;
         tx.recentBlockhash = blockhash;
         tx.feePayer = keypair.publicKey;
 
@@ -120,15 +122,16 @@ class LaunchpadSigningService {
           'extraSigners:', extraSigners.length
         );
 
-        const sig = await connection.sendRawTransaction(rawTx, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
+        // Send via direct rpcCall — no Connection object involved
+        const encodedTx = Buffer.from(rawTx).toString('base64');
+        const sig = await connSvc.rpcCall('sendTransaction', [
+          encodedTx,
+          { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 },
+        ]);
 
-        console.log('[LaunchpadSigner] Tx sent, sig:', sig.slice(0, 16), '— polling confirmation...');
+        console.log('[LaunchpadSigner] Tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
         await pollConfirmation(connection, sig);
-        console.log('[LaunchpadSigner] Tx confirmed:', sig.slice(0, 16));
+        console.log('[LaunchpadSigner] Tx confirmed:', String(sig).slice(0, 16));
         return sig;
       },
     };
@@ -140,11 +143,13 @@ class LaunchpadSigningService {
     const providerId = wallet.providerId!;
     const connection = this.connection;
 
+    const connSvc = SolanaConnectionService.getInstance();
+
     return {
       publicKey: wallet.publicKey,
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        const { blockhash, lastValidBlockHeight } =
-          await connection.getLatestBlockhash('confirmed');
+        const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+        const blockhash = bhResult.value.blockhash;
         tx.recentBlockhash = blockhash;
         // feePayer MUST be set before any signing (required for serialization)
         tx.feePayer = new (await import('@solana/web3.js')).PublicKey(wallet.publicKey);
@@ -163,15 +168,15 @@ class LaunchpadSigningService {
         const signed = await ExternalWalletAdapter.signTransaction(providerId, tx);
         const rawTx = (signed as Transaction).serialize();
 
-        const sig = await connection.sendRawTransaction(rawTx, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
+        const encodedTx = Buffer.from(rawTx).toString('base64');
+        const sig = await connSvc.rpcCall('sendTransaction', [
+          encodedTx,
+          { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 },
+        ]);
 
-        console.log('[LaunchpadSigner] External tx sent, sig:', sig.slice(0, 16), '— polling confirmation...');
+        console.log('[LaunchpadSigner] External tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
         await pollConfirmation(connection, sig);
-        console.log('[LaunchpadSigner] External tx confirmed:', sig.slice(0, 16));
+        console.log('[LaunchpadSigner] External tx confirmed:', String(sig).slice(0, 16));
         return sig;
       },
     };
