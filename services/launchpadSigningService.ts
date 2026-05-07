@@ -5,6 +5,9 @@
  * Supports both internal wallets (SecureWalletManager mnemonic → Keypair)
  * and external wallets (Phantom/Backpack/Solflare via ExternalWalletAdapter).
  *
+ * Uses HTTP-only confirmation polling (no websockets) so it works through
+ * the Supabase Edge Function RPC proxy.
+ *
  * Usage:
  *   const signer = await launchpadSigningService.getSigner(activeWallet);
  *   const sig = await signer.signAndSend(transaction, [extraSigners]);
@@ -14,7 +17,6 @@ import {
   Transaction,
   Keypair,
   Connection,
-  sendAndConfirmTransaction,
   VersionedTransaction,
 } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -28,6 +30,43 @@ export interface LaunchpadSigner {
   signAndSend(tx: Transaction, extraSigners?: Keypair[]): Promise<string>;
   /** Public key as string */
   publicKey: string;
+}
+
+/**
+ * Poll for transaction confirmation using getSignatureStatuses (HTTP, no websocket).
+ * Retries every 2s for up to maxAttempts (default 30 = 60s).
+ */
+async function pollConfirmation(
+  connection: Connection,
+  signature: string,
+  maxAttempts = 30
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const { value } = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const status = value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(
+            `Transaction failed on-chain: ${JSON.stringify(status.err)}`
+          );
+        }
+        const conf = status.confirmationStatus;
+        if (conf === 'confirmed' || conf === 'finalized') {
+          return; // success
+        }
+      }
+    } catch (e: any) {
+      // Re-throw on-chain failures immediately
+      if (e?.message?.startsWith('Transaction failed on-chain:')) throw e;
+      // Network errors: keep polling
+      console.warn(`[LaunchpadSigner] pollConfirmation attempt ${attempt + 1} network error:`, e?.message);
+    }
+  }
+  throw new Error('Transaction confirmation timed out after 60s. It may still confirm — check Solscan.');
 }
 
 class LaunchpadSigningService {
@@ -63,18 +102,33 @@ class LaunchpadSigningService {
     return {
       publicKey: keypair.publicKey.toBase58(),
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        // Refresh blockhash right before signing
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+        // Always fetch a fresh blockhash right before signing
+        const { blockhash, lastValidBlockHeight } =
+          await connection.getLatestBlockhash('confirmed');
         tx.recentBlockhash = blockhash;
         tx.feePayer = keypair.publicKey;
 
+        // Sign with mint keypair first (if present), then fee-payer
         const allSigners = [keypair, ...extraSigners];
-        const sig = await sendAndConfirmTransaction(
-          connection,
-          tx,
-          allSigners,
-          { commitment: 'confirmed', preflightCommitment: 'confirmed' }
+        tx.sign(...allSigners);
+
+        const rawTx = tx.serialize();
+
+        console.log(
+          '[LaunchpadSigner] Sending internal tx, feePayer:',
+          keypair.publicKey.toBase58().slice(0, 8),
+          'extraSigners:', extraSigners.length
         );
+
+        const sig = await connection.sendRawTransaction(rawTx, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+
+        console.log('[LaunchpadSigner] Tx sent, sig:', sig.slice(0, 16), '— polling confirmation...');
+        await pollConfirmation(connection, sig);
+        console.log('[LaunchpadSigner] Tx confirmed:', sig.slice(0, 16));
         return sig;
       },
     };
@@ -89,25 +143,35 @@ class LaunchpadSigningService {
     return {
       publicKey: wallet.publicKey,
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+        const { blockhash, lastValidBlockHeight } =
+          await connection.getLatestBlockhash('confirmed');
         tx.recentBlockhash = blockhash;
+        // feePayer MUST be set before any signing (required for serialization)
+        tx.feePayer = new (await import('@solana/web3.js')).PublicKey(wallet.publicKey);
 
-        // Extra signers (e.g. mint keypair) sign first
+        // Extra signers (e.g. mint keypair) must sign before the external wallet
         if (extraSigners.length > 0) {
           tx.partialSign(...extraSigners);
         }
 
-        // User wallet signs via browser extension
-        const signed = await ExternalWalletAdapter.signTransaction(providerId, tx);
+        console.log(
+          '[LaunchpadSigner] Requesting external wallet signature, provider:', providerId,
+          'extraSigners:', extraSigners.length
+        );
 
-        // Send raw signed transaction
+        // User wallet signs via browser extension popup
+        const signed = await ExternalWalletAdapter.signTransaction(providerId, tx);
         const rawTx = (signed as Transaction).serialize();
+
         const sig = await connection.sendRawTransaction(rawTx, {
           skipPreflight: false,
           preflightCommitment: 'confirmed',
+          maxRetries: 3,
         });
 
-        await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+        console.log('[LaunchpadSigner] External tx sent, sig:', sig.slice(0, 16), '— polling confirmation...');
+        await pollConfirmation(connection, sig);
+        console.log('[LaunchpadSigner] External tx confirmed:', sig.slice(0, 16));
         return sig;
       },
     };
@@ -117,7 +181,9 @@ class LaunchpadSigningService {
    * Build a signAndSend function compatible with tokenCreationService.createToken()
    * and presaleService flows (they accept `(tx, signers?) => Promise<string>`).
    */
-  makeSignAndSend(signer: LaunchpadSigner): (tx: Transaction, signers?: Keypair[]) => Promise<string> {
+  makeSignAndSend(
+    signer: LaunchpadSigner
+  ): (tx: Transaction, signers?: Keypair[]) => Promise<string> {
     return (tx, signers) => signer.signAndSend(tx, signers);
   }
 }

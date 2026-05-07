@@ -299,14 +299,14 @@ class TokenCreationService {
       try {
         const creatorAllocation = normalized.creatorAllocation;
         if (creatorAllocation > 0) {
-          const ata = await this.deriveAta(creatorPubkey, mintPubkey);
+          const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
           const ataInfo = await this.connection.getAccountInfo(ata);
           const ataRent = await this.connection.getMinimumBalanceForRentExemption(165);
           const { blockhash: bh2 } = await this.connection.getLatestBlockhash('confirmed');
           const tx2 = new Transaction({ recentBlockhash: bh2, feePayer: creatorPubkey });
 
           if (!ataInfo) {
-            tx2.add(this.createAtaInstruction(creatorPubkey, ata, creatorPubkey, mintPubkey, ataRent));
+            tx2.add(this.createAtaInstruction(creatorPubkey, ata, creatorPubkey, mintPubkey, ataRent, tokenProgramId));
           }
 
           const rawAmount = BigInt(Math.floor(creatorAllocation * Math.pow(10, normalized.decimals)));
@@ -384,10 +384,10 @@ class TokenCreationService {
     return new TransactionInstruction({ keys, programId, data });
   }
 
-  /** Derive Associated Token Account address */
-  private async deriveAta(owner: PublicKey, mint: PublicKey): Promise<PublicKey> {
+  /** Derive Associated Token Account address for a given token program */
+  private async deriveAta(owner: PublicKey, mint: PublicKey, tokenProgramId: PublicKey = TOKEN_PROGRAM_ID): Promise<PublicKey> {
     const [ata] = await PublicKey.findProgramAddress(
-      [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+      [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
     return ata;
@@ -395,15 +395,15 @@ class TokenCreationService {
 
   /**
    * Create Associated Token Account instruction.
-   * ATA program instruction index 0 (create idempotent = 1, but standard = 0).
-   * Layout: no data — program infers from accounts.
+   * Layout: no data — ATA program infers everything from accounts.
    */
   private createAtaInstruction(
     payer: PublicKey,
     ata: PublicKey,
     owner: PublicKey,
     mint: PublicKey,
-    _rent: number  // unused — ATA program handles rent internally
+    _rent: number,  // unused — ATA program handles rent internally
+    tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
   ): TransactionInstruction {
     return new TransactionInstruction({
       keys: [
@@ -411,8 +411,8 @@ class TokenCreationService {
         { pubkey: ata, isSigner: false, isWritable: true },
         { pubkey: owner, isSigner: false, isWritable: false },
         { pubkey: mint, isSigner: false, isWritable: false },
-        { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false }, // SystemProgram
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
+        { pubkey: tokenProgramId, isSigner: false, isWritable: false },
         { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
       ],
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -522,12 +522,20 @@ class TokenCreationService {
       // collection_details = None
       data.writeUInt8(0, offset++);
 
+      // Metaplex create_metadata_account_v3 account order:
+      // 0: metadata PDA (writable)
+      // 1: mint (readonly)
+      // 2: mint authority (signer, readonly)
+      // 3: payer (signer, writable — pays metadata rent)
+      // 4: update authority (readonly)
+      // 5: system program
+      // 6: sysvar rent
       return new TransactionInstruction({
         keys: [
-          { pubkey: metadataPda, isSigner: false, isWritable: true },
-          { pubkey: mint, isSigner: false, isWritable: false },
+          { pubkey: metadataPda,   isSigner: false, isWritable: true  },
+          { pubkey: mint,          isSigner: false, isWritable: false },
           { pubkey: updateAuthority, isSigner: true, isWritable: false }, // mint authority
-          { pubkey: updateAuthority, isSigner: true, isWritable: false }, // payer
+          { pubkey: updateAuthority, isSigner: true, isWritable: true  }, // payer (writable for rent)
           { pubkey: updateAuthority, isSigner: false, isWritable: false }, // update authority
           { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
           { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false },
