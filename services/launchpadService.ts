@@ -231,6 +231,26 @@ class LaunchpadService {
     }
   }
 
+  async recordLaunchTransaction(
+    tokenId: string,
+    walletAddress: string,
+    txSignature: string,
+    feeSol: number
+  ): Promise<void> {
+    try {
+      await supabase.from('launchpad_transactions').insert({
+        token_id: tokenId,
+        wallet: walletAddress,
+        type: 'create',
+        amount: feeSol,
+        tx_signature: txSignature,
+        status: 'confirmed',
+      });
+    } catch (e) {
+      console.warn('[LaunchpadService] recordLaunchTransaction failed (non-fatal):', e);
+    }
+  }
+
   async uploadMetadata(metadata: object, tokenId: string): Promise<string | null> {
     try {
       const jsonStr = JSON.stringify(metadata);

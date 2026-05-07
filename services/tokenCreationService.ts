@@ -436,6 +436,11 @@ class TokenCreationService {
         image_url: imageUrl,
       });
 
+      // Record the launch transaction
+      await launchpadService.recordLaunchTransaction(
+        record.id, creatorWallet, txSignature, PLATFORM_FEE_SOL
+      );
+
       // Register in global token registry
       await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
 
