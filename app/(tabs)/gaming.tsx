@@ -334,9 +334,12 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   const [error, setError] = useState<string | null>(null);
   const [copiedMint, setCopiedMint] = useState(false);
   const [launchCost, setLaunchCost] = useState<LaunchCostEstimate>({
-    networkAndMintCost: 0.00386,
+    mintRent: 0.00144,
+    ataRent: 0.00204,
+    networkFee: 0.000015,
     platformFee: 0.02,
-    total: 0.02386,
+    networkAndMintCost: 0.003495,
+    total: 0.023495,
   });
 
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -347,12 +350,12 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
     }
   }, [progress]);
 
-  // Fetch real cost estimate when modal opens
+  // Re-fetch cost estimate when modal opens or when Token-2022 toggle changes
   useEffect(() => {
     if (visible) {
-      tokenCreationService.estimateLaunchCost().then(setLaunchCost).catch(() => {});
+      tokenCreationService.estimateLaunchCost(useToken2022).then(setLaunchCost).catch(() => {});
     }
-  }, [visible]);
+  }, [visible, useToken2022]);
 
   const reset = () => {
     setStep('form'); setProgress(null); setResult(null); setError(null); setCreatedTokenId(null);
@@ -703,19 +706,35 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
                 </>
               )}
 
-              {/* Cost card */}
+              {/* Launch cost breakdown */}
               <View style={mStyles.costCard}>
-                <Text style={mStyles.costTitle}>Estimated Cost</Text>
-                {[
-                  ['Network & Mint Cost', `~${launchCost.networkAndMintCost.toFixed(4)} SOL`],
-                  ['Platform Fee', `${launchCost.platformFee.toFixed(2)} SOL`],
-                  ['Total', `~${launchCost.total.toFixed(4)} SOL`],
-                ].map(([label, val]) => (
-                  <View key={label} style={mStyles.costRow}>
-                    <Text style={mStyles.costLabel}>{label}</Text>
-                    <Text style={[mStyles.costValue, label === 'Total' && { color: colors.primary }]}>{val}</Text>
+                <Text style={mStyles.costTitle}>Launch Cost Breakdown</Text>
+                <View style={mStyles.costRow}>
+                  <Text style={mStyles.costLabel}>Mint Account Rent</Text>
+                  <Text style={mStyles.costValue}>{launchCost.mintRent.toFixed(5)} SOL</Text>
+                </View>
+                <View style={mStyles.costRow}>
+                  <Text style={mStyles.costLabel}>Token Account Rent</Text>
+                  <Text style={mStyles.costValue}>{launchCost.ataRent.toFixed(5)} SOL</Text>
+                </View>
+                {useToken2022 && (
+                  <View style={mStyles.costRow}>
+                    <Text style={[mStyles.costLabel, { color: '#A855F7' }]}>Token-2022 Extra</Text>
+                    <Text style={[mStyles.costValue, { color: '#A855F7' }]}>+{(launchCost.mintRent - 0.00144).toFixed(5)} SOL</Text>
                   </View>
-                ))}
+                )}
+                <View style={mStyles.costRow}>
+                  <Text style={mStyles.costLabel}>Network Fee</Text>
+                  <Text style={mStyles.costValue}>~{launchCost.networkFee.toFixed(6)} SOL</Text>
+                </View>
+                <View style={mStyles.costRow}>
+                  <Text style={mStyles.costLabel}>Platform Fee</Text>
+                  <Text style={mStyles.costValue}>{launchCost.platformFee.toFixed(3)} SOL</Text>
+                </View>
+                <View style={[mStyles.costRow, mStyles.costRowTotal]}>
+                  <Text style={[mStyles.costLabel, mStyles.costLabelTotal]}>Total Required</Text>
+                  <Text style={[mStyles.costValue, mStyles.costValueTotal]}>~{launchCost.total.toFixed(5)} SOL</Text>
+                </View>
               </View>
 
               <TouchableOpacity onPress={handleCreate} style={mStyles.launchBtn}>
@@ -1589,6 +1608,9 @@ const mStyles = StyleSheet.create({
   costRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   costLabel: { fontSize: 13, color: '#6B7280' },
   costValue: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  costRowTotal: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.2)', marginBottom: 0 },
+  costLabelTotal: { fontSize: 14, fontWeight: '700', color: '#E5E7EB' },
+  costValueTotal: { fontSize: 14, fontWeight: '800', color: '#A855F7' },
 
   launchBtn: { borderRadius: 14, overflow: 'hidden', marginTop: 4 },
   launchBtnGrad: {
