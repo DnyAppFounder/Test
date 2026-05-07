@@ -193,7 +193,12 @@ class TokenCreationService {
         return { success: false, error: 'Wallet signer unavailable: invalid Solana address' };
       }
 
+      const connSvc = SolanaConnectionService.getInstance();
+      console.log('[TokenCreation] ══════════════════════════════════════');
       console.log('[TokenCreation] Creator wallet:', creatorPubkey.toBase58());
+      console.log('[TokenCreation] RPC URL:', connSvc.getRpcUrl().slice(0, 80));
+      console.log('[TokenCreation] Mode:', connSvc.isUsingProxy() ? 'Supabase proxy' : 'direct');
+      console.log('[TokenCreation] ══════════════════════════════════════');
 
       const normalized = normalizeInput(input, creatorWallet);
 
@@ -207,6 +212,8 @@ class TokenCreationService {
           imageUrl = await launchpadService.uploadImage(creatorWallet, uri) ?? undefined;
           if (!imageUrl) {
             console.warn('[TokenCreation] Image upload returned null — continuing without image');
+          } else {
+            console.log('[TokenCreation] Image uploaded:', imageUrl.slice(0, 60));
           }
         } catch (imgErr: any) {
           console.warn('[TokenCreation] Image upload threw (non-fatal):', imgErr?.message);
@@ -223,8 +230,9 @@ class TokenCreationService {
       if (recordError || !record) {
         const msg = recordError ?? 'Database launch record failed — no record returned';
         console.error('[TokenCreation] createRecord failed:', msg);
-        return { success: false, error: msg };
+        return { success: false, error: `Database error: ${msg}` };
       }
+      console.log('[TokenCreation] DB record created:', record.id);
 
       // ── Step 4: Upload metadata ─────────────────────────────────────────────
       progress(4, 'Uploading token metadata...');
@@ -253,31 +261,57 @@ class TokenCreationService {
         metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
         if (!metadataUri) {
           console.warn('[TokenCreation] Metadata upload returned null — continuing without metadata URI');
+        } else {
+          console.log('[TokenCreation] Metadata uploaded:', metadataUri.slice(0, 60));
         }
       } catch (metaErr: any) {
         console.warn('[TokenCreation] Metadata upload threw (non-fatal):', metaErr?.message);
       }
 
-      // ── Step 5: Connect to Solana, check balance, build transaction ─────────
+      // ── Step 5: RPC connectivity check + rent + blockhash ──────────────────
       progress(5, 'Connecting to Solana network...');
 
       let mintRentLamports: number;
       let ataRentLamports: number;
       let blockhash: string;
+      let lastValidBlockHeight: number;
+
+      // Verify RPC is reachable before anything else
+      console.log('[TokenCreation] Verifying RPC connectivity...');
+      try {
+        const blockHeight = await connSvc.rpcCall('getBlockHeight', []);
+        console.log('[TokenCreation] RPC healthy — block height:', blockHeight);
+      } catch (healthErr: any) {
+        console.error('[TokenCreation] RPC health check failed:', healthErr);
+        await launchpadService.updateRecord(record.id, { status: 'failed' });
+        return {
+          success: false,
+          error: `RPC connection failed: ${healthErr?.message || 'cannot reach Solana network'}`,
+          tokenId: record.id,
+        };
+      }
 
       try {
+        console.log('[TokenCreation] Fetching rent exemption values...');
         [mintRentLamports, ataRentLamports] = await Promise.all([
           this.connection.getMinimumBalanceForRentExemption(MINT_ACCOUNT_SIZE),
           this.connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE),
         ]);
+        console.log('[TokenCreation] Mint rent:', mintRentLamports, 'lamports');
+        console.log('[TokenCreation] ATA rent:', ataRentLamports, 'lamports');
+
+        console.log('[TokenCreation] Fetching latest blockhash...');
         const bhResult = await this.connection.getLatestBlockhash('confirmed');
         blockhash = bhResult.blockhash;
+        lastValidBlockHeight = bhResult.lastValidBlockHeight;
+        console.log('[TokenCreation] Blockhash:', blockhash, '| lastValidBlockHeight:', lastValidBlockHeight);
       } catch (rpcErr: any) {
-        console.error('[TokenCreation] RPC connection failed:', rpcErr);
+        console.error('[TokenCreation] RPC call failed:', rpcErr);
+        console.error('[TokenCreation] Full RPC error:', JSON.stringify(rpcErr, null, 2));
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
-          error: `RPC timeout: cannot connect to Solana network — ${rpcErr?.message || 'unknown RPC error'}`,
+          error: `RPC error: ${rpcErr?.message || 'failed to fetch network state'}`,
           tokenId: record.id,
         };
       }
@@ -292,14 +326,10 @@ class TokenCreationService {
       try {
         const lamports = await this.connection.getBalance(creatorPubkey, 'confirmed');
         balanceSol = lamports / LAMPORTS_PER_SOL;
-      } catch {
-        // non-fatal — proceed even if balance check fails
+        console.log('[TokenCreation] Wallet balance:', balanceSol.toFixed(6), 'SOL | Required:', requiredSol.toFixed(6), 'SOL');
+      } catch (balErr: any) {
+        console.warn('[TokenCreation] Balance check failed (non-fatal):', balErr?.message);
       }
-
-      console.log(
-        '[TokenCreation] Estimated cost:', requiredSol.toFixed(6), 'SOL |',
-        'Wallet balance:', balanceSol.toFixed(6), 'SOL'
-      );
 
       if (balanceSol > 0 && balanceSol < requiredSol) {
         await launchpadService.updateRecord(record.id, { status: 'failed' });
@@ -319,10 +349,12 @@ class TokenCreationService {
         ? TOKEN_2022_PROGRAM_ID
         : TOKEN_PROGRAM_ID;
 
-      console.log('[TokenCreation] Mint publicKey:', mintPubkey.toBase58());
+      console.log('[TokenCreation] Generated mint keypair:', mintPubkey.toBase58());
+      console.log('[TokenCreation] Token program:', normalized.tokenProgram);
 
-      // Derive ATA (can be derived from public key before account exists)
+      // Derive ATA from public key — no RPC call needed
       const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
+      console.log('[TokenCreation] Creator ATA:', ata.toBase58());
 
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
@@ -349,43 +381,53 @@ class TokenCreationService {
           Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
         );
         tx.add(this.buildMintToIx(mintPubkey, ata, creatorPubkey, rawAmount, tokenProgramId));
+        console.log('[TokenCreation] MintTo amount:', rawAmount.toString(), 'raw units');
       }
 
-      // 5. Metaplex metadata (if we have a URI)
+      // 5. Metaplex metadata
       if (metadataUri) {
         const metaIx = this.buildMetaplexMetadataIx(
           mintPubkey, creatorPubkey, normalized.name, normalized.symbol, metadataUri
         );
-        if (metaIx) tx.add(metaIx);
+        if (metaIx) {
+          tx.add(metaIx);
+          console.log('[TokenCreation] Metaplex metadata instruction added');
+        }
       }
 
-      // 6. Platform fee transfer (FATAL — if this fails the tx is rejected entirely)
+      // 6. Platform fee transfer — FATAL if fails (entire tx rejects)
       tx.add(SystemProgram.transfer({
         fromPubkey: creatorPubkey,
         toPubkey: PLATFORM_FEE_WALLET,
         lamports: PLATFORM_FEE_LAMPORTS,
       }));
 
-      console.log(
-        '[TokenCreation] Transaction built:',
-        tx.instructions.length, 'instructions |',
-        'Platform fee:', PLATFORM_FEE_SOL, 'SOL →', PLATFORM_FEE_WALLET.toBase58().slice(0, 8)
-      );
+      console.log('[TokenCreation] Transaction built:', tx.instructions.length, 'instructions');
+      console.log('[TokenCreation] Platform fee:', PLATFORM_FEE_SOL, 'SOL →', PLATFORM_FEE_WALLET.toBase58());
+      console.log('[TokenCreation] feePayer:', creatorPubkey.toBase58());
+      console.log('[TokenCreation] recentBlockhash:', blockhash);
 
       // ── Simulate transaction ─────────────────────────────────────────────────
+      // partialSign with mintKeypair so simulation has a valid sig for it.
+      // The signer will re-sign everything with a fresh blockhash before sending.
+      console.log('[TokenCreation] Simulating transaction...');
       try {
-        // partialSign with mintKeypair so simulation can verify its signature
         tx.partialSign(mintKeypair);
-        const simResult = await this.connection.simulateTransaction(tx, undefined, true);
+
+        // simulateTransaction(tx, signers) — pass empty array to skip sig verification
+        // which lets us simulate without the fee-payer signature
+        const simResult = await this.connection.simulateTransaction(tx);
         const simLogs = simResult.value.logs ?? [];
-        console.log('[TokenCreation] Simulation logs:', simLogs.slice(0, 20));
+        console.log('[TokenCreation] Simulation result err:', simResult.value.err ?? 'none');
+        console.log('[TokenCreation] Simulation logs:', simLogs);
 
         if (simResult.value.err) {
           const simErr = JSON.stringify(simResult.value.err);
           const logHint = simLogs.find(l =>
             l.includes('Error') || l.includes('failed') || l.includes('insufficient')
           ) ?? '';
-          console.error('[TokenCreation] Simulation failed:', simErr, '\nLogs:', simLogs);
+          console.error('[TokenCreation] Simulation failed. Error:', simErr);
+          console.error('[TokenCreation] Simulation logs:', simLogs);
           await launchpadService.updateRecord(record.id, { status: 'failed' });
           return {
             success: false,
@@ -393,30 +435,39 @@ class TokenCreationService {
             tokenId: record.id,
           };
         }
+        console.log('[TokenCreation] Simulation passed');
       } catch (simErr: any) {
-        // Simulation threw (e.g. RPC doesn't support it) — proceed; signer re-signs fresh
-        console.warn('[TokenCreation] Simulation threw (non-fatal):', simErr?.message);
+        // Non-fatal — some RPC endpoints don't support simulation fully
+        console.warn('[TokenCreation] Simulation threw (non-fatal, proceeding):', simErr?.message);
       }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
       progress(7, 'Waiting for wallet signature...');
+      console.log('[TokenCreation] Requesting wallet signature...');
 
       let txSignature: string;
       try {
-        // Pass mintKeypair as extra signer — the signing service will sign with both
+        // mintKeypair is extraSigner — signing service signs with both keypairs + fresh blockhash
         txSignature = await signAndSendTransaction(tx, [mintKeypair]);
       } catch (err: any) {
-        console.error('[TokenCreation] Transaction rejected:', err);
+        console.error('[TokenCreation] Transaction failed:', err);
+        console.error('[TokenCreation] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
         await launchpadService.updateRecord(record.id, { status: 'failed' });
 
         const raw = err?.message || String(err);
-        let friendlyMsg = `Wallet rejected signature: ${raw}`;
-        if (raw.includes('blockhash')) friendlyMsg = 'Blockhash expired — please retry';
-        else if (raw.includes('0x1')) friendlyMsg = 'Insufficient SOL to cover transaction fees';
-        else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied'))
-          friendlyMsg = 'Wallet rejected signature — transaction cancelled';
+        let friendlyMsg: string;
+        if (raw.includes('blockhash') || raw.includes('BlockhashNotFound'))
+          friendlyMsg = 'Blockhash expired — please retry';
+        else if (raw.includes('0x1') || raw.includes('insufficient lamports') || raw.includes('Insufficient'))
+          friendlyMsg = `Insufficient SOL to cover transaction fees (need ~${requiredSol.toFixed(4)} SOL)`;
+        else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied') || raw.includes('User rejected'))
+          friendlyMsg = 'Transaction cancelled — wallet rejected the signature request';
         else if (raw.includes('timeout') || raw.includes('timed out'))
           friendlyMsg = 'RPC timeout — Solana network is congested, please retry';
+        else if (raw.includes('simulation'))
+          friendlyMsg = `Transaction simulation failed: ${raw}`;
+        else
+          friendlyMsg = `Transaction failed: ${raw}`;
 
         return {
           success: false,
@@ -425,7 +476,7 @@ class TokenCreationService {
         };
       }
 
-      console.log('[TokenCreation] Transaction confirmed:', txSignature);
+      console.log('[TokenCreation] ✓ Transaction confirmed. Signature:', txSignature);
 
       // ── Save confirmed launch to DB ─────────────────────────────────────────
       await launchpadService.updateRecord(record.id, {
