@@ -28,6 +28,7 @@ import {
   EasyModeInput,
   AdvancedModeInput,
   TokenCreationProgress,
+  LaunchCostEstimate,
 } from '@/services/tokenCreationService';
 import {
   presaleService,
@@ -332,6 +333,11 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   const [result, setResult] = useState<{ mintAddress: string; txSig: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedMint, setCopiedMint] = useState(false);
+  const [launchCost, setLaunchCost] = useState<LaunchCostEstimate>({
+    networkAndMintCost: 0.00386,
+    platformFee: 0.02,
+    total: 0.02386,
+  });
 
   const progressAnim = useRef(new Animated.Value(0)).current;
 
@@ -340,6 +346,13 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
       Animated.timing(progressAnim, { toValue: progress.step / progress.totalSteps, duration: 400, useNativeDriver: false }).start();
     }
   }, [progress]);
+
+  // Fetch real cost estimate when modal opens
+  useEffect(() => {
+    if (visible) {
+      tokenCreationService.estimateLaunchCost().then(setLaunchCost).catch(() => {});
+    }
+  }, [visible]);
 
   const reset = () => {
     setStep('form'); setProgress(null); setResult(null); setError(null); setCreatedTokenId(null);
@@ -694,10 +707,9 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
               <View style={mStyles.costCard}>
                 <Text style={mStyles.costTitle}>Estimated Cost</Text>
                 {[
-                  ['Mint rent', '~0.002 SOL'],
-                  ['Platform fee', '0.02 SOL'],
-                  ['Network fee', '~0.000005 SOL'],
-                  ['Total', '~0.022 SOL'],
+                  ['Network & Mint Cost', `~${launchCost.networkAndMintCost.toFixed(4)} SOL`],
+                  ['Platform Fee', `${launchCost.platformFee.toFixed(2)} SOL`],
+                  ['Total', `~${launchCost.total.toFixed(4)} SOL`],
                 ].map(([label, val]) => (
                   <View key={label} style={mStyles.costRow}>
                     <Text style={mStyles.costLabel}>{label}</Text>
