@@ -413,42 +413,49 @@ class TokenCreationService {
       console.log('[TokenCreation] Creator ATA:', ata.toBase58());
       console.log('[TokenCreation] Metadata PDA:', metadataPDA.toBase58());
 
-      // Blockhash is a placeholder — the signing service replaces it with a
-      // fresh one immediately before signing.
+      // ── Assemble the single atomic transaction ──────────────────────────────
+      // ALL instructions that debit the payer (rent payments, platform fee) MUST
+      // be inside this one Transaction object. The signing service rebuilds a fresh
+      // Transaction from tx.instructions with a new blockhash — nothing is added or
+      // removed after this block. This is the exact transaction Phantom will sign.
+
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
-      // 1. Create mint account (SystemProgram allocates space, assigns to token program)
+      // ix 1 — Allocate mint account and fund it with rent-exempt lamports.
+      //         fromPubkey (creator) is debited mintRentLamports immediately.
       tx.add(SystemProgram.createAccount({
-        fromPubkey: creatorPubkey,
+        fromPubkey:      creatorPubkey,
         newAccountPubkey: mintPubkey,
-        lamports: mintRentLamports,
-        space: mintAccountSize,
-        programId: tokenProgramId,
+        lamports:        mintRentLamports,
+        space:           mintAccountSize,
+        programId:       tokenProgramId,
       }));
 
-      // 2. Initialize mint — must precede metadata so mint authority is set on-chain
+      // ix 2 — Initialize the mint (set decimals + mint/freeze authorities).
+      //         Must come before metadata so the mint authority is set on-chain.
       tx.add(this.buildInitializeMintIx(
         mintPubkey, normalized.decimals, creatorPubkey, creatorPubkey, tokenProgramId
       ));
 
-      // 3. On-chain Metaplex metadata — name/symbol/uri visible in all Solana explorers
-      //    Metaplex verifies mint_authority is set (step 2 must come first).
-      //    Payer is debited for the metadata account rent by the Metaplex program via CPI.
+      // ix 3 — On-chain Metaplex metadata (name/symbol/uri visible in all explorers).
+      //         Metaplex CPIs into SystemProgram to create the metadata account;
+      //         creator is debited metadataRentLamports via that CPI.
       tx.add(this.buildCreateMetadataV3Ix(
         metadataPDA,
         mintPubkey,
-        creatorPubkey,   // mintAuthority (signer — already signs as feePayer)
-        creatorPubkey,   // payer (signer, writable)
-        creatorPubkey,   // updateAuthority
+        creatorPubkey,      // mintAuthority — already signing as feePayer
+        creatorPubkey,      // payer — debited for metadata account rent
+        creatorPubkey,      // updateAuthority
         normalized.name,
         normalized.symbol,
         metadataUri ?? '',
       ));
 
-      // 4. Create creator ATA (idempotent — safe to retry if ATA already exists)
+      // ix 4 — Create the creator's Associated Token Account (idempotent).
+      //         ATA program CPIs into SystemProgram; creator debited ataRentLamports.
       tx.add(this.buildCreateAtaIx(creatorPubkey, ata, creatorPubkey, mintPubkey, tokenProgramId));
 
-      // 5. Mint creator allocation to ATA
+      // ix 5 — Mint the creator allocation directly into the ATA.
       if (normalized.creatorAllocation > 0) {
         const rawAmount = BigInt(
           Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
@@ -457,22 +464,47 @@ class TokenCreationService {
         console.log('[TokenCreation] MintTo amount:', rawAmount.toString(), 'raw units');
       }
 
-      // 6. Platform fee transfer — LAST; entire tx is atomic so fee only paid on success
-      tx.add(SystemProgram.transfer({
-        fromPubkey: creatorPubkey,
-        toPubkey: PLATFORM_FEE_WALLET,
-        lamports: PLATFORM_FEE_LAMPORTS,
-      }));
+      // ix 6 — Platform fee SOL transfer (LAST instruction).
+      //         This is a direct SystemProgram.transfer — Phantom shows this as a
+      //         native SOL send in the transaction approval screen.
+      //         Being last means the full tx fails atomically if creator has insufficient SOL.
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: creatorPubkey,
+          toPubkey:   PLATFORM_FEE_WALLET,
+          lamports:   PLATFORM_FEE_LAMPORTS,
+        })
+      );
 
-      console.log('[TokenCreation] Transaction built:', tx.instructions.length, 'instructions');
-      console.log('[TokenCreation] Platform fee:', PLATFORM_FEE_SOL, 'SOL →', PLATFORM_FEE_WALLET.toBase58());
+      // ── Pre-sign assertion: verify every instruction is in tx before handing to signer
+      const ixPrograms = tx.instructions.map(ix => ix.programId.toBase58());
+      console.log('[TokenCreation] ── Final tx instructions (' + tx.instructions.length + ' total) ──');
+      ixPrograms.forEach((prog, i) => {
+        const label =
+          prog === SYSTEM_PROGRAM_ID.toBase58()           ? 'SystemProgram' :
+          prog === tokenProgramId.toBase58()              ? 'TokenProgram' :
+          prog === TOKEN_METADATA_PROGRAM_ID.toBase58()   ? 'MetaplexMetadata' :
+          prog === ASSOCIATED_TOKEN_PROGRAM_ID.toBase58() ? 'ATAProgram' : prog.slice(0, 8);
+        console.log(`  [${i + 1}] ${label}`);
+      });
+      console.log('[TokenCreation] Platform fee included:', ixPrograms.includes(SYSTEM_PROGRAM_ID.toBase58()));
+      console.log('[TokenCreation] Metadata included:', ixPrograms.includes(TOKEN_METADATA_PROGRAM_ID.toBase58()));
+      console.log('[TokenCreation] Total debit from creator:',
+        ((mintRentLamports + ataRentLamports + metadataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(6),
+        'SOL (excl. tx fee)'
+      );
+
+      if (tx.instructions.length < 5) {
+        throw new Error(`Transaction incomplete: only ${tx.instructions.length} instructions built — aborting`);
+      }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
       // The signing service fetches a FRESH blockhash before signing so the
       // blockhash we set above is only a placeholder — it will be replaced.
-      // mintKeypair is passed as extraSigner so the service signs with both keys.
+      // mintKeypair is passed as extraSigner so the service can partialSign it
+      // before Phantom (or the internal keypair) adds the feePayer signature.
       progress(7, 'Waiting for wallet signature...');
-      console.log('[TokenCreation] Requesting wallet signature...');
+      console.log('[TokenCreation] Handing complete tx (' + tx.instructions.length + ' instructions) to signer...');
 
       let txSignature: string;
       try {

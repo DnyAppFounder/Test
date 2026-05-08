@@ -115,13 +115,20 @@ class LaunchpadSigningService {
             const blockhash: string = bhResult.value.blockhash;
             const lastValidBlockHeight: number = bhResult.value.lastValidBlockHeight;
 
-            // Rebuild fresh transaction from original instructions on each attempt
+            // Rebuild a clean Transaction from the original instructions on each attempt.
+            // All instructions — including the platform-fee SystemProgram.transfer — are
+            // copied from tx.instructions before signing. Nothing is added or removed here.
             const freshTx = new Transaction({ recentBlockhash: blockhash, feePayer });
             for (const ix of tx.instructions) {
               freshTx.add(ix);
             }
+            if (freshTx.instructions.length !== tx.instructions.length) {
+              throw new Error(
+                `Instruction count mismatch: expected ${tx.instructions.length}, got ${freshTx.instructions.length}`
+              );
+            }
 
-            // Sign: fee-payer first, then extra signers (e.g. mintKeypair)
+            // Sign with all keypairs: fee-payer first, then extra signers (mintKeypair)
             freshTx.sign(keypair, ...extraSigners);
 
             const rawTx = freshTx.serialize();
@@ -189,25 +196,32 @@ class LaunchpadSigningService {
             const blockhash: string = bhResult.value.blockhash;
             const lastValidBlockHeight: number = bhResult.value.lastValidBlockHeight;
 
-            // 2. Build a fresh Transaction with the new blockhash.
-            //    We never mutate the original tx's signatures, so each attempt is clean.
+            // 2. Rebuild a clean Transaction from the original instructions.
+            //    Every instruction (createAccount, initMint, metadata, ATA, mintTo,
+            //    platform-fee transfer) must be present — verified by the count check below.
             const freshTx = new Transaction({ recentBlockhash: blockhash, feePayer });
             for (const ix of tx.instructions) {
               freshTx.add(ix);
             }
 
-            // 3. partialSign with mint keypair before external wallet signs
+            console.log(
+              `[LaunchpadSigner] External tx rebuild (attempt ${attempt}/${MAX_ATTEMPTS}):`,
+              freshTx.instructions.length, 'instructions',
+              '| blockhash:', blockhash.slice(0, 8) + '...',
+              '| provider:', providerId
+            );
+            if (freshTx.instructions.length !== tx.instructions.length) {
+              throw new Error(
+                `Instruction count mismatch: expected ${tx.instructions.length}, got ${freshTx.instructions.length}`
+              );
+            }
+
+            // 3. partialSign with mint keypair BEFORE external wallet signs.
+            //    mintKeypair must sign first because it's a non-feePayer signer;
+            //    Phantom (feePayer) adds its signature on top.
             if (extraSigners.length > 0) {
               freshTx.partialSign(...extraSigners);
             }
-
-            console.log(
-              `[LaunchpadSigner] External wallet sign request (attempt ${attempt}/${MAX_ATTEMPTS}),`,
-              'blockhash:', blockhash.slice(0, 8) + '...',
-              'lastValidBlockHeight:', lastValidBlockHeight,
-              'provider:', providerId,
-              'extraSigners:', extraSigners.length
-            );
 
             // 4. External wallet (Phantom) signs — user delay happens here
             const signed = await ExternalWalletAdapter.signTransaction(providerId, freshTx);
