@@ -13,6 +13,20 @@
  *   const sig = await signer.signAndSend(transaction, [extraSigners]);
  */
 
+function diag(tag: string, ...args: any[]) {
+  console.log(`[LAUNCH_DIAG] ${tag}`, ...args);
+}
+
+function diagError(tag: string, err: any) {
+  console.error(`[LAUNCH_DIAG] ${tag}`, {
+    name:    err?.name    ?? 'UnknownError',
+    message: err?.message ?? String(err),
+    logs:    (err?.logs ?? err?.simulationResponse?.logs ?? null)
+               ?.join?.('\n') ?? null,
+    stack:   err?.stack?.split('\n').slice(0, 5).join('\n') ?? null,
+  });
+}
+
 import {
   Transaction,
   Keypair,
@@ -36,12 +50,19 @@ export interface LaunchpadSigner {
 /**
  * Poll for transaction confirmation using getSignatureStatuses (HTTP, no websocket).
  * Retries every 2s for up to maxAttempts (default 30 = 60s).
+ * On timeout, throws an error with .signature and .solscan so callers can surface the tx.
  */
 async function pollConfirmation(
   connection: Connection,
   signature: string,
   maxAttempts = 30
 ): Promise<void> {
+  diag('CONFIRMATION_PENDING', {
+    signature,
+    solscan: `https://solscan.io/tx/${signature}`,
+    maxWaitSeconds: maxAttempts * 2,
+  });
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise(r => setTimeout(r, 2000));
     try {
@@ -49,25 +70,46 @@ async function pollConfirmation(
         searchTransactionHistory: true,
       });
       const status = value?.[0];
+
+      diag('CONFIRMATION_RESULT', {
+        attempt: attempt + 1,
+        signature: signature.slice(0, 16) + '...',
+        status: status ?? 'null (not yet seen)',
+        confirmationStatus: status?.confirmationStatus ?? null,
+        err: status?.err ?? null,
+      });
+
       if (status) {
         if (status.err) {
-          throw new Error(
+          const onChainErr: any = new Error(
             `Transaction failed on-chain: ${JSON.stringify(status.err)}`
           );
+          onChainErr.signature = signature;
+          onChainErr.solscan   = `https://solscan.io/tx/${signature}`;
+          throw onChainErr;
         }
         const conf = status.confirmationStatus;
         if (conf === 'confirmed' || conf === 'finalized') {
-          return; // success
+          diag('CONFIRMATION_RESULT_FINAL', {
+            signature,
+            confirmationStatus: conf,
+            solscan: `https://solscan.io/tx/${signature}`,
+          });
+          return;
         }
       }
     } catch (e: any) {
-      // Re-throw on-chain failures immediately
       if (e?.message?.startsWith('Transaction failed on-chain:')) throw e;
-      // Network errors: keep polling
       console.warn(`[LaunchpadSigner] pollConfirmation attempt ${attempt + 1} network error:`, e?.message);
     }
   }
-  throw new Error('Transaction confirmation timed out after 60s. It may still confirm — check Solscan.');
+
+  const timeoutErr: any = new Error(
+    `Confirmation timed out after ${maxAttempts * 2}s — tx may still confirm. Check Solscan: https://solscan.io/tx/${signature}`
+  );
+  timeoutErr.signature = signature;
+  timeoutErr.solscan   = `https://solscan.io/tx/${signature}`;
+  throw timeoutErr;
 }
 
 class LaunchpadSigningService {
@@ -131,16 +173,18 @@ class LaunchpadSigningService {
             // Sign with all keypairs: fee-payer first, then extra signers (mintKeypair)
             freshTx.sign(keypair, ...extraSigners);
 
+            diag('WALLET_SIGNATURE_SUCCESS', {
+              type: 'internal',
+              attempt,
+              feePayer: feePayer.toBase58().slice(0, 8) + '...',
+              blockhash: blockhash.slice(0, 8) + '...',
+              lastValidBlockHeight,
+              extraSigners: extraSigners.length,
+              instructionCount: freshTx.instructions.length,
+            });
+
             const rawTx = freshTx.serialize();
             const encodedTx = Buffer.from(rawTx).toString('base64');
-
-            console.log(
-              `[LaunchpadSigner] Internal tx attempt ${attempt}/${MAX_ATTEMPTS}, feePayer:`,
-              feePayer.toBase58().slice(0, 8),
-              'blockhash:', blockhash.slice(0, 8) + '...',
-              'lastValidBlockHeight:', lastValidBlockHeight,
-              'extraSigners:', extraSigners.length
-            );
 
             // skipPreflight: true bypasses simulation-layer blockhash checks;
             // the cluster validates the blockhash authoritatively during processing.
@@ -149,9 +193,14 @@ class LaunchpadSigningService {
               { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
             ]);
 
-            console.log('[LaunchpadSigner] Internal tx sent, sig:', String(sig).slice(0, 16), '— polling...');
+            diag('RAW_TRANSACTION_SENT', {
+              signature: String(sig),
+              solscan: `https://solscan.io/tx/${sig}`,
+              type: 'internal',
+              attempt,
+            });
+
             await pollConfirmation(connection, sig);
-            console.log('[LaunchpadSigner] Internal tx confirmed:', String(sig).slice(0, 16));
             return sig;
 
           } catch (err: any) {
@@ -204,12 +253,14 @@ class LaunchpadSigningService {
               freshTx.add(ix);
             }
 
-            console.log(
-              `[LaunchpadSigner] External tx rebuild (attempt ${attempt}/${MAX_ATTEMPTS}):`,
-              freshTx.instructions.length, 'instructions',
-              '| blockhash:', blockhash.slice(0, 8) + '...',
-              '| provider:', providerId
-            );
+            diag('BUILD_TRANSACTION_START', {
+              type: 'external',
+              provider: providerId,
+              attempt,
+              instructionCount: freshTx.instructions.length,
+              blockhash: blockhash.slice(0, 8) + '...',
+              lastValidBlockHeight,
+            });
             if (freshTx.instructions.length !== tx.instructions.length) {
               throw new Error(
                 `Instruction count mismatch: expected ${tx.instructions.length}, got ${freshTx.instructions.length}`
@@ -226,6 +277,15 @@ class LaunchpadSigningService {
             // 4. External wallet (Phantom) signs — user delay happens here
             const signed = await ExternalWalletAdapter.signTransaction(providerId, freshTx);
 
+            diag('WALLET_SIGNATURE_SUCCESS', {
+              type: 'external',
+              provider: providerId,
+              attempt,
+              blockhash: blockhash.slice(0, 8) + '...',
+              lastValidBlockHeight,
+              instructionCount: (signed as Transaction).instructions?.length ?? freshTx.instructions.length,
+            });
+
             // 5. Check if the blockhash is still within its valid window after user approved
             let currentHeight = 0;
             try {
@@ -236,10 +296,10 @@ class LaunchpadSigningService {
 
             if (currentHeight > 0 && currentHeight > lastValidBlockHeight) {
               if (attempt < MAX_ATTEMPTS) {
-                console.warn(
-                  `[LaunchpadSigner] Blockhash expired (block ${currentHeight} > lastValid ${lastValidBlockHeight}),`,
-                  `rebuilding tx for attempt ${attempt + 1}...`
-                );
+                diag('BLOCKHASH_EXPIRED_AFTER_SIGN', {
+                  currentHeight, lastValidBlockHeight, attempt,
+                  note: `rebuilding for attempt ${attempt + 1}`,
+                });
                 continue;
               }
               throw new Error(
@@ -252,15 +312,20 @@ class LaunchpadSigningService {
             const rawTx = (signed as Transaction).serialize();
             const encodedTx = Buffer.from(rawTx).toString('base64');
 
-            console.log('[LaunchpadSigner] Submitting external tx (skipPreflight=true)...');
             const sig = await connSvc.rpcCall('sendTransaction', [
               encodedTx,
               { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
             ]);
 
-            console.log('[LaunchpadSigner] External tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
+            diag('RAW_TRANSACTION_SENT', {
+              signature: String(sig),
+              solscan: `https://solscan.io/tx/${sig}`,
+              type: 'external',
+              provider: providerId,
+              attempt,
+            });
+
             await pollConfirmation(connection, sig);
-            console.log('[LaunchpadSigner] External tx confirmed:', String(sig).slice(0, 16));
             return sig;
 
           } catch (err: any) {
