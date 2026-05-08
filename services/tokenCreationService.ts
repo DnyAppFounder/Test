@@ -483,12 +483,31 @@ class TokenCreationService {
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
       progress(7, 'Waiting for wallet signature...');
 
+      const rentLamports        = mintRentLamports + ataRentLamports;
+      const platformFeeLamports = PLATFORM_FEE_LAMPORTS;
+      const estimatedNetworkFee = 5000; // ~0.000005 SOL base fee
+      const totalLamportsPaidByUser = rentLamports + platformFeeLamports + estimatedNetworkFee;
+
+      diag('LAMPORT_BREAKDOWN', {
+        feePayer:              creatorPubkey.toBase58(),
+        mintRentLamports,
+        ataRentLamports,
+        rentLamports,
+        platformFeeLamports,
+        estimatedNetworkFee,
+        totalLamportsPaidByUser,
+        finalTotalRequiredSol: (totalLamportsPaidByUser / LAMPORTS_PER_SOL).toFixed(9),
+        mintSize,
+        instructionCount:      tx.instructions.length,
+        note: 'Every SystemProgram.createAccount and transfer uses feePayer as fromPubkey',
+      });
+
       diag('WALLET_SIGNATURE_REQUESTED', {
         instructionCount: tx.instructions.length,
         feePayer: creatorPubkey.toBase58(),
         extraSigners: 1,
         extraSignerKey: mintPubkey.toBase58(),
-        totalDebits: (feeBreakdown.mintRent + feeBreakdown.ataRent + feeBreakdown.platformFee).toFixed(6) + ' SOL',
+        totalDebits: (totalLamportsPaidByUser / LAMPORTS_PER_SOL).toFixed(6) + ' SOL',
       });
 
       let txSignature: string;
@@ -603,15 +622,21 @@ class TokenCreationService {
     mintAuthority: PublicKey, freezeAuthority: PublicKey | null,
     programId: PublicKey
   ): TransactionInstruction {
-    const data = Buffer.alloc(67);
+    // SPL Token InitializeMint2 (instruction 20) layout — 70 bytes total:
+    //   offset 0  : u8   instruction index (20)
+    //   offset 1  : u8   decimals
+    //   offset 2  : [u8;32] mintAuthority
+    //   offset 34 : u32 LE COption discriminant (0=None, 1=Some) — MUST be 4 bytes
+    //   offset 38 : [u8;32] freezeAuthority (zero-filled when None)
+    const data = Buffer.alloc(70);
     data.writeUInt8(20, 0);
     data.writeUInt8(decimals, 1);
     mintAuthority.toBuffer().copy(data, 2);
     if (freezeAuthority !== null) {
-      data.writeUInt8(1, 34);
-      freezeAuthority.toBuffer().copy(data, 35);
+      data.writeUInt32LE(1, 34);           // Some — 4-byte u32
+      freezeAuthority.toBuffer().copy(data, 38);
     } else {
-      data.writeUInt8(0, 34);
+      data.writeUInt32LE(0, 34);           // None — 4-byte u32; bytes 38-69 are already 0
     }
     return new TransactionInstruction({
       keys: [{ pubkey: mint, isSigner: false, isWritable: true }],
