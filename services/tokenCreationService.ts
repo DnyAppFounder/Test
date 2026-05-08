@@ -1,26 +1,20 @@
 /**
  * tokenCreationService
  *
- * Handles on-chain SPL token creation via the connected wallet.
- * Private keys never leave the user's device — only signed transactions are sent.
+ * Single-transaction flow — ALL 5 instructions in one atomic Transaction:
+ *   1. SystemProgram.createAccount      — allocate + fund mint account (mintRent)
+ *   2. InitializeMint                   — set decimals + mint/freeze authorities
+ *   3. CreateAssociatedTokenAccountIdempotent — creator ATA (ataRent via ATA CPI)
+ *   4. MintTo                           — mint full supply to creator ATA
+ *   5. SystemProgram.transfer           — explicit platform fee SOL transfer (LAST)
  *
- * Single-transaction flow (all instructions in one tx):
- *   1. SystemProgram.createAccount      — allocate mint account
- *   2. InitializeMint                   — set decimals + authorities
- *   3. CreateMetadataAccountV3          — Metaplex on-chain name/symbol/uri
- *   4. CreateAssociatedTokenAccountIdempotent — creator ATA
- *   5. MintTo                           — mint full supply to creator ATA
- *   6. SystemProgram.transfer           — 0.02 SOL platform fee (LAST)
+ * A FeeBreakdown object is computed before building the transaction.
+ * The same object drives both the UI preview and the actual instructions.
+ * If the transaction contains no explicit SystemProgram.transfer to the
+ * platform fee wallet, the launch is blocked with a clear error.
  *
- * All RPC calls go through SolanaConnectionService.rpcCall() — a direct HTTP
- * fetch to the Supabase proxy — NOT through the @solana/web3.js Connection
- * object. This avoids the WebSocket connection that Connection always opens
- * (which fails against the Supabase Edge Function proxy) and gives us clean,
- * reliable HTTP-only RPC calls with proper auth headers.
- *
- * The signing service (launchpadSigningService) uses the Connection object
- * only for sendRawTransaction and getSignatureStatuses, both of which are
- * standard HTTP JSON-RPC calls that work fine through the proxy.
+ * Token metadata (name/symbol/uri/image) is stored in Supabase and the
+ * token registry so every screen in the app can display it.
  */
 
 import {
@@ -39,7 +33,6 @@ import { tokenRegistryService } from './tokenRegistryService';
 const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const TOKEN_2022_PROGRAM_ID       = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
-const TOKEN_METADATA_PROGRAM_ID   = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const SYSTEM_PROGRAM_ID           = new PublicKey('11111111111111111111111111111111');
 const SYSVAR_RENT_PUBKEY          = new PublicKey('SysvarRent111111111111111111111111111111111');
 
@@ -49,20 +42,9 @@ const PLATFORM_FEE_SOL      = 0.02;
 const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 
 // Account sizes for rent calculation
-// SPL Token mint = 82 bytes; Token-2022 mint base = 234 bytes (82 + extension header)
-const MINT_ACCOUNT_SIZE      = 82;
-const MINT_ACCOUNT_SIZE_2022 = 234;
-const ATA_ACCOUNT_SIZE       = 165;
-// Metaplex metadata account — conservative upper bound (MAX_METADATA_LEN in mpl-token-metadata)
-const METADATA_ACCOUNT_SIZE  = 679;
-
-// ── Borsh string encoder (u32-LE length prefix + UTF-8 bytes) ─────────────────
-function borshStr(s: string): Buffer {
-  const utf8 = Buffer.from(s, 'utf8');
-  const len  = Buffer.alloc(4);
-  len.writeUInt32LE(utf8.length, 0);
-  return Buffer.concat([len, utf8]);
-}
+const MINT_ACCOUNT_SIZE      = 82;   // SPL Token mint
+const MINT_ACCOUNT_SIZE_2022 = 234;  // Token-2022 mint base (82 + extension header)
+const ATA_ACCOUNT_SIZE       = 165;  // Associated Token Account
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -124,15 +106,25 @@ export interface TokenCreationProgress {
 
 export type ProgressCallback = (progress: TokenCreationProgress) => void;
 
-export interface LaunchCostEstimate {
-  mintRent: number;           // mint account rent exemption, in SOL
-  ataRent: number;            // creator ATA rent exemption, in SOL
-  metadataRent: number;       // Metaplex metadata account rent exemption, in SOL
-  networkFee: number;         // base transaction fee (~2 signatures), in SOL
-  platformFee: number;        // DAWEN platform fee, in SOL
-  total: number;              // sum of all above, in SOL
-  networkAndMintCost: number; // mintRent + ataRent + metadataRent + networkFee (legacy compat)
+/**
+ * FeeBreakdown — all values in SOL.
+ * Drives both the UI preview card and the actual transaction instructions.
+ * Every non-zero fee MUST have a corresponding instruction in the transaction.
+ */
+export interface FeeBreakdown {
+  networkFee: number;       // base tx fee (~2 signatures × 5000 lamports)
+  mintRent: number;         // mint account rent exemption
+  metadataRent: number;     // 0 — metadata stored off-chain in Supabase
+  ataRent: number;          // creator ATA rent exemption (paid via ATA CPI)
+  platformFee: number;      // DAWEN platform fee (SystemProgram.transfer)
+  launchFee: number;        // 0 — reserved
+  liquidityAmount: number;  // 0 — reserved
+  priorityFee: number;      // 0 — reserved
+  totalRequiredSol: number; // sum of all above
 }
+
+// Legacy alias so callers using LaunchCostEstimate still compile
+export type LaunchCostEstimate = FeeBreakdown;
 
 // ── Input normalizer ──────────────────────────────────────────────────────────
 
@@ -173,22 +165,14 @@ function normalizeInput(input: TokenCreationInput, creatorWallet: string): Creat
   }
 }
 
-// ── RPC helpers (direct HTTP — no Connection object) ─────────────────────────
+// ── RPC helpers ───────────────────────────────────────────────────────────────
 
-/**
- * Fetch the minimum lamports for rent exemption via direct JSON-RPC call.
- * Uses SolanaConnectionService.rpcCall() which sends an authorized HTTP POST
- * to the Supabase proxy. Does NOT use the @solana/web3.js Connection object.
- */
 async function getRentExemption(dataSize: number): Promise<number> {
   const connSvc = SolanaConnectionService.getInstance();
   const result = await connSvc.rpcCall('getMinimumBalanceForRentExemption', [dataSize]);
   return typeof result === 'number' ? result : Number(result);
 }
 
-/**
- * Fetch the latest confirmed blockhash via direct JSON-RPC call.
- */
 async function getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
   const connSvc = SolanaConnectionService.getInstance();
   const result = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
@@ -198,9 +182,6 @@ async function getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlock
   };
 }
 
-/**
- * Fetch wallet balance in lamports via direct JSON-RPC call.
- */
 async function getBalance(pubkey: string): Promise<number> {
   const connSvc = SolanaConnectionService.getInstance();
   const result = await connSvc.rpcCall('getBalance', [pubkey, { commitment: 'confirmed' }]);
@@ -216,7 +197,7 @@ class TokenCreationService {
    *
    * signAndSendTransaction is provided by launchpadSigningService.
    * It fetches a fresh blockhash, signs with all keypairs, sends via
-   * connection.sendRawTransaction(), and polls confirmation via HTTP.
+   * sendRawTransaction(), and polls confirmation via HTTP.
    */
   async createToken(
     input: TokenCreationInput,
@@ -323,7 +304,6 @@ class TokenCreationService {
       // ── Step 5: RPC connectivity + rent + blockhash ─────────────────────────
       progress(5, 'Connecting to Solana network...');
 
-      // Verify RPC is reachable with a cheap call first
       console.log('[TokenCreation] Verifying RPC connectivity...');
       try {
         const blockHeight = await connSvc.rpcCall('getBlockHeight', []);
@@ -338,26 +318,24 @@ class TokenCreationService {
         };
       }
 
+      const mintSize = normalized.tokenProgram === 'token-2022'
+        ? MINT_ACCOUNT_SIZE_2022
+        : MINT_ACCOUNT_SIZE;
+
       let mintRentLamports: number;
       let ataRentLamports: number;
-      let metadataRentLamports: number;
       let blockhash: string;
 
       try {
         console.log('[TokenCreation] Fetching rent exemptions and blockhash...');
-        const mintSize = normalized.tokenProgram === 'token-2022'
-          ? MINT_ACCOUNT_SIZE_2022
-          : MINT_ACCOUNT_SIZE;
-        [mintRentLamports, ataRentLamports, metadataRentLamports] = await Promise.all([
+        [mintRentLamports, ataRentLamports] = await Promise.all([
           getRentExemption(mintSize),
           getRentExemption(ATA_ACCOUNT_SIZE),
-          getRentExemption(METADATA_ACCOUNT_SIZE),
         ]);
         const bhResult = await getLatestBlockhash();
         blockhash = bhResult.blockhash;
         console.log('[TokenCreation] Mint rent:', mintRentLamports, 'lamports');
         console.log('[TokenCreation] ATA rent:', ataRentLamports, 'lamports');
-        console.log('[TokenCreation] Metadata rent:', metadataRentLamports, 'lamports');
         console.log('[TokenCreation] Blockhash:', blockhash);
       } catch (rpcErr: any) {
         console.error('[TokenCreation] RPC call failed:', rpcErr);
@@ -369,26 +347,42 @@ class TokenCreationService {
         };
       }
 
-      // SOL balance check — includes ALL costs: mint + ATA + metadata + platform + tx fee
-      const txFeeEstimate = 0.00001; // 2 signatures × 5000 lamports each
-      const requiredSol =
-        (mintRentLamports + ataRentLamports + metadataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL +
-        txFeeEstimate;
+      // Build FeeBreakdown — same object used for balance check and transaction
+      const networkFee = 0.00001; // 2 signatures × 5000 lamports
+      const feeBreakdown: FeeBreakdown = {
+        networkFee,
+        mintRent:        mintRentLamports / LAMPORTS_PER_SOL,
+        metadataRent:    0,
+        ataRent:         ataRentLamports  / LAMPORTS_PER_SOL,
+        platformFee:     PLATFORM_FEE_SOL,
+        launchFee:       0,
+        liquidityAmount: 0,
+        priorityFee:     0,
+        totalRequiredSol: 0,
+      };
+      feeBreakdown.totalRequiredSol =
+        feeBreakdown.networkFee +
+        feeBreakdown.mintRent +
+        feeBreakdown.ataRent +
+        feeBreakdown.platformFee;
 
+      console.log('[TokenCreation] FeeBreakdown:', JSON.stringify(feeBreakdown, null, 2));
+
+      // Balance check
       let balanceSol = 0;
       try {
         const lamports = await getBalance(creatorPubkey.toBase58());
         balanceSol = lamports / LAMPORTS_PER_SOL;
-        console.log('[TokenCreation] Wallet balance:', balanceSol.toFixed(6), 'SOL | Required:', requiredSol.toFixed(6), 'SOL');
+        console.log('[TokenCreation] Wallet balance:', balanceSol.toFixed(6), 'SOL | Required:', feeBreakdown.totalRequiredSol.toFixed(6), 'SOL');
       } catch (balErr: any) {
         console.warn('[TokenCreation] Balance check (non-fatal):', balErr?.message);
       }
 
-      if (balanceSol > 0 && balanceSol < requiredSol) {
+      if (balanceSol > 0 && balanceSol < feeBreakdown.totalRequiredSol) {
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
-          error: `Insufficient SOL: need ≥${requiredSol.toFixed(4)} SOL, wallet has ${balanceSol.toFixed(4)} SOL`,
+          error: `Insufficient SOL: need ≥${feeBreakdown.totalRequiredSol.toFixed(4)} SOL, wallet has ${balanceSol.toFixed(4)} SOL`,
           tokenId: record.id,
         };
       }
@@ -400,62 +394,38 @@ class TokenCreationService {
       const mintPubkey      = mintKeypair.publicKey;
       const isToken2022     = normalized.tokenProgram === 'token-2022';
       const tokenProgramId  = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-      const mintAccountSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
 
       console.log('[TokenCreation] Generated mint keypair:', mintPubkey.toBase58());
-      console.log('[TokenCreation] Token program:', normalized.tokenProgram, '| Mint size:', mintAccountSize);
+      console.log('[TokenCreation] Token program:', normalized.tokenProgram);
 
-      // Derive ATA and Metaplex metadata PDA in parallel
-      const [ata, metadataPDA] = await Promise.all([
-        this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId),
-        this.deriveMetadataPDA(mintPubkey),
-      ]);
+      const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
       console.log('[TokenCreation] Creator ATA:', ata.toBase58());
-      console.log('[TokenCreation] Metadata PDA:', metadataPDA.toBase58());
 
       // ── Assemble the single atomic transaction ──────────────────────────────
-      // ALL instructions that debit the payer (rent payments, platform fee) MUST
-      // be inside this one Transaction object. The signing service rebuilds a fresh
-      // Transaction from tx.instructions with a new blockhash — nothing is added or
-      // removed after this block. This is the exact transaction Phantom will sign.
+      // ALL instructions that debit the payer MUST be inside this one Transaction.
+      // The signing service rebuilds from tx.instructions with a fresh blockhash —
+      // nothing is added or removed after this block.
 
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
-      // ix 1 — Allocate mint account and fund it with rent-exempt lamports.
-      //         fromPubkey (creator) is debited mintRentLamports immediately.
+      // ix 1 — Allocate + fund mint account
       tx.add(SystemProgram.createAccount({
-        fromPubkey:      creatorPubkey,
+        fromPubkey:       creatorPubkey,
         newAccountPubkey: mintPubkey,
-        lamports:        mintRentLamports,
-        space:           mintAccountSize,
-        programId:       tokenProgramId,
+        lamports:         mintRentLamports,
+        space:            mintSize,
+        programId:        tokenProgramId,
       }));
 
-      // ix 2 — Initialize the mint (set decimals + mint/freeze authorities).
-      //         Must come before metadata so the mint authority is set on-chain.
+      // ix 2 — Initialize the mint (decimals + authorities)
       tx.add(this.buildInitializeMintIx(
         mintPubkey, normalized.decimals, creatorPubkey, creatorPubkey, tokenProgramId
       ));
 
-      // ix 3 — On-chain Metaplex metadata (name/symbol/uri visible in all explorers).
-      //         Metaplex CPIs into SystemProgram to create the metadata account;
-      //         creator is debited metadataRentLamports via that CPI.
-      tx.add(this.buildCreateMetadataV3Ix(
-        metadataPDA,
-        mintPubkey,
-        creatorPubkey,      // mintAuthority — already signing as feePayer
-        creatorPubkey,      // payer — debited for metadata account rent
-        creatorPubkey,      // updateAuthority
-        normalized.name,
-        normalized.symbol,
-        metadataUri ?? '',
-      ));
-
-      // ix 4 — Create the creator's Associated Token Account (idempotent).
-      //         ATA program CPIs into SystemProgram; creator debited ataRentLamports.
+      // ix 3 — Create creator ATA (idempotent — safe to retry)
       tx.add(this.buildCreateAtaIx(creatorPubkey, ata, creatorPubkey, mintPubkey, tokenProgramId));
 
-      // ix 5 — Mint the creator allocation directly into the ATA.
+      // ix 4 — Mint full creator allocation into ATA
       if (normalized.creatorAllocation > 0) {
         const rawAmount = BigInt(
           Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
@@ -464,10 +434,9 @@ class TokenCreationService {
         console.log('[TokenCreation] MintTo amount:', rawAmount.toString(), 'raw units');
       }
 
-      // ix 6 — Platform fee SOL transfer (LAST instruction).
-      //         This is a direct SystemProgram.transfer — Phantom shows this as a
-      //         native SOL send in the transaction approval screen.
-      //         Being last means the full tx fails atomically if creator has insufficient SOL.
+      // ix 5 — Platform fee SOL transfer (LAST).
+      // This is a native SOL transfer — Phantom/Solflare/Backpack show this as
+      // "SOL transfer" in the approval screen, not just "network fee".
       tx.add(
         SystemProgram.transfer({
           fromPubkey: creatorPubkey,
@@ -476,33 +445,40 @@ class TokenCreationService {
         })
       );
 
-      // ── Pre-sign assertion: verify every instruction is in tx before handing to signer
+      // ── Pre-sign guard: verify payment instruction is present ───────────────
+      const platformFeeWalletStr = PLATFORM_FEE_WALLET.toBase58();
+      const hasPlatformFeeTransfer = tx.instructions.some(ix => {
+        if (ix.programId.toBase58() !== SYSTEM_PROGRAM_ID.toBase58()) return false;
+        // SystemProgram.transfer account[1] is the destination (toPubkey)
+        return ix.keys.length >= 2 &&
+          ix.keys[1].pubkey.toBase58() === platformFeeWalletStr;
+      });
+
+      if (!hasPlatformFeeTransfer) {
+        await launchpadService.updateRecord(record.id, { status: 'failed' });
+        throw new Error('Launch transaction missing payment instructions. Launch aborted.');
+      }
+
       const ixPrograms = tx.instructions.map(ix => ix.programId.toBase58());
       console.log('[TokenCreation] ── Final tx instructions (' + tx.instructions.length + ' total) ──');
       ixPrograms.forEach((prog, i) => {
         const label =
           prog === SYSTEM_PROGRAM_ID.toBase58()           ? 'SystemProgram' :
           prog === tokenProgramId.toBase58()              ? 'TokenProgram' :
-          prog === TOKEN_METADATA_PROGRAM_ID.toBase58()   ? 'MetaplexMetadata' :
           prog === ASSOCIATED_TOKEN_PROGRAM_ID.toBase58() ? 'ATAProgram' : prog.slice(0, 8);
         console.log(`  [${i + 1}] ${label}`);
       });
-      console.log('[TokenCreation] Platform fee included:', ixPrograms.includes(SYSTEM_PROGRAM_ID.toBase58()));
-      console.log('[TokenCreation] Metadata included:', ixPrograms.includes(TOKEN_METADATA_PROGRAM_ID.toBase58()));
+      console.log('[TokenCreation] Platform fee transfer included:', hasPlatformFeeTransfer);
       console.log('[TokenCreation] Total debit from creator:',
-        ((mintRentLamports + ataRentLamports + metadataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(6),
-        'SOL (excl. tx fee)'
+        (feeBreakdown.mintRent + feeBreakdown.ataRent + feeBreakdown.platformFee).toFixed(6),
+        'SOL (excl. network fee)'
       );
 
-      if (tx.instructions.length < 5) {
+      if (tx.instructions.length < 4) {
         throw new Error(`Transaction incomplete: only ${tx.instructions.length} instructions built — aborting`);
       }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
-      // The signing service fetches a FRESH blockhash before signing so the
-      // blockhash we set above is only a placeholder — it will be replaced.
-      // mintKeypair is passed as extraSigner so the service can partialSign it
-      // before Phantom (or the internal keypair) adds the feePayer signature.
       progress(7, 'Waiting for wallet signature...');
       console.log('[TokenCreation] Handing complete tx (' + tx.instructions.length + ' instructions) to signer...');
 
@@ -519,7 +495,7 @@ class TokenCreationService {
         if (raw.includes('blockhash') || raw.includes('BlockhashNotFound'))
           msg = 'Blockhash expired — please retry';
         else if (raw.includes('0x1') || raw.includes('insufficient lamports') || raw.includes('Insufficient'))
-          msg = `Insufficient SOL to cover transaction fees (need ~${requiredSol.toFixed(4)} SOL)`;
+          msg = `Insufficient SOL to cover transaction fees (need ~${feeBreakdown.totalRequiredSol.toFixed(4)} SOL)`;
         else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied') || raw.includes('User rejected'))
           msg = 'Transaction cancelled — wallet rejected the signature request';
         else if (raw.includes('timeout') || raw.includes('timed out'))
@@ -565,37 +541,45 @@ class TokenCreationService {
 
   /**
    * Fetch real-time cost estimate for the launch cost preview card.
-   * All values are in SOL.
+   * All values are in SOL. Returns a FeeBreakdown object.
    */
-  async estimateLaunchCost(isToken2022 = false): Promise<LaunchCostEstimate> {
+  async estimateLaunchCost(isToken2022 = false): Promise<FeeBreakdown> {
     try {
       const mintSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
-      const [mintRentLamports, ataRentLamports, metadataRentLamports] = await Promise.all([
+      const [mintRentLamports, ataRentLamports] = await Promise.all([
         getRentExemption(mintSize),
         getRentExemption(ATA_ACCOUNT_SIZE),
-        getRentExemption(METADATA_ACCOUNT_SIZE),
       ]);
-      const mintRent      = mintRentLamports     / LAMPORTS_PER_SOL;
-      const ataRent       = ataRentLamports      / LAMPORTS_PER_SOL;
-      const metadataRent  = metadataRentLamports / LAMPORTS_PER_SOL;
-      const networkFee    = 0.00001; // 2 signatures × 5000 lamports each
-      const networkAndMintCost = mintRent + ataRent + metadataRent + networkFee;
-      return {
-        mintRent,
-        ataRent,
-        metadataRent,
+      const networkFee = 0.00001;
+      const mintRent   = mintRentLamports / LAMPORTS_PER_SOL;
+      const ataRent    = ataRentLamports  / LAMPORTS_PER_SOL;
+      const breakdown: FeeBreakdown = {
         networkFee,
-        platformFee: PLATFORM_FEE_SOL,
-        networkAndMintCost,
-        total: networkAndMintCost + PLATFORM_FEE_SOL,
+        mintRent,
+        metadataRent:    0,
+        ataRent,
+        platformFee:     PLATFORM_FEE_SOL,
+        launchFee:       0,
+        liquidityAmount: 0,
+        priorityFee:     0,
+        totalRequiredSol: networkFee + mintRent + ataRent + PLATFORM_FEE_SOL,
       };
+      return breakdown;
     } catch {
-      const mintRent     = isToken2022 ? 0.00387 : 0.00144;
-      const ataRent      = 0.00204;
-      const metadataRent = 0.00471; // ~679 bytes at current rent rate
-      const networkFee   = 0.00001;
-      const networkAndMintCost = mintRent + ataRent + metadataRent + networkFee;
-      return { mintRent, ataRent, metadataRent, networkFee, networkAndMintCost, platformFee: PLATFORM_FEE_SOL, total: networkAndMintCost + PLATFORM_FEE_SOL };
+      const mintRent   = isToken2022 ? 0.00387 : 0.00144;
+      const ataRent    = 0.00204;
+      const networkFee = 0.00001;
+      return {
+        networkFee,
+        mintRent,
+        metadataRent:    0,
+        ataRent,
+        platformFee:     PLATFORM_FEE_SOL,
+        launchFee:       0,
+        liquidityAmount: 0,
+        priorityFee:     0,
+        totalRequiredSol: networkFee + mintRent + ataRent + PLATFORM_FEE_SOL,
+      };
     }
   }
 
@@ -626,7 +610,7 @@ class TokenCreationService {
 
     return new TransactionInstruction({
       keys: [
-        { pubkey: mint,             isSigner: false, isWritable: true  },
+        { pubkey: mint,               isSigner: false, isWritable: true  },
         { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       ],
       programId,
@@ -635,19 +619,8 @@ class TokenCreationService {
   }
 
   /**
-   * ATA program v1.1+ CreateAssociatedTokenAccount instruction.
-   *
-   * Account order (6 accounts — SysvarRent was removed in v1.1+):
-   *   0. payer          — funds the account, signer, writable
-   *   1. ata            — the new ATA address, writable (not a signer — derived PDA)
-   *   2. owner          — wallet that will own the tokens, not a signer
-   *   3. mint           — the token mint
-   *   4. system_program — for account creation
-   *   5. token_program  — SPL Token or Token-2022
-   *
-   * data = [1] = CreateAssociatedTokenAccountIdempotent — succeeds even if
-   * the ATA already exists (e.g. from a previous failed launch attempt).
-   * Using idempotent avoids "account already in use" failures on retries.
+   * ATA program v1.1+ CreateAssociatedTokenAccountIdempotent instruction.
+   * data = [1] = idempotent variant — succeeds even if ATA already exists.
    */
   private buildCreateAtaIx(
     payer: PublicKey,
@@ -691,72 +664,6 @@ class TokenCreationService {
     });
   }
 
-  /**
-   * Metaplex CreateMetadataAccountV3 instruction (instruction index 33).
-   *
-   * Borsh-encoded data layout (MetadataInstruction enum variant 33):
-   *   [33]                           instruction discriminator
-   *   DataV2:
-   *     [u32-LE][bytes]  name         (max 32 chars)
-   *     [u32-LE][bytes]  symbol       (max 10 chars)
-   *     [u32-LE][bytes]  uri          (max 200 chars)
-   *     [u16-LE]         seller_fee_basis_points
-   *     [0x00]           creators: Option = None
-   *     [0x00]           collection: Option = None
-   *     [0x00]           uses: Option = None
-   *   [0x01]             is_mutable: true
-   *   [0x00]             collection_details: Option = None
-   *
-   * Account order matches mpl-token-metadata CreateMetadataAccountV3:
-   *   0. metadata        — writable (PDA, not signer)
-   *   1. mint            — readonly
-   *   2. mintAuthority   — signer (the wallet, already signs as feePayer)
-   *   3. payer           — signer, writable
-   *   4. updateAuthority — readonly (set to creator; can be same key as payer)
-   *   5. systemProgram
-   *   6. rent sysvar
-   */
-  private buildCreateMetadataV3Ix(
-    metadataAccount: PublicKey,
-    mint: PublicKey,
-    mintAuthority: PublicKey,
-    payer: PublicKey,
-    updateAuthority: PublicKey,
-    name: string,
-    symbol: string,
-    uri: string,
-  ): TransactionInstruction {
-    const sfBuf = Buffer.alloc(2);
-    sfBuf.writeUInt16LE(0, 0); // 0 seller fee basis points — not applicable for utility tokens
-
-    const data = Buffer.concat([
-      Buffer.from([33]),              // CreateMetadataAccountV3 instruction index
-      borshStr(name.slice(0, 32)),    // name (Borsh string, max 32 chars)
-      borshStr(symbol.slice(0, 10)),  // symbol (Borsh string, max 10 chars)
-      borshStr(uri.slice(0, 200)),    // uri (Borsh string, max 200 chars)
-      sfBuf,                          // seller_fee_basis_points: u16
-      Buffer.from([0]),               // creators: Option<Vec<Creator>> = None
-      Buffer.from([0]),               // collection: Option<Collection> = None
-      Buffer.from([0]),               // uses: Option<Uses> = None
-      Buffer.from([1]),               // is_mutable: bool = true
-      Buffer.from([0]),               // collection_details: Option<CollectionDetails> = None
-    ]);
-
-    return new TransactionInstruction({
-      keys: [
-        { pubkey: metadataAccount,   isSigner: false, isWritable: true  },
-        { pubkey: mint,              isSigner: false, isWritable: false },
-        { pubkey: mintAuthority,     isSigner: true,  isWritable: false },
-        { pubkey: payer,             isSigner: true,  isWritable: true  },
-        { pubkey: updateAuthority,   isSigner: false, isWritable: false },
-        { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
-      ],
-      programId: TOKEN_METADATA_PROGRAM_ID,
-      data,
-    });
-  }
-
   private async deriveAta(
     owner: PublicKey,
     mint: PublicKey,
@@ -767,18 +674,6 @@ class TokenCreationService {
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
     return ata;
-  }
-
-  private async deriveMetadataPDA(mint: PublicKey): Promise<PublicKey> {
-    const [pda] = await PublicKey.findProgramAddress(
-      [
-        Buffer.from('metadata'),
-        TOKEN_METADATA_PROGRAM_ID.toBuffer(),
-        mint.toBuffer(),
-      ],
-      TOKEN_METADATA_PROGRAM_ID
-    );
-    return pda;
   }
 }
 

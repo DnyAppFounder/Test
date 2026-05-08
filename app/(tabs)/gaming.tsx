@@ -28,7 +28,7 @@ import {
   EasyModeInput,
   AdvancedModeInput,
   TokenCreationProgress,
-  LaunchCostEstimate,
+  FeeBreakdown,
 } from '@/services/tokenCreationService';
 import {
   presaleService,
@@ -333,14 +333,16 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   const [result, setResult] = useState<{ mintAddress: string; txSig: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedMint, setCopiedMint] = useState(false);
-  const [launchCost, setLaunchCost] = useState<LaunchCostEstimate>({
-    mintRent: 0.00144,
-    ataRent: 0.00204,
-    metadataRent: 0.00471,
+  const [launchCost, setLaunchCost] = useState<FeeBreakdown>({
     networkFee: 0.00001,
+    mintRent: 0.00144,
+    metadataRent: 0,
+    ataRent: 0.00204,
     platformFee: 0.02,
-    networkAndMintCost: 0.0282,
-    total: 0.0482,
+    launchFee: 0,
+    liquidityAmount: 0,
+    priorityFee: 0,
+    totalRequiredSol: 0.02349,
   });
 
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -718,10 +720,6 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
                   <Text style={mStyles.costLabel}>Token Account Rent</Text>
                   <Text style={mStyles.costValue}>{launchCost.ataRent.toFixed(5)} SOL</Text>
                 </View>
-                <View style={mStyles.costRow}>
-                  <Text style={mStyles.costLabel}>Metadata Account Rent</Text>
-                  <Text style={mStyles.costValue}>{launchCost.metadataRent.toFixed(5)} SOL</Text>
-                </View>
                 {useToken2022 && (
                   <View style={mStyles.costRow}>
                     <Text style={[mStyles.costLabel, { color: '#22c55e' }]}>Token-2022 Extra</Text>
@@ -738,7 +736,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
                 </View>
                 <View style={[mStyles.costRow, mStyles.costRowTotal]}>
                   <Text style={[mStyles.costLabel, mStyles.costLabelTotal]}>Total Required</Text>
-                  <Text style={[mStyles.costValue, mStyles.costValueTotal]}>~{launchCost.total.toFixed(5)} SOL</Text>
+                  <Text style={[mStyles.costValue, mStyles.costValueTotal]}>~{launchCost.totalRequiredSol.toFixed(5)} SOL</Text>
                 </View>
               </View>
 
