@@ -3,7 +3,8 @@
  *
  * Single-transaction flow — ALL 5 instructions in one atomic Transaction:
  *   1. SystemProgram.createAccount      — allocate + fund mint account (mintRent)
- *   2. InitializeMint                   — set decimals + mint/freeze authorities
+ *   2. InitializeMint2                  — set decimals + mint/freeze authorities
+ *                                         (instruction 20 — no rent sysvar required)
  *   3. CreateAssociatedTokenAccountIdempotent — creator ATA (ataRent via ATA CPI)
  *   4. MintTo                           — mint full supply to creator ATA
  *   5. SystemProgram.transfer           — explicit platform fee SOL transfer (LAST)
@@ -24,6 +25,7 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   TransactionInstruction,
+  SYSVAR_RENT_PUBKEY,
 } from '@solana/web3.js';
 import { SolanaConnectionService } from './solana/connectionService';
 import { launchpadService, CreateTokenInput } from './launchpadService';
@@ -34,7 +36,6 @@ const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWu
 const TOKEN_2022_PROGRAM_ID       = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
 const SYSTEM_PROGRAM_ID           = new PublicKey('11111111111111111111111111111111');
-const SYSVAR_RENT_PUBKEY          = new PublicKey('SysvarRent111111111111111111111111111111111');
 
 // ── Platform fee ──────────────────────────────────────────────────────────────
 const PLATFORM_FEE_WALLET   = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
@@ -43,7 +44,7 @@ const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 
 // Account sizes for rent calculation
 const MINT_ACCOUNT_SIZE      = 82;   // SPL Token mint
-const MINT_ACCOUNT_SIZE_2022 = 234;  // Token-2022 mint base (82 + extension header)
+const MINT_ACCOUNT_SIZE_2022 = 234;  // Token-2022 mint base
 const ATA_ACCOUNT_SIZE       = 165;  // Associated Token Account
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -125,6 +126,16 @@ export interface FeeBreakdown {
 
 // Legacy alias so callers using LaunchCostEstimate still compile
 export type LaunchCostEstimate = FeeBreakdown;
+
+// ── BigInt write helper ───────────────────────────────────────────────────────
+// Browser Buffer polyfills may not include writeBigUInt64LE.
+// Manual 2×u32 write is equivalent and universally supported.
+function writeUInt64LE(buf: Buffer, value: bigint, offset: number): void {
+  const lo = Number(value & 0xFFFFFFFFn);
+  const hi = Number((value >> 32n) & 0xFFFFFFFFn);
+  buf.writeUInt32LE(lo, offset);
+  buf.writeUInt32LE(hi, offset + 4);
+}
 
 // ── Input normalizer ──────────────────────────────────────────────────────────
 
@@ -348,7 +359,7 @@ class TokenCreationService {
       }
 
       // Build FeeBreakdown — same object used for balance check and transaction
-      const networkFee = 0.00001; // 2 signatures × 5000 lamports
+      const networkFee = 0.000005; // 1 signature × 5000 lamports (mint keypair also signs)
       const feeBreakdown: FeeBreakdown = {
         networkFee,
         mintRent:        mintRentLamports / LAMPORTS_PER_SOL,
@@ -368,21 +379,23 @@ class TokenCreationService {
 
       console.log('[TokenCreation] FeeBreakdown:', JSON.stringify(feeBreakdown, null, 2));
 
-      // Balance check
+      // Balance check — if fetch succeeds, enforce minimum balance strictly
       let balanceSol = 0;
+      let balanceFetched = false;
       try {
         const lamports = await getBalance(creatorPubkey.toBase58());
         balanceSol = lamports / LAMPORTS_PER_SOL;
+        balanceFetched = true;
         console.log('[TokenCreation] Wallet balance:', balanceSol.toFixed(6), 'SOL | Required:', feeBreakdown.totalRequiredSol.toFixed(6), 'SOL');
       } catch (balErr: any) {
-        console.warn('[TokenCreation] Balance check (non-fatal):', balErr?.message);
+        console.warn('[TokenCreation] Balance check failed (proceeding):', balErr?.message);
       }
 
-      if (balanceSol > 0 && balanceSol < feeBreakdown.totalRequiredSol) {
+      if (balanceFetched && balanceSol < feeBreakdown.totalRequiredSol) {
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
-          error: `Insufficient SOL: need ≥${feeBreakdown.totalRequiredSol.toFixed(4)} SOL, wallet has ${balanceSol.toFixed(4)} SOL`,
+          error: `Insufficient SOL: need ${feeBreakdown.totalRequiredSol.toFixed(4)} SOL, wallet has ${balanceSol.toFixed(4)} SOL`,
           tokenId: record.id,
         };
       }
@@ -408,7 +421,7 @@ class TokenCreationService {
 
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
-      // ix 1 — Allocate + fund mint account
+      // ix 1 — Allocate + fund mint account with rent-exempt lamports
       tx.add(SystemProgram.createAccount({
         fromPubkey:       creatorPubkey,
         newAccountPubkey: mintPubkey,
@@ -417,8 +430,11 @@ class TokenCreationService {
         programId:        tokenProgramId,
       }));
 
-      // ix 2 — Initialize the mint (decimals + authorities)
-      tx.add(this.buildInitializeMintIx(
+      // ix 2 — Initialize the mint using InitializeMint2 (instruction 20).
+      //         Unlike InitializeMint (instruction 0), InitializeMint2 does NOT
+      //         require the rent sysvar account, making the transaction simpler
+      //         and more reliably simulated by all external wallets.
+      tx.add(this.buildInitializeMint2Ix(
         mintPubkey, normalized.decimals, creatorPubkey, creatorPubkey, tokenProgramId
       ));
 
@@ -435,8 +451,7 @@ class TokenCreationService {
       }
 
       // ix 5 — Platform fee SOL transfer (LAST).
-      // This is a native SOL transfer — Phantom/Solflare/Backpack show this as
-      // "SOL transfer" in the approval screen, not just "network fee".
+      // This is a native SOL transfer visible in ALL wallet approval screens.
       tx.add(
         SystemProgram.transfer({
           fromPubkey: creatorPubkey,
@@ -449,7 +464,6 @@ class TokenCreationService {
       const platformFeeWalletStr = PLATFORM_FEE_WALLET.toBase58();
       const hasPlatformFeeTransfer = tx.instructions.some(ix => {
         if (ix.programId.toBase58() !== SYSTEM_PROGRAM_ID.toBase58()) return false;
-        // SystemProgram.transfer account[1] is the destination (toPubkey)
         return ix.keys.length >= 2 &&
           ix.keys[1].pubkey.toBase58() === platformFeeWalletStr;
       });
@@ -495,7 +509,7 @@ class TokenCreationService {
         if (raw.includes('blockhash') || raw.includes('BlockhashNotFound'))
           msg = 'Blockhash expired — please retry';
         else if (raw.includes('0x1') || raw.includes('insufficient lamports') || raw.includes('Insufficient'))
-          msg = `Insufficient SOL to cover transaction fees (need ~${feeBreakdown.totalRequiredSol.toFixed(4)} SOL)`;
+          msg = `Insufficient SOL: need ${feeBreakdown.totalRequiredSol.toFixed(4)} SOL`;
         else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied') || raw.includes('User rejected'))
           msg = 'Transaction cancelled — wallet rejected the signature request';
         else if (raw.includes('timeout') || raw.includes('timed out'))
@@ -550,7 +564,7 @@ class TokenCreationService {
         getRentExemption(mintSize),
         getRentExemption(ATA_ACCOUNT_SIZE),
       ]);
-      const networkFee = 0.00001;
+      const networkFee = 0.000005;
       const mintRent   = mintRentLamports / LAMPORTS_PER_SOL;
       const ataRent    = ataRentLamports  / LAMPORTS_PER_SOL;
       const breakdown: FeeBreakdown = {
@@ -568,7 +582,7 @@ class TokenCreationService {
     } catch {
       const mintRent   = isToken2022 ? 0.00387 : 0.00144;
       const ataRent    = 0.00204;
-      const networkFee = 0.00001;
+      const networkFee = 0.000005;
       return {
         networkFee,
         mintRent,
@@ -585,33 +599,44 @@ class TokenCreationService {
 
   // ── Instruction builders ────────────────────────────────────────────────────
 
-  private buildInitializeMintIx(
+  /**
+   * InitializeMint2 — SPL Token instruction 20.
+   *
+   * Identical to InitializeMint (0) but does NOT require the rent sysvar account.
+   * This makes the transaction leaner and avoids sysvar-related simulation issues
+   * in external wallets (Phantom, Solflare, Backpack).
+   *
+   * Data layout (always 67 bytes):
+   *   [0]  20          instruction discriminator
+   *   [1]  decimals    u8
+   *   [2..33]          mintAuthority  Pubkey (32 bytes)
+   *   [34] 0 or 1      freezeAuthority COption discriminant
+   *   [35..66]         freezeAuthority Pubkey (32 bytes, zeros if None)
+   *
+   * Accounts:
+   *   0. mint  [writable]  — the mint account (already allocated by createAccount)
+   */
+  private buildInitializeMint2Ix(
     mint: PublicKey,
     decimals: number,
     mintAuthority: PublicKey,
     freezeAuthority: PublicKey | null,
     programId: PublicKey
   ): TransactionInstruction {
-    const hasFreezeAuth = freezeAuthority !== null;
-    const dataLen = 2 + 32 + 1 + (hasFreezeAuth ? 32 : 0);
-    const data = Buffer.alloc(dataLen);
-    let offset = 0;
-
-    data.writeUInt8(0, offset++);
-    data.writeUInt8(decimals, offset++);
-    mintAuthority.toBuffer().copy(data, offset); offset += 32;
-
-    if (hasFreezeAuth) {
-      data.writeUInt8(1, offset++);
-      freezeAuthority!.toBuffer().copy(data, offset);
+    const data = Buffer.alloc(67);
+    data.writeUInt8(20, 0);                                   // instruction index 20
+    data.writeUInt8(decimals, 1);                             // decimals
+    mintAuthority.toBuffer().copy(data, 2);                   // mint authority (bytes 2–33)
+    if (freezeAuthority !== null) {
+      data.writeUInt8(1, 34);                                 // COption: Some
+      freezeAuthority.toBuffer().copy(data, 35);              // freeze authority (bytes 35–66)
     } else {
-      data.writeUInt8(0, offset);
+      data.writeUInt8(0, 34);                                 // COption: None (bytes 35–66 stay 0)
     }
 
     return new TransactionInstruction({
       keys: [
-        { pubkey: mint,               isSigner: false, isWritable: true  },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: true },
       ],
       programId,
       data,
@@ -643,6 +668,11 @@ class TokenCreationService {
     });
   }
 
+  /**
+   * MintTo — SPL Token instruction 7.
+   * Mints `amount` raw token units to `destination`.
+   * Uses manual u64 LE write to avoid browser Buffer polyfill limitations.
+   */
   private buildMintToIx(
     mint: PublicKey,
     destination: PublicKey,
@@ -651,8 +681,8 @@ class TokenCreationService {
     programId: PublicKey
   ): TransactionInstruction {
     const data = Buffer.alloc(9);
-    data.writeUInt8(7, 0);
-    data.writeBigUInt64LE(amount, 1);
+    data.writeUInt8(7, 0);              // instruction 7 = MintTo
+    writeUInt64LE(data, amount, 1);     // amount as u64 LE (bytes 1–8)
     return new TransactionInstruction({
       keys: [
         { pubkey: mint,          isSigner: false, isWritable: true  },
