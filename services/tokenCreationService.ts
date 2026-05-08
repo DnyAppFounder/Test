@@ -583,8 +583,9 @@ class TokenCreationService {
    *   4. system_program — for account creation
    *   5. token_program  — SPL Token or Token-2022
    *
-   * data = [] (0 bytes) = CreateAssociatedTokenAccount (fails if already exists)
-   * data = [1] = CreateAssociatedTokenAccountIdempotent (succeeds if exists)
+   * data = [1] = CreateAssociatedTokenAccountIdempotent — succeeds even if
+   * the ATA already exists (e.g. from a previous failed launch attempt).
+   * Using idempotent avoids "account already in use" failures on retries.
    */
   private buildCreateAtaIx(
     payer: PublicKey,
@@ -603,7 +604,7 @@ class TokenCreationService {
         { pubkey: tokenProgramId,    isSigner: false, isWritable: false },
       ],
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-      data: Buffer.alloc(0),
+      data: Buffer.from([1]),
     });
   }
 

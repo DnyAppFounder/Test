@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, UserProfile } from '@/services/socialService';
 
@@ -99,8 +99,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     return url;
   }, [profile, activeAddress]);
 
+  const value = useMemo(
+    () => ({ profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount, unreadMessageCount, clearUnreadMessageCount }),
+    [profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount, unreadMessageCount, clearUnreadMessageCount]
+  );
+
   return (
-    <ProfileContext.Provider value={{ profile, loading, refreshProfile, updateProfile, uploadAvatar, unreadNotifCount, clearUnreadNotifCount, unreadMessageCount, clearUnreadMessageCount }}>
+    <ProfileContext.Provider value={value}>
       {children}
     </ProfileContext.Provider>
   );

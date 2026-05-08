@@ -97,43 +97,73 @@ class LaunchpadSigningService {
 
     const derived = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, accountIndex);
     const keypair = Keypair.fromSecretKey(derived.secretKey);
+    const feePayer = keypair.publicKey;
 
     const connection = this.connection;
-
     const connSvc = SolanaConnectionService.getInstance();
+    const MAX_ATTEMPTS = 3;
 
     return {
-      publicKey: keypair.publicKey.toBase58(),
+      publicKey: feePayer.toBase58(),
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        // Fetch a fresh blockhash via direct HTTP (no Connection WebSocket path)
-        const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
-        const blockhash = bhResult.value.blockhash;
-        tx.recentBlockhash = blockhash;
-        tx.feePayer = keypair.publicKey;
+        let lastError: any;
 
-        // Sign with mint keypair first (if present), then fee-payer
-        const allSigners = [keypair, ...extraSigners];
-        tx.sign(...allSigners);
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          try {
+            // Fetch a fresh blockhash immediately before every signing attempt
+            const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+            const blockhash: string = bhResult.value.blockhash;
+            const lastValidBlockHeight: number = bhResult.value.lastValidBlockHeight;
 
-        const rawTx = tx.serialize();
+            // Rebuild fresh transaction from original instructions on each attempt
+            const freshTx = new Transaction({ recentBlockhash: blockhash, feePayer });
+            for (const ix of tx.instructions) {
+              freshTx.add(ix);
+            }
 
-        console.log(
-          '[LaunchpadSigner] Sending internal tx, feePayer:',
-          keypair.publicKey.toBase58().slice(0, 8),
-          'extraSigners:', extraSigners.length
-        );
+            // Sign: fee-payer first, then extra signers (e.g. mintKeypair)
+            freshTx.sign(keypair, ...extraSigners);
 
-        // Send via direct rpcCall — no Connection object involved
-        const encodedTx = Buffer.from(rawTx).toString('base64');
-        const sig = await connSvc.rpcCall('sendTransaction', [
-          encodedTx,
-          { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 },
-        ]);
+            const rawTx = freshTx.serialize();
+            const encodedTx = Buffer.from(rawTx).toString('base64');
 
-        console.log('[LaunchpadSigner] Tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
-        await pollConfirmation(connection, sig);
-        console.log('[LaunchpadSigner] Tx confirmed:', String(sig).slice(0, 16));
-        return sig;
+            console.log(
+              `[LaunchpadSigner] Internal tx attempt ${attempt}/${MAX_ATTEMPTS}, feePayer:`,
+              feePayer.toBase58().slice(0, 8),
+              'blockhash:', blockhash.slice(0, 8) + '...',
+              'lastValidBlockHeight:', lastValidBlockHeight,
+              'extraSigners:', extraSigners.length
+            );
+
+            // skipPreflight: true bypasses simulation-layer blockhash checks;
+            // the cluster validates the blockhash authoritatively during processing.
+            const sig = await connSvc.rpcCall('sendTransaction', [
+              encodedTx,
+              { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
+            ]);
+
+            console.log('[LaunchpadSigner] Internal tx sent, sig:', String(sig).slice(0, 16), '— polling...');
+            await pollConfirmation(connection, sig);
+            console.log('[LaunchpadSigner] Internal tx confirmed:', String(sig).slice(0, 16));
+            return sig;
+
+          } catch (err: any) {
+            lastError = err;
+            const msg = err?.message || String(err);
+
+            // Retry only on blockhash expiry
+            if ((msg.includes('blockhash') || msg.includes('BlockhashNotFound')) && attempt < MAX_ATTEMPTS) {
+              console.warn(
+                `[LaunchpadSigner] Internal blockhash error (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
+              );
+              continue;
+            }
+
+            throw err;
+          }
+        }
+
+        throw lastError ?? new Error('Internal tx failed after multiple attempts');
       },
     };
   }
