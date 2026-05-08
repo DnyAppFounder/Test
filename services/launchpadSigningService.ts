@@ -18,6 +18,7 @@ import {
   Keypair,
   Connection,
   VersionedTransaction,
+  PublicKey,
 } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
@@ -142,42 +143,107 @@ class LaunchpadSigningService {
   private externalSigner(wallet: UnifiedWallet): LaunchpadSigner {
     const providerId = wallet.providerId!;
     const connection = this.connection;
-
     const connSvc = SolanaConnectionService.getInstance();
+    const MAX_ATTEMPTS = 3;
 
     return {
       publicKey: wallet.publicKey,
       signAndSend: async (tx: Transaction, extraSigners: Keypair[] = []) => {
-        const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
-        const blockhash = bhResult.value.blockhash;
-        tx.recentBlockhash = blockhash;
-        // feePayer MUST be set before any signing (required for serialization)
-        tx.feePayer = new (await import('@solana/web3.js')).PublicKey(wallet.publicKey);
+        const feePayer = new PublicKey(wallet.publicKey);
+        let lastError: any;
 
-        // Extra signers (e.g. mint keypair) must sign before the external wallet
-        if (extraSigners.length > 0) {
-          tx.partialSign(...extraSigners);
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          try {
+            // 1. Fetch a fresh blockhash as late as possible — immediately before signing
+            const bhResult = await connSvc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+            const blockhash: string = bhResult.value.blockhash;
+            const lastValidBlockHeight: number = bhResult.value.lastValidBlockHeight;
+
+            // 2. Build a fresh Transaction with the new blockhash.
+            //    We never mutate the original tx's signatures, so each attempt is clean.
+            const freshTx = new Transaction({ recentBlockhash: blockhash, feePayer });
+            for (const ix of tx.instructions) {
+              freshTx.add(ix);
+            }
+
+            // 3. partialSign with mint keypair before external wallet signs
+            if (extraSigners.length > 0) {
+              freshTx.partialSign(...extraSigners);
+            }
+
+            console.log(
+              `[LaunchpadSigner] External wallet sign request (attempt ${attempt}/${MAX_ATTEMPTS}),`,
+              'blockhash:', blockhash.slice(0, 8) + '...',
+              'lastValidBlockHeight:', lastValidBlockHeight,
+              'provider:', providerId,
+              'extraSigners:', extraSigners.length
+            );
+
+            // 4. External wallet (Phantom) signs — user delay happens here
+            const signed = await ExternalWalletAdapter.signTransaction(providerId, freshTx);
+
+            // 5. Check if the blockhash is still within its valid window after user approved
+            let currentHeight = 0;
+            try {
+              currentHeight = await connSvc.rpcCall('getBlockHeight', []);
+            } catch {
+              // Non-fatal — if we can't check, proceed optimistically
+            }
+
+            if (currentHeight > 0 && currentHeight > lastValidBlockHeight) {
+              if (attempt < MAX_ATTEMPTS) {
+                console.warn(
+                  `[LaunchpadSigner] Blockhash expired (block ${currentHeight} > lastValid ${lastValidBlockHeight}),`,
+                  `rebuilding tx for attempt ${attempt + 1}...`
+                );
+                continue;
+              }
+              throw new Error(
+                'Transaction window expired — Solana blockhash expired while waiting for wallet approval. Please retry the launch.'
+              );
+            }
+
+            // 6. Submit immediately with skipPreflight to bypass simulation-layer blockhash checks.
+            //    The cluster will validate the blockhash itself during actual processing.
+            const rawTx = (signed as Transaction).serialize();
+            const encodedTx = Buffer.from(rawTx).toString('base64');
+
+            console.log('[LaunchpadSigner] Submitting external tx (skipPreflight=true)...');
+            const sig = await connSvc.rpcCall('sendTransaction', [
+              encodedTx,
+              { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
+            ]);
+
+            console.log('[LaunchpadSigner] External tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
+            await pollConfirmation(connection, sig);
+            console.log('[LaunchpadSigner] External tx confirmed:', String(sig).slice(0, 16));
+            return sig;
+
+          } catch (err: any) {
+            lastError = err;
+            const msg = err?.message || String(err);
+
+            // Never retry on user rejection
+            if (
+              msg.includes('rejected') || msg.includes('cancelled') ||
+              msg.includes('denied') || msg.includes('User rejected')
+            ) {
+              throw err;
+            }
+
+            // Auto-retry on blockhash expiry reported by the cluster
+            if ((msg.includes('blockhash') || msg.includes('BlockhashNotFound')) && attempt < MAX_ATTEMPTS) {
+              console.warn(
+                `[LaunchpadSigner] Cluster rejected: blockhash not found (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
+              );
+              continue;
+            }
+
+            throw err;
+          }
         }
 
-        console.log(
-          '[LaunchpadSigner] Requesting external wallet signature, provider:', providerId,
-          'extraSigners:', extraSigners.length
-        );
-
-        // User wallet signs via browser extension popup
-        const signed = await ExternalWalletAdapter.signTransaction(providerId, tx);
-        const rawTx = (signed as Transaction).serialize();
-
-        const encodedTx = Buffer.from(rawTx).toString('base64');
-        const sig = await connSvc.rpcCall('sendTransaction', [
-          encodedTx,
-          { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 },
-        ]);
-
-        console.log('[LaunchpadSigner] External tx sent, sig:', String(sig).slice(0, 16), '— polling confirmation...');
-        await pollConfirmation(connection, sig);
-        console.log('[LaunchpadSigner] External tx confirmed:', String(sig).slice(0, 16));
-        return sig;
+        throw lastError ?? new Error('Failed to send transaction after multiple attempts');
       },
     };
   }
