@@ -336,10 +336,11 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   const [launchCost, setLaunchCost] = useState<LaunchCostEstimate>({
     mintRent: 0.00144,
     ataRent: 0.00204,
-    networkFee: 0.000015,
+    metadataRent: 0.00471,
+    networkFee: 0.00001,
     platformFee: 0.02,
-    networkAndMintCost: 0.003495,
-    total: 0.023495,
+    networkAndMintCost: 0.0282,
+    total: 0.0482,
   });
 
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -717,10 +718,14 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
                   <Text style={mStyles.costLabel}>Token Account Rent</Text>
                   <Text style={mStyles.costValue}>{launchCost.ataRent.toFixed(5)} SOL</Text>
                 </View>
+                <View style={mStyles.costRow}>
+                  <Text style={mStyles.costLabel}>Metadata Account Rent</Text>
+                  <Text style={mStyles.costValue}>{launchCost.metadataRent.toFixed(5)} SOL</Text>
+                </View>
                 {useToken2022 && (
                   <View style={mStyles.costRow}>
-                    <Text style={[mStyles.costLabel, { color: '#A855F7' }]}>Token-2022 Extra</Text>
-                    <Text style={[mStyles.costValue, { color: '#A855F7' }]}>+{(launchCost.mintRent - 0.00144).toFixed(5)} SOL</Text>
+                    <Text style={[mStyles.costLabel, { color: '#22c55e' }]}>Token-2022 Extra</Text>
+                    <Text style={[mStyles.costValue, { color: '#22c55e' }]}>+{(launchCost.mintRent - 0.00144).toFixed(5)} SOL</Text>
                   </View>
                 )}
                 <View style={mStyles.costRow}>

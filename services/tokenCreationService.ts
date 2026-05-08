@@ -5,19 +5,12 @@
  * Private keys never leave the user's device — only signed transactions are sent.
  *
  * Single-transaction flow (all instructions in one tx):
- *   1. SystemProgram.createAccount  — allocate mint account
- *   2. InitializeMint               — set decimals + authorities
- *   3. CreateAssociatedTokenAccount — creator ATA
- *   4. MintTo                       — mint full supply to creator ATA
- *   5. SystemProgram.transfer       — 0.02 SOL platform fee
- *
- * NOTE: On-chain Metaplex metadata is intentionally excluded from the main
- * transaction. The Metaplex CreateMetadataAccountV3 instruction has a complex
- * Borsh-encoded data layout and Anchor discriminator that must exactly match
- * the deployed program version. Including a mis-encoded metadata instruction
- * causes the ENTIRE transaction to fail with "program does not exist" or
- * "debit before credit" runtime errors. Token metadata (name/symbol/uri/logo)
- * is stored off-chain in our database and displayed in-app via launchpadService.
+ *   1. SystemProgram.createAccount      — allocate mint account
+ *   2. InitializeMint                   — set decimals + authorities
+ *   3. CreateMetadataAccountV3          — Metaplex on-chain name/symbol/uri
+ *   4. CreateAssociatedTokenAccountIdempotent — creator ATA
+ *   5. MintTo                           — mint full supply to creator ATA
+ *   6. SystemProgram.transfer           — 0.02 SOL platform fee (LAST)
  *
  * All RPC calls go through SolanaConnectionService.rpcCall() — a direct HTTP
  * fetch to the Supabase proxy — NOT through the @solana/web3.js Connection
@@ -43,15 +36,16 @@ import { launchpadService, CreateTokenInput } from './launchpadService';
 import { tokenRegistryService } from './tokenRegistryService';
 
 // ── Program IDs ───────────────────────────────────────────────────────────────
-const TOKEN_PROGRAM_ID           = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const TOKEN_2022_PROGRAM_ID      = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID       = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
-const SYSTEM_PROGRAM_ID          = new PublicKey('11111111111111111111111111111111');
-const SYSVAR_RENT_PUBKEY         = new PublicKey('SysvarRent111111111111111111111111111111111');
+const TOKEN_METADATA_PROGRAM_ID   = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+const SYSTEM_PROGRAM_ID           = new PublicKey('11111111111111111111111111111111');
+const SYSVAR_RENT_PUBKEY          = new PublicKey('SysvarRent111111111111111111111111111111111');
 
 // ── Platform fee ──────────────────────────────────────────────────────────────
-const PLATFORM_FEE_WALLET  = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
-const PLATFORM_FEE_SOL     = 0.02;
+const PLATFORM_FEE_WALLET   = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
+const PLATFORM_FEE_SOL      = 0.02;
 const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 
 // Account sizes for rent calculation
@@ -59,6 +53,16 @@ const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 const MINT_ACCOUNT_SIZE      = 82;
 const MINT_ACCOUNT_SIZE_2022 = 234;
 const ATA_ACCOUNT_SIZE       = 165;
+// Metaplex metadata account — conservative upper bound (MAX_METADATA_LEN in mpl-token-metadata)
+const METADATA_ACCOUNT_SIZE  = 679;
+
+// ── Borsh string encoder (u32-LE length prefix + UTF-8 bytes) ─────────────────
+function borshStr(s: string): Buffer {
+  const utf8 = Buffer.from(s, 'utf8');
+  const len  = Buffer.alloc(4);
+  len.writeUInt32LE(utf8.length, 0);
+  return Buffer.concat([len, utf8]);
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -121,12 +125,13 @@ export interface TokenCreationProgress {
 export type ProgressCallback = (progress: TokenCreationProgress) => void;
 
 export interface LaunchCostEstimate {
-  mintRent: number;          // lamports for mint account rent exemption, in SOL
-  ataRent: number;           // lamports for creator ATA rent exemption, in SOL
-  networkFee: number;        // base transaction fee (~3 signatures), in SOL
-  platformFee: number;       // DAWEN platform fee, in SOL
-  total: number;             // sum of all above, in SOL
-  networkAndMintCost: number; // mintRent + ataRent + networkFee (legacy, kept for compat)
+  mintRent: number;           // mint account rent exemption, in SOL
+  ataRent: number;            // creator ATA rent exemption, in SOL
+  metadataRent: number;       // Metaplex metadata account rent exemption, in SOL
+  networkFee: number;         // base transaction fee (~2 signatures), in SOL
+  platformFee: number;        // DAWEN platform fee, in SOL
+  total: number;              // sum of all above, in SOL
+  networkAndMintCost: number; // mintRent + ataRent + metadataRent + networkFee (legacy compat)
 }
 
 // ── Input normalizer ──────────────────────────────────────────────────────────
@@ -335,22 +340,24 @@ class TokenCreationService {
 
       let mintRentLamports: number;
       let ataRentLamports: number;
+      let metadataRentLamports: number;
       let blockhash: string;
 
       try {
         console.log('[TokenCreation] Fetching rent exemptions and blockhash...');
-        // All three calls go through direct HTTP, no Connection object
         const mintSize = normalized.tokenProgram === 'token-2022'
           ? MINT_ACCOUNT_SIZE_2022
           : MINT_ACCOUNT_SIZE;
-        [mintRentLamports, ataRentLamports] = await Promise.all([
+        [mintRentLamports, ataRentLamports, metadataRentLamports] = await Promise.all([
           getRentExemption(mintSize),
           getRentExemption(ATA_ACCOUNT_SIZE),
+          getRentExemption(METADATA_ACCOUNT_SIZE),
         ]);
         const bhResult = await getLatestBlockhash();
         blockhash = bhResult.blockhash;
         console.log('[TokenCreation] Mint rent:', mintRentLamports, 'lamports');
         console.log('[TokenCreation] ATA rent:', ataRentLamports, 'lamports');
+        console.log('[TokenCreation] Metadata rent:', metadataRentLamports, 'lamports');
         console.log('[TokenCreation] Blockhash:', blockhash);
       } catch (rpcErr: any) {
         console.error('[TokenCreation] RPC call failed:', rpcErr);
@@ -362,10 +369,10 @@ class TokenCreationService {
         };
       }
 
-      // SOL balance check
-      const txFeeEstimate = 0.000015;
+      // SOL balance check — includes ALL costs: mint + ATA + metadata + platform + tx fee
+      const txFeeEstimate = 0.00001; // 2 signatures × 5000 lamports each
       const requiredSol =
-        (mintRentLamports + ataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL +
+        (mintRentLamports + ataRentLamports + metadataRentLamports + PLATFORM_FEE_LAMPORTS) / LAMPORTS_PER_SOL +
         txFeeEstimate;
 
       let balanceSol = 0;
@@ -389,20 +396,25 @@ class TokenCreationService {
       // ── Step 6: Build single transaction ───────────────────────────────────
       progress(6, 'Building on-chain transaction...');
 
-      const mintKeypair    = Keypair.generate();
-      const mintPubkey     = mintKeypair.publicKey;
-      const isToken2022    = normalized.tokenProgram === 'token-2022';
-      const tokenProgramId = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+      const mintKeypair     = Keypair.generate();
+      const mintPubkey      = mintKeypair.publicKey;
+      const isToken2022     = normalized.tokenProgram === 'token-2022';
+      const tokenProgramId  = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
       const mintAccountSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
 
       console.log('[TokenCreation] Generated mint keypair:', mintPubkey.toBase58());
       console.log('[TokenCreation] Token program:', normalized.tokenProgram, '| Mint size:', mintAccountSize);
 
-      const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
+      // Derive ATA and Metaplex metadata PDA in parallel
+      const [ata, metadataPDA] = await Promise.all([
+        this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId),
+        this.deriveMetadataPDA(mintPubkey),
+      ]);
       console.log('[TokenCreation] Creator ATA:', ata.toBase58());
+      console.log('[TokenCreation] Metadata PDA:', metadataPDA.toBase58());
 
-      // Use the blockhash we fetched — the signing service will replace it with
-      // a fresh one right before signing, ensuring it's never stale.
+      // Blockhash is a placeholder — the signing service replaces it with a
+      // fresh one immediately before signing.
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
       // 1. Create mint account (SystemProgram allocates space, assigns to token program)
@@ -414,15 +426,29 @@ class TokenCreationService {
         programId: tokenProgramId,
       }));
 
-      // 2. Initialize mint
+      // 2. Initialize mint — must precede metadata so mint authority is set on-chain
       tx.add(this.buildInitializeMintIx(
         mintPubkey, normalized.decimals, creatorPubkey, creatorPubkey, tokenProgramId
       ));
 
-      // 3. Create creator ATA
+      // 3. On-chain Metaplex metadata — name/symbol/uri visible in all Solana explorers
+      //    Metaplex verifies mint_authority is set (step 2 must come first).
+      //    Payer is debited for the metadata account rent by the Metaplex program via CPI.
+      tx.add(this.buildCreateMetadataV3Ix(
+        metadataPDA,
+        mintPubkey,
+        creatorPubkey,   // mintAuthority (signer — already signs as feePayer)
+        creatorPubkey,   // payer (signer, writable)
+        creatorPubkey,   // updateAuthority
+        normalized.name,
+        normalized.symbol,
+        metadataUri ?? '',
+      ));
+
+      // 4. Create creator ATA (idempotent — safe to retry if ATA already exists)
       tx.add(this.buildCreateAtaIx(creatorPubkey, ata, creatorPubkey, mintPubkey, tokenProgramId));
 
-      // 4. Mint creator allocation to ATA
+      // 5. Mint creator allocation to ATA
       if (normalized.creatorAllocation > 0) {
         const rawAmount = BigInt(
           Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
@@ -431,7 +457,7 @@ class TokenCreationService {
         console.log('[TokenCreation] MintTo amount:', rawAmount.toString(), 'raw units');
       }
 
-      // 5. Platform fee transfer — if this instruction fails, the ENTIRE tx fails
+      // 6. Platform fee transfer — LAST; entire tx is atomic so fee only paid on success
       tx.add(SystemProgram.transfer({
         fromPubkey: creatorPubkey,
         toPubkey: PLATFORM_FEE_WALLET,
@@ -512,28 +538,32 @@ class TokenCreationService {
   async estimateLaunchCost(isToken2022 = false): Promise<LaunchCostEstimate> {
     try {
       const mintSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
-      const [mintRentLamports, ataRentLamports] = await Promise.all([
+      const [mintRentLamports, ataRentLamports, metadataRentLamports] = await Promise.all([
         getRentExemption(mintSize),
         getRentExemption(ATA_ACCOUNT_SIZE),
+        getRentExemption(METADATA_ACCOUNT_SIZE),
       ]);
-      const mintRent = mintRentLamports / LAMPORTS_PER_SOL;
-      const ataRent  = ataRentLamports  / LAMPORTS_PER_SOL;
-      const networkFee = 0.000015; // ~3 signatures × 5000 lamports each
-      const networkAndMintCost = mintRent + ataRent + networkFee;
+      const mintRent      = mintRentLamports     / LAMPORTS_PER_SOL;
+      const ataRent       = ataRentLamports      / LAMPORTS_PER_SOL;
+      const metadataRent  = metadataRentLamports / LAMPORTS_PER_SOL;
+      const networkFee    = 0.00001; // 2 signatures × 5000 lamports each
+      const networkAndMintCost = mintRent + ataRent + metadataRent + networkFee;
       return {
         mintRent,
         ataRent,
+        metadataRent,
         networkFee,
         platformFee: PLATFORM_FEE_SOL,
         networkAndMintCost,
         total: networkAndMintCost + PLATFORM_FEE_SOL,
       };
     } catch {
-      const mintRent = isToken2022 ? 0.00387 : 0.00144;
-      const ataRent  = 0.00204;
-      const networkFee = 0.000015;
-      const networkAndMintCost = mintRent + ataRent + networkFee;
-      return { mintRent, ataRent, networkFee, networkAndMintCost, platformFee: PLATFORM_FEE_SOL, total: networkAndMintCost + PLATFORM_FEE_SOL };
+      const mintRent     = isToken2022 ? 0.00387 : 0.00144;
+      const ataRent      = 0.00204;
+      const metadataRent = 0.00471; // ~679 bytes at current rent rate
+      const networkFee   = 0.00001;
+      const networkAndMintCost = mintRent + ataRent + metadataRent + networkFee;
+      return { mintRent, ataRent, metadataRent, networkFee, networkAndMintCost, platformFee: PLATFORM_FEE_SOL, total: networkAndMintCost + PLATFORM_FEE_SOL };
     }
   }
 
@@ -629,6 +659,72 @@ class TokenCreationService {
     });
   }
 
+  /**
+   * Metaplex CreateMetadataAccountV3 instruction (instruction index 33).
+   *
+   * Borsh-encoded data layout (MetadataInstruction enum variant 33):
+   *   [33]                           instruction discriminator
+   *   DataV2:
+   *     [u32-LE][bytes]  name         (max 32 chars)
+   *     [u32-LE][bytes]  symbol       (max 10 chars)
+   *     [u32-LE][bytes]  uri          (max 200 chars)
+   *     [u16-LE]         seller_fee_basis_points
+   *     [0x00]           creators: Option = None
+   *     [0x00]           collection: Option = None
+   *     [0x00]           uses: Option = None
+   *   [0x01]             is_mutable: true
+   *   [0x00]             collection_details: Option = None
+   *
+   * Account order matches mpl-token-metadata CreateMetadataAccountV3:
+   *   0. metadata        — writable (PDA, not signer)
+   *   1. mint            — readonly
+   *   2. mintAuthority   — signer (the wallet, already signs as feePayer)
+   *   3. payer           — signer, writable
+   *   4. updateAuthority — readonly (set to creator; can be same key as payer)
+   *   5. systemProgram
+   *   6. rent sysvar
+   */
+  private buildCreateMetadataV3Ix(
+    metadataAccount: PublicKey,
+    mint: PublicKey,
+    mintAuthority: PublicKey,
+    payer: PublicKey,
+    updateAuthority: PublicKey,
+    name: string,
+    symbol: string,
+    uri: string,
+  ): TransactionInstruction {
+    const sfBuf = Buffer.alloc(2);
+    sfBuf.writeUInt16LE(0, 0); // 0 seller fee basis points — not applicable for utility tokens
+
+    const data = Buffer.concat([
+      Buffer.from([33]),              // CreateMetadataAccountV3 instruction index
+      borshStr(name.slice(0, 32)),    // name (Borsh string, max 32 chars)
+      borshStr(symbol.slice(0, 10)),  // symbol (Borsh string, max 10 chars)
+      borshStr(uri.slice(0, 200)),    // uri (Borsh string, max 200 chars)
+      sfBuf,                          // seller_fee_basis_points: u16
+      Buffer.from([0]),               // creators: Option<Vec<Creator>> = None
+      Buffer.from([0]),               // collection: Option<Collection> = None
+      Buffer.from([0]),               // uses: Option<Uses> = None
+      Buffer.from([1]),               // is_mutable: bool = true
+      Buffer.from([0]),               // collection_details: Option<CollectionDetails> = None
+    ]);
+
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: metadataAccount,   isSigner: false, isWritable: true  },
+        { pubkey: mint,              isSigner: false, isWritable: false },
+        { pubkey: mintAuthority,     isSigner: true,  isWritable: false },
+        { pubkey: payer,             isSigner: true,  isWritable: true  },
+        { pubkey: updateAuthority,   isSigner: false, isWritable: false },
+        { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      ],
+      programId: TOKEN_METADATA_PROGRAM_ID,
+      data,
+    });
+  }
+
   private async deriveAta(
     owner: PublicKey,
     mint: PublicKey,
@@ -639,6 +735,18 @@ class TokenCreationService {
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
     return ata;
+  }
+
+  private async deriveMetadataPDA(mint: PublicKey): Promise<PublicKey> {
+    const [pda] = await PublicKey.findProgramAddress(
+      [
+        Buffer.from('metadata'),
+        TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+        mint.toBuffer(),
+      ],
+      TOKEN_METADATA_PROGRAM_ID
+    );
+    return pda;
   }
 }
 
