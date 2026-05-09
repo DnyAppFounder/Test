@@ -304,6 +304,7 @@ class TokenCreationService {
       // ── Step 4: Upload metadata ─────────────────────────────────────────────
       // For Easy mode: metadata URI must be valid before the transaction is built.
       // An empty URI produces an on-chain metadata account that indexers cannot resolve.
+      const isEasyMode = input.mode === 'easy';
       progress(4, 'Uploading token metadata...');
 
       let metadataUri: string | undefined;
@@ -363,7 +364,6 @@ class TokenCreationService {
       }
 
       // Easy mode always uses standard SPL Token — never Token-2022
-      const isEasyMode  = input.mode === 'easy';
       const mintSize    = (!isEasyMode && normalized.tokenProgram === 'token-2022')
         ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
       let mintRentLamports: number;
