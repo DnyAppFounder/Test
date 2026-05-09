@@ -23,11 +23,12 @@ import { SolanaConnectionService } from './solana/connectionService';
 import { launchpadService, CreateTokenInput } from './launchpadService';
 import { tokenRegistryService } from './tokenRegistryService';
 
-// ── Program IDs ───────────────────────────────────────────────────────────────
+// ── Program IDs (mainnet only) ────────────────────────────────────────────────
 const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const TOKEN_2022_PROGRAM_ID       = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bJo');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const SYSTEM_PROGRAM_ID           = new PublicKey('11111111111111111111111111111111');
+const METADATA_PROGRAM_ID         = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 
 // ── Platform fee ──────────────────────────────────────────────────────────────
 const PLATFORM_FEE_WALLET   = new PublicKey('FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X');
@@ -38,6 +39,16 @@ const PLATFORM_FEE_LAMPORTS = Math.round(PLATFORM_FEE_SOL * LAMPORTS_PER_SOL);
 const MINT_ACCOUNT_SIZE      = 82;
 const MINT_ACCOUNT_SIZE_2022 = 234;
 const ATA_ACCOUNT_SIZE       = 165;
+const METADATA_ACCOUNT_SIZE  = 679; // approximate size of Metaplex metadata account
+
+// Derive the Metaplex metadata PDA for a given mint
+function findMetadataPda(mint: PublicKey): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('metadata'), METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    METADATA_PROGRAM_ID
+  );
+  return pda;
+}
 
 // ── Diagnostic logger ─────────────────────────────────────────────────────────
 function diag(tag: string, ...args: any[]) {
@@ -305,16 +316,24 @@ class TokenCreationService {
         };
       }
 
-      const mintSize = normalized.tokenProgram === 'token-2022' ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
+      // Easy mode always uses standard SPL Token — never Token-2022
+      const isEasyMode  = input.mode === 'easy';
+      const mintSize    = (!isEasyMode && normalized.tokenProgram === 'token-2022')
+        ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
       let mintRentLamports: number;
       let ataRentLamports: number;
+      let metadataRentLamports = 0;
       let blockhash: string;
 
       try {
-        [mintRentLamports, ataRentLamports] = await Promise.all([
+        const rentResults = await Promise.all([
           getRentExemption(mintSize),
           getRentExemption(ATA_ACCOUNT_SIZE),
+          isEasyMode ? getRentExemption(METADATA_ACCOUNT_SIZE) : Promise.resolve(0),
         ]);
+        mintRentLamports     = rentResults[0];
+        ataRentLamports      = rentResults[1];
+        metadataRentLamports = rentResults[2];
         const bhResult = await getLatestBlockhash();
         blockhash = bhResult.blockhash;
         diag('LATEST_BLOCKHASH_FETCHED', {
@@ -322,6 +341,7 @@ class TokenCreationService {
           lastValidBlockHeight: bhResult.lastValidBlockHeight,
           mintRentLamports,
           ataRentLamports,
+          metadataRentLamports,
         });
       } catch (rpcErr: any) {
         diagError('RENT_OR_BLOCKHASH_FETCH_FAILED', rpcErr);
@@ -336,16 +356,16 @@ class TokenCreationService {
       const networkFee = 0.000005;
       const feeBreakdown: FeeBreakdown = {
         networkFee,
-        mintRent:        mintRentLamports / LAMPORTS_PER_SOL,
-        metadataRent:    0,
-        ataRent:         ataRentLamports  / LAMPORTS_PER_SOL,
+        mintRent:        mintRentLamports     / LAMPORTS_PER_SOL,
+        metadataRent:    metadataRentLamports / LAMPORTS_PER_SOL,
+        ataRent:         ataRentLamports      / LAMPORTS_PER_SOL,
         platformFee:     PLATFORM_FEE_SOL,
         launchFee:       0, liquidityAmount: 0, priorityFee: 0,
         totalRequiredSol: 0,
       };
       feeBreakdown.totalRequiredSol =
         feeBreakdown.networkFee + feeBreakdown.mintRent +
-        feeBreakdown.ataRent   + feeBreakdown.platformFee;
+        feeBreakdown.metadataRent + feeBreakdown.ataRent + feeBreakdown.platformFee;
 
       diag('FEE_BREAKDOWN', feeBreakdown);
 
@@ -387,14 +407,20 @@ class TokenCreationService {
         totalSupply: normalized.totalSupply,
       });
 
-      const mintKeypair    = Keypair.generate();
-      const mintPubkey     = mintKeypair.publicKey;
-      const isToken2022    = normalized.tokenProgram === 'token-2022';
-      const tokenProgramId = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+      const mintKeypair = Keypair.generate();
+      const mintPubkey  = mintKeypair.publicKey;
+
+      // Easy Launch: always standard SPL Token (never Token-2022)
+      const tokenProgramId = (!isEasyMode && normalized.tokenProgram === 'token-2022')
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+      const effectiveDecimals = isEasyMode ? 6 : normalized.decimals;
 
       diag('MINT_KEYPAIR_GENERATED', {
         mintPubkey: mintPubkey.toBase58(),
         tokenProgramId: tokenProgramId.toBase58(),
+        mode: isEasyMode ? 'easy' : 'advanced',
+        decimals: effectiveDecimals,
       });
 
       const ata = await this.deriveAta(creatorPubkey, mintPubkey, tokenProgramId);
@@ -402,24 +428,37 @@ class TokenCreationService {
 
       const tx = new Transaction({ recentBlockhash: blockhash, feePayer: creatorPubkey });
 
+      // ix 1: allocate + fund the mint account
       tx.add(SystemProgram.createAccount({
         fromPubkey: creatorPubkey, newAccountPubkey: mintPubkey,
         lamports: mintRentLamports, space: mintSize, programId: tokenProgramId,
       }));
 
+      // ix 2: initialize mint (decimals, authorities)
       tx.add(this.buildInitializeMint2Ix(
-        mintPubkey, normalized.decimals, creatorPubkey, creatorPubkey, tokenProgramId
+        mintPubkey, effectiveDecimals, creatorPubkey, creatorPubkey, tokenProgramId
       ));
 
+      // ix 3: create creator ATA
       tx.add(this.buildCreateAtaIx(creatorPubkey, ata, creatorPubkey, mintPubkey, tokenProgramId));
 
+      // ix 4: mint supply to creator ATA
       if (normalized.creatorAllocation > 0) {
         const rawAmount = BigInt(
-          Math.floor(normalized.creatorAllocation * Math.pow(10, normalized.decimals))
+          Math.floor(normalized.creatorAllocation * Math.pow(10, effectiveDecimals))
         );
         tx.add(this.buildMintToIx(mintPubkey, ata, creatorPubkey, rawAmount, tokenProgramId));
       }
 
+      // ix 5 (Easy only): Metaplex metadata — must come after mintTo so mint is initialized
+      if (isEasyMode) {
+        tx.add(this.buildCreateMetadataV3Ix(
+          creatorPubkey, mintPubkey, creatorPubkey, creatorPubkey,
+          normalized.name, normalized.symbol, metadataUri ?? ''
+        ));
+      }
+
+      // ix 6: platform fee SOL transfer — always last
       tx.add(
         SystemProgram.transfer({
           fromPubkey: creatorPubkey,
@@ -476,30 +515,35 @@ class TokenCreationService {
         throw new Error('Launch transaction missing payment instructions. Launch aborted.');
       }
 
-      if (tx.instructions.length < 4) {
-        throw new Error(`Transaction incomplete: only ${tx.instructions.length} instructions — aborting`);
+      // Easy: createAccount + initMint + createATA + mintTo + createMetadata + platformFee = 6
+      // Advanced (no mintTo or metadata): createAccount + initMint + createATA + platformFee = 4
+      const minExpected = isEasyMode ? 5 : 4;
+      if (tx.instructions.length < minExpected) {
+        throw new Error(`Transaction incomplete: only ${tx.instructions.length} instructions (expected ≥ ${minExpected}) — aborting`);
       }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
       progress(7, 'Waiting for wallet signature...');
 
-      const rentLamports        = mintRentLamports + ataRentLamports;
+      const rentLamports        = mintRentLamports + ataRentLamports + metadataRentLamports;
       const platformFeeLamports = PLATFORM_FEE_LAMPORTS;
-      const estimatedNetworkFee = 5000; // ~0.000005 SOL base fee
+      const estimatedNetworkFee = 5000;
       const totalLamportsPaidByUser = rentLamports + platformFeeLamports + estimatedNetworkFee;
 
       diag('LAMPORT_BREAKDOWN', {
         feePayer:              creatorPubkey.toBase58(),
         mintRentLamports,
         ataRentLamports,
+        metadataRentLamports,
         rentLamports,
         platformFeeLamports,
         estimatedNetworkFee,
         totalLamportsPaidByUser,
         finalTotalRequiredSol: (totalLamportsPaidByUser / LAMPORTS_PER_SOL).toFixed(9),
         mintSize,
+        mode:                  isEasyMode ? 'easy' : 'advanced',
         instructionCount:      tx.instructions.length,
-        note: 'Every SystemProgram.createAccount and transfer uses feePayer as fromPubkey',
+        programs: tx.instructions.map(ix => ix.programId.toBase58()),
       });
 
       diag('WALLET_SIGNATURE_REQUESTED', {
@@ -677,6 +721,73 @@ class TokenCreationService {
         { pubkey: mintAuthority, isSigner: true,  isWritable: false },
       ],
       programId,
+      data,
+    });
+  }
+
+  /**
+   * Metaplex Token Metadata — CreateMetadataAccountV3 (instruction 33).
+   *
+   * Borsh layout:
+   *   u8(33) | DataV2{name(str) symbol(str) uri(str) sellerFee(u16) creators(opt) collection(opt) uses(opt)}
+   *   | is_mutable(u8) | collection_details(opt)
+   *
+   * Accounts (no rent sysvar needed in V3):
+   *   0: metadata PDA  — writable
+   *   1: mint          — read-only
+   *   2: mint_authority — signer
+   *   3: payer          — writable signer
+   *   4: update_authority — read-only
+   *   5: system_program — read-only
+   */
+  private buildCreateMetadataV3Ix(
+    payer: PublicKey,
+    mint: PublicKey,
+    mintAuthority: PublicKey,
+    updateAuthority: PublicKey,
+    name: string,
+    symbol: string,
+    uri: string
+  ): TransactionInstruction {
+    const metadataPda  = findMetadataPda(mint);
+    const nameBytes    = Buffer.from(name.slice(0, 32), 'utf8');
+    const symbolBytes  = Buffer.from(symbol.slice(0, 10), 'utf8');
+    const uriBytes     = Buffer.from(uri.slice(0, 200), 'utf8');
+
+    // Total data bytes:
+    // 1 (ix) + 4+nameLen + 4+symbolLen + 4+uriLen + 2 (fee) + 3 (opts) + 1 (mutable) + 1 (details)
+    const size = 1 + 4 + nameBytes.length + 4 + symbolBytes.length + 4 + uriBytes.length + 2 + 1 + 1 + 1 + 1 + 1;
+    const data = Buffer.alloc(size);
+    let o = 0;
+
+    data.writeUInt8(33, o++);                              // CreateMetadataAccountV3
+
+    data.writeUInt32LE(nameBytes.length, o);   o += 4;
+    nameBytes.copy(data, o);                   o += nameBytes.length;
+
+    data.writeUInt32LE(symbolBytes.length, o); o += 4;
+    symbolBytes.copy(data, o);                 o += symbolBytes.length;
+
+    data.writeUInt32LE(uriBytes.length, o);    o += 4;
+    uriBytes.copy(data, o);                    o += uriBytes.length;
+
+    data.writeUInt16LE(0, o);  o += 2;         // seller_fee_basis_points = 0
+    data.writeUInt8(0, o++);                   // creators = None
+    data.writeUInt8(0, o++);                   // collection = None
+    data.writeUInt8(0, o++);                   // uses = None
+    data.writeUInt8(1, o++);                   // is_mutable = true
+    data.writeUInt8(0, o++);                   // collection_details = None
+
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: metadataPda,      isSigner: false, isWritable: true  },
+        { pubkey: mint,             isSigner: false, isWritable: false },
+        { pubkey: mintAuthority,    isSigner: true,  isWritable: false },
+        { pubkey: payer,            isSigner: true,  isWritable: true  },
+        { pubkey: updateAuthority,  isSigner: false, isWritable: false },
+        { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      programId: METADATA_PROGRAM_ID,
       data,
     });
   }
