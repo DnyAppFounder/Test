@@ -22,7 +22,6 @@ import {
 import { SolanaConnectionService } from './solana/connectionService';
 import { launchpadService, CreateTokenInput } from './launchpadService';
 import { tokenRegistryService } from './tokenRegistryService';
-import { walletAssetLoader } from './walletAssetLoader';
 
 // ── Program IDs (mainnet only) ────────────────────────────────────────────────
 const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -640,7 +639,6 @@ class TokenCreationService {
             await launchpadService.updateRecord(record.id, { status: 'deployed' });
             await launchpadService.recordLaunchTransaction(record.id, creatorWallet, embeddedSig, PLATFORM_FEE_SOL);
             await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
-            walletAssetLoader.refreshWalletAssets('solana', creatorWallet).catch(() => {});
             diag('CONFIRMATION_RECOVERED', { sig: embeddedSig });
             return {
               success: true,
@@ -710,10 +708,6 @@ class TokenCreationService {
       await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch((e) => {
         diag('REGISTRY_REGISTER_FAILED_NON_FATAL', e?.message);
       });
-
-      // Clear the wallet metadata cache so the next wallet load fetches fresh metadata from the DB.
-      // Fire-and-forget — do not block the success return.
-      walletAssetLoader.refreshWalletAssets('solana', creatorWallet).catch(() => {});
 
       diag('LAUNCHPAD_REFRESH_SUCCESS', {
         mintAddress: mintPubkey.toBase58(),
