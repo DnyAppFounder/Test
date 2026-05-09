@@ -308,6 +308,7 @@ class TokenCreationService {
       progress(4, 'Uploading token metadata...');
 
       let metadataUri: string | undefined;
+      let metadataUploadError: string | undefined;
       diag('TOKEN_METADATA_UPLOAD_START', { name: normalized.name, symbol: normalized.symbol, recordId: record.id });
       try {
         const metadata: Record<string, unknown> = {
@@ -329,9 +330,10 @@ class TokenCreationService {
             creator:  creatorWallet,
           },
         };
-        metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
-        diag('TOKEN_METADATA_UPLOAD_RESULT', { metadataUri: metadataUri ?? null });
+        metadataUri = await launchpadService.uploadMetadata(metadata, record.id);
+        diag('TOKEN_METADATA_UPLOAD_RESULT', { metadataUri });
       } catch (metaErr: any) {
+        metadataUploadError = metaErr?.message || 'Unknown storage error during metadata upload';
         diagError('TOKEN_METADATA_UPLOAD_ERROR', metaErr);
       }
 
@@ -341,7 +343,7 @@ class TokenCreationService {
         await launchpadService.updateRecord(record.id, { status: 'failed' });
         return {
           success: false,
-          error: 'Metadata upload failed. Please try again — the token cannot be launched without a valid metadata URI.',
+          error: metadataUploadError ?? 'Metadata upload failed — the token cannot be launched without a valid metadata URI.',
           tokenId: record.id,
         };
       }

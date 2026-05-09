@@ -264,30 +264,46 @@ class LaunchpadService {
     }
   }
 
-  async uploadMetadata(metadata: object, tokenId: string): Promise<string | null> {
-    try {
-      const jsonStr = JSON.stringify(metadata);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const filename = `launchpad/metadata/${tokenId}.json`;
+  async uploadMetadata(metadata: object, tokenId: string): Promise<string> {
+    const jsonStr = JSON.stringify(metadata);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const filename = `launchpad/metadata/${tokenId}.json`;
 
-      const { error } = await supabase.storage
-        .from('post-media')
-        .upload(filename, blob, { contentType: 'application/json', upsert: true });
+    const { error } = await supabase.storage
+      .from('post-media')
+      .upload(filename, blob, { contentType: 'application/json', upsert: true });
 
-      if (error) {
-        console.error('[LaunchpadService] uploadMetadata storage error:', error);
-        return null;
+    if (error) {
+      console.error('[LaunchpadService] uploadMetadata storage error:', error);
+      const raw = (error as any).message || (error as any).error || JSON.stringify(error);
+      if (/mime|content.?type|not allowed/i.test(raw)) {
+        throw new Error(`Storage error: file type not allowed in bucket — ${raw}`);
+      } else if (/permission|policy|violates|row.level/i.test(raw)) {
+        throw new Error(`Storage error: permission denied — ${raw}`);
+      } else if (/size|too large/i.test(raw)) {
+        throw new Error(`Storage error: file too large — ${raw}`);
+      } else if (/bucket|not found/i.test(raw)) {
+        throw new Error(`Storage error: bucket not found — ${raw}`);
+      } else if (/network|fetch|connect/i.test(raw)) {
+        throw new Error(`Storage error: network error — ${raw}`);
+      } else {
+        throw new Error(`Storage upload failed — ${raw}`);
       }
-
-      const { data: urlData } = supabase.storage
-        .from('post-media')
-        .getPublicUrl(filename);
-
-      return urlData.publicUrl;
-    } catch (e) {
-      console.error('[LaunchpadService] uploadMetadata error:', e);
-      return null;
     }
+
+    const { data: urlData } = supabase.storage
+      .from('post-media')
+      .getPublicUrl(filename);
+
+    const url = urlData?.publicUrl;
+    if (!url) {
+      throw new Error('Storage error: public URL could not be generated after upload.');
+    }
+    if (!url.startsWith('https://')) {
+      throw new Error(`Storage error: generated URL is not HTTPS — ${url.slice(0, 80)}`);
+    }
+
+    return url;
   }
 }
 
