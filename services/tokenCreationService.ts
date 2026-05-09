@@ -1,13 +1,13 @@
 /**
  * tokenCreationService
  *
- * Single-transaction flow — ALL 5 instructions in one atomic Transaction:
+ * Easy Launch — 6 instructions in one atomic Transaction:
  *   1. SystemProgram.createAccount      — allocate + fund mint account (mintRent)
  *   2. InitializeMint2                  — set decimals + mint/freeze authorities
- *                                         (instruction 20 — no rent sysvar required)
  *   3. CreateAssociatedTokenAccountIdempotent — creator ATA (ataRent via ATA CPI)
  *   4. MintTo                           — mint full supply to creator ATA
- *   5. SystemProgram.transfer           — explicit platform fee SOL transfer (LAST)
+ *   5. CreateMetadataAccountV3          — Metaplex on-chain metadata with valid URI
+ *   6. SystemProgram.transfer           — explicit platform fee SOL transfer (LAST)
  */
 
 import {
@@ -22,6 +22,7 @@ import {
 import { SolanaConnectionService } from './solana/connectionService';
 import { launchpadService, CreateTokenInput } from './launchpadService';
 import { tokenRegistryService } from './tokenRegistryService';
+import { walletAssetLoader } from './walletAssetLoader';
 
 // ── Program IDs (mainnet only) ────────────────────────────────────────────────
 const TOKEN_PROGRAM_ID            = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -302,33 +303,47 @@ class TokenCreationService {
       diag('DB_RECORD_CREATED', { id: record.id });
 
       // ── Step 4: Upload metadata ─────────────────────────────────────────────
+      // For Easy mode: metadata URI must be valid before the transaction is built.
+      // An empty URI produces an on-chain metadata account that indexers cannot resolve.
       progress(4, 'Uploading token metadata...');
 
       let metadataUri: string | undefined;
       diag('TOKEN_METADATA_UPLOAD_START', { name: normalized.name, symbol: normalized.symbol, recordId: record.id });
       try {
-        const metadata = {
-          name: normalized.name, symbol: normalized.symbol,
-          description: normalized.description, image: imageUrl ?? '',
-          external_url: normalized.website ?? '', attributes: [],
+        const metadata: Record<string, unknown> = {
+          name: normalized.name,
+          symbol: normalized.symbol,
+          description: normalized.description,
+          image: imageUrl ?? '',
+          external_url: normalized.website ?? '',
+          attributes: [],
           properties: {
             files: imageUrl ? [{ uri: imageUrl, type: 'image/png' }] : [],
             category: 'token',
           },
           extensions: {
-            website: normalized.website ?? '', telegram: normalized.telegram ?? '',
-            twitter: normalized.twitter ?? '', discord: normalized.discord ?? '',
-            creator: creatorWallet,
+            website:  normalized.website  ?? '',
+            telegram: normalized.telegram ?? '',
+            twitter:  normalized.twitter  ?? '',
+            discord:  normalized.discord  ?? '',
+            creator:  creatorWallet,
           },
         };
         metadataUri = await launchpadService.uploadMetadata(metadata, record.id) ?? undefined;
-        if (metadataUri) {
-          diag('TOKEN_METADATA_UPLOAD_SUCCESS', { metadataUri });
-        } else {
-          diag('TOKEN_METADATA_UPLOAD_NULL', 'uploadMetadata returned null — continuing without URI');
-        }
+        diag('TOKEN_METADATA_UPLOAD_RESULT', { metadataUri: metadataUri ?? null });
       } catch (metaErr: any) {
-        diagError('TOKEN_METADATA_UPLOAD_ERROR_NON_FATAL', metaErr);
+        diagError('TOKEN_METADATA_UPLOAD_ERROR', metaErr);
+      }
+
+      // Block Easy Launch if metadata URI could not be obtained — an empty on-chain URI
+      // means no indexer can resolve the logo/description, making the token invisible.
+      if (isEasyMode && !metadataUri) {
+        await launchpadService.updateRecord(record.id, { status: 'failed' });
+        return {
+          success: false,
+          error: 'Metadata upload failed. Please try again — the token cannot be launched without a valid metadata URI.',
+          tokenId: record.id,
+        };
       }
 
       // ── Step 5: RPC connectivity + rent + blockhash ─────────────────────────
@@ -625,6 +640,7 @@ class TokenCreationService {
             await launchpadService.updateRecord(record.id, { status: 'deployed' });
             await launchpadService.recordLaunchTransaction(record.id, creatorWallet, embeddedSig, PLATFORM_FEE_SOL);
             await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
+            walletAssetLoader.refreshWalletAssets('solana', creatorWallet).catch(() => {});
             diag('CONFIRMATION_RECOVERED', { sig: embeddedSig });
             return {
               success: true,
@@ -694,6 +710,11 @@ class TokenCreationService {
       await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch((e) => {
         diag('REGISTRY_REGISTER_FAILED_NON_FATAL', e?.message);
       });
+
+      // Clear the wallet metadata cache so the next wallet load fetches fresh metadata from the DB.
+      // Fire-and-forget — do not block the success return.
+      walletAssetLoader.refreshWalletAssets('solana', creatorWallet).catch(() => {});
+
       diag('LAUNCHPAD_REFRESH_SUCCESS', {
         mintAddress: mintPubkey.toBase58(),
         txSignature,

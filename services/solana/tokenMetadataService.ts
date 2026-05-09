@@ -437,8 +437,10 @@ export class TokenMetadataService {
     // 7. On-chain mint account (for decimals + program type)
     const onChain = await fetchOnChainMintInfo(mint, this.connectionService);
 
-    // 8. Graceful stub — never hide the token
-    const stub: TokenMetadata = {
+    // 8. Graceful stub — never hide the token. Do NOT cache: a new DAWEN token may
+    // be indexed by Helius or the launchpad DB shortly after launch, so subsequent
+    // calls should retry all resolution steps rather than returning a stale stub.
+    return {
       mint,
       name: mint.slice(0, 8) + '...',
       symbol: mint.slice(0, 4).toUpperCase(),
@@ -447,8 +449,6 @@ export class TokenMetadataService {
       verified: false,
       tokenProgram: onChain?.tokenProgram ?? 'spl',
     };
-    this.cache.set(mint, stub);
-    return stub;
   }
 
   async getBatchTokenMetadata(mints: string[]): Promise<Map<string, TokenMetadata>> {
