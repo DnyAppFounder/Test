@@ -333,6 +333,7 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   const [result, setResult] = useState<{ mintAddress: string; txSig: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedMint, setCopiedMint] = useState(false);
+  const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
   const [launchCost, setLaunchCost] = useState<FeeBreakdown>({
     networkFee: 0.00001,
     mintRent: 0.00144,
@@ -357,12 +358,12 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
   // Re-fetch cost estimate when modal opens or when Token-2022 toggle changes
   useEffect(() => {
     if (visible) {
-      tokenCreationService.estimateLaunchCost(useToken2022).then(setLaunchCost).catch(() => {});
+      tokenCreationService.estimateLaunchCost(useToken2022, mode === 'easy').then(setLaunchCost).catch(() => {});
     }
-  }, [visible, useToken2022]);
+  }, [visible, useToken2022, mode]);
 
   const reset = () => {
-    setStep('form'); setProgress(null); setResult(null); setError(null); setCreatedTokenId(null);
+    setStep('form'); setProgress(null); setResult(null); setError(null); setCreatedTokenId(null); setIsPendingConfirmation(false);
     setName(''); setSymbol(''); setDescription(''); setTotalSupply('1000000000'); setImageUri(null);
     setWebsite(''); setTelegram(''); setTwitter('');
     setDecimals('6'); setCreatorAlloc('100000000'); setLiquidityAlloc('900000000');
@@ -465,6 +466,13 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
         if (res.tokenId) setCreatedTokenId(res.tokenId);
         setStep('done');
         onSuccess(res.mintAddress, res.txSignature);
+      } else if (res.pendingSignature) {
+        // Transaction was broadcast but confirmation is still pending — never show "failed"
+        try { sessionStorage.setItem('dawen_pending_launch_sig', res.pendingSignature); } catch {}
+        setResult({ mintAddress: res.mintAddress ?? 'Pending...', txSig: res.pendingSignature });
+        if (res.tokenId) setCreatedTokenId(res.tokenId);
+        setIsPendingConfirmation(true);
+        setStep('done');
       } else {
         // Stay on progress screen but show error inline — do NOT silently go back to form
         const errMsg = res.error ?? 'Token creation failed';
@@ -804,10 +812,10 @@ function CreateTokenModal({ visible, onClose, onSuccess, creatorWallet, activeWa
           {step === 'done' && result && (
             <ScrollView contentContainerStyle={mStyles.doneContainer} showsVerticalScrollIndicator={false}>
               <View style={mStyles.doneIconWrap}>
-                <CheckCircleIcon size={48} color={colors.success} />
+                <CheckCircleIcon size={48} color={isPendingConfirmation ? colors.warning : colors.success} />
               </View>
-              <Text style={mStyles.doneTitle}>Token Launched!</Text>
-              <Text style={mStyles.doneSubtitle}>Your token is live on Solana</Text>
+              <Text style={mStyles.doneTitle}>{isPendingConfirmation ? 'Transaction Sent' : 'Token Launched!'}</Text>
+              <Text style={mStyles.doneSubtitle}>{isPendingConfirmation ? 'Awaiting confirmation on Solana — check Solscan for status' : 'Your token is live on Solana'}</Text>
 
               <View style={mStyles.mintCard}>
                 <Text style={mStyles.mintLabel}>Mint Address</Text>

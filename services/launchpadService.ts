@@ -120,6 +120,19 @@ class LaunchpadService {
     }
   }
 
+  async getTokenByMintAddress(mintAddress: string): Promise<LaunchpadToken | null> {
+    try {
+      const { data } = await supabase
+        .from('launchpad_tokens')
+        .select('*')
+        .eq('mint_address', mintAddress)
+        .maybeSingle();
+      return data as LaunchpadToken | null;
+    } catch {
+      return null;
+    }
+  }
+
   async getCreatorTokens(walletAddress: string): Promise<LaunchpadToken[]> {
     try {
       const { data, error } = await supabase

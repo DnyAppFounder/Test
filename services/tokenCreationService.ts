@@ -117,6 +117,8 @@ export interface TokenCreationResult {
   tokenId?: string;
   error?: string;
   metadataUri?: string;
+  /** Set when the tx was broadcast but confirmation is still pending. Never treat as failure. */
+  pendingSignature?: string;
 }
 
 export interface TokenCreationProgress {
@@ -194,6 +196,36 @@ async function getBalance(pubkey: string): Promise<number> {
   const connSvc = SolanaConnectionService.getInstance();
   const result = await connSvc.rpcCall('getBalance', [pubkey, { commitment: 'confirmed' }]);
   return typeof result === 'object' ? result.value : result;
+}
+
+/**
+ * Poll getSignatureStatuses after tx broadcast but before success is confirmed.
+ * Used to recover from pollConfirmation timeouts in launchpadSigningService.
+ * Returns 'confirmed', 'failed', or 'pending'.
+ */
+async function pollSignatureLocal(
+  sig: string,
+  maxAttempts = 20,
+  intervalMs = 3000
+): Promise<'confirmed' | 'failed' | 'pending'> {
+  const connSvc = SolanaConnectionService.getInstance();
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise<void>(r => setTimeout(r, intervalMs));
+    try {
+      const result = await connSvc.rpcCall('getSignatureStatuses', [
+        [sig],
+        { searchTransactionHistory: true },
+      ]);
+      const status = result?.value?.[0];
+      if (!status) continue;
+      if (status.err) return 'failed';
+      const conf = status.confirmationStatus;
+      if (conf === 'confirmed' || conf === 'finalized') return 'confirmed';
+    } catch {
+      // network error — continue polling
+    }
+  }
+  return 'pending';
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -523,7 +555,7 @@ class TokenCreationService {
       }
 
       // ── Step 7: Sign, send, confirm ──────────────────────────────────────────
-      progress(7, 'Waiting for wallet signature...');
+      progress(7, 'Waiting for wallet signature — then sending and confirming...');
 
       const rentLamports        = mintRentLamports + ataRentLamports + metadataRentLamports;
       const platformFeeLamports = PLATFORM_FEE_LAMPORTS;
@@ -560,29 +592,78 @@ class TokenCreationService {
       } catch (err: any) {
         diagError('SIGN_OR_SEND_FAILED', err);
 
-        // If the error carries a signature (e.g. sent but confirmation timed out),
-        // surface it so the user can verify on Solscan instead of treating it as a full failure.
-        const embeddedSig = err?.signature ?? err?.txId ?? null;
-        if (embeddedSig) {
+        const embeddedSig: string | null = err?.signature ?? err?.txId ?? null;
+        const raw = err?.message || String(err);
+        const isUserRejection =
+          raw.includes('rejected') || raw.includes('cancelled') ||
+          raw.includes('denied') || raw.includes('User rejected');
+
+        // Transaction was broadcast but confirmation timed out — do NOT mark failed.
+        // Continue polling; only mark failed if getSignatureStatuses reports an on-chain error.
+        if (embeddedSig && !isUserRejection) {
           diag('SIGNATURE_FOUND_IN_ERROR', {
             signature: embeddedSig,
             solscan: `https://solscan.io/tx/${embeddedSig}`,
-            note: 'Transaction may still confirm — check Solscan',
+            note: 'Tx broadcast — continuing confirmation polling',
           });
+
+          // Save what we know immediately so data is not lost on refresh
+          progress(7, 'Transaction sent — confirming on Solana...');
+          await launchpadService.updateRecord(record.id, {
+            mint_address: mintPubkey.toBase58(),
+            creation_tx: embeddedSig,
+            metadata_uri: metadataUri,
+            image_url: imageUrl,
+            status: 'pending',
+          });
+
+          // Poll for up to 60 s (20 × 3 s)
+          progress(7, 'Confirming on Solana mainnet...');
+          const confirmResult = await pollSignatureLocal(embeddedSig);
+
+          if (confirmResult === 'confirmed') {
+            await launchpadService.updateRecord(record.id, { status: 'deployed' });
+            await launchpadService.recordLaunchTransaction(record.id, creatorWallet, embeddedSig, PLATFORM_FEE_SOL);
+            await tokenRegistryService.registerWalletMints([mintPubkey.toBase58()]).catch(() => {});
+            diag('CONFIRMATION_RECOVERED', { sig: embeddedSig });
+            return {
+              success: true,
+              mintAddress: mintPubkey.toBase58(),
+              txSignature: embeddedSig,
+              tokenId: record.id,
+              metadataUri,
+            };
+          }
+
+          if (confirmResult === 'failed') {
+            await launchpadService.updateRecord(record.id, { status: 'failed' });
+            return {
+              success: false,
+              error: `Transaction failed on-chain. Check Solscan: https://solscan.io/tx/${embeddedSig}`,
+              tokenId: record.id,
+            };
+          }
+
+          // Still pending after extra polling — surface signature so UI can show Solscan link
+          return {
+            success: false,
+            pendingSignature: embeddedSig,
+            mintAddress: mintPubkey.toBase58(),
+            tokenId: record.id,
+            error: 'Transaction sent and pending confirmation.',
+          };
         }
 
+        // Normal failure (user rejection, simulation error, etc.)
         await launchpadService.updateRecord(record.id, { status: 'failed' });
 
-        const raw = err?.message || String(err);
         let msg: string;
         if (raw.includes('blockhash') || raw.includes('BlockhashNotFound'))
           msg = 'Blockhash expired — please retry';
         else if (raw.includes('0x1') || raw.includes('insufficient lamports') || raw.includes('Insufficient'))
           msg = `Insufficient SOL: need ${feeBreakdown.totalRequiredSol.toFixed(4)} SOL`;
-        else if (raw.includes('rejected') || raw.includes('cancelled') || raw.includes('denied') || raw.includes('User rejected'))
+        else if (isUserRejection)
           msg = 'Transaction cancelled by wallet';
-        else if (embeddedSig)
-          msg = `Transaction sent (${embeddedSig.slice(0, 16)}...) but confirmation timed out. Check Solscan.`;
         else if (raw.includes('simulation'))
           msg = `Simulation failed: ${raw}`;
         else
@@ -634,27 +715,31 @@ class TokenCreationService {
     }
   }
 
-  async estimateLaunchCost(isToken2022 = false): Promise<FeeBreakdown> {
+  async estimateLaunchCost(isToken2022 = false, includeMetadata = false): Promise<FeeBreakdown> {
     try {
       const mintSize = isToken2022 ? MINT_ACCOUNT_SIZE_2022 : MINT_ACCOUNT_SIZE;
-      const [mintRentLamports, ataRentLamports] = await Promise.all([
+      const rentFetches = [
         getRentExemption(mintSize),
         getRentExemption(ATA_ACCOUNT_SIZE),
-      ]);
-      const networkFee = 0.000005;
-      const mintRent   = mintRentLamports / LAMPORTS_PER_SOL;
-      const ataRent    = ataRentLamports  / LAMPORTS_PER_SOL;
+        includeMetadata ? getRentExemption(METADATA_ACCOUNT_SIZE) : Promise.resolve(0),
+      ];
+      const [mintRentLamports, ataRentLamports, metadataRentLamports] = await Promise.all(rentFetches);
+      const networkFee    = 0.000005;
+      const mintRent      = mintRentLamports     / LAMPORTS_PER_SOL;
+      const ataRent       = ataRentLamports      / LAMPORTS_PER_SOL;
+      const metadataRent  = metadataRentLamports / LAMPORTS_PER_SOL;
       return {
-        networkFee, mintRent, metadataRent: 0, ataRent,
+        networkFee, mintRent, metadataRent, ataRent,
         platformFee: PLATFORM_FEE_SOL, launchFee: 0, liquidityAmount: 0, priorityFee: 0,
-        totalRequiredSol: networkFee + mintRent + ataRent + PLATFORM_FEE_SOL,
+        totalRequiredSol: networkFee + mintRent + ataRent + metadataRent + PLATFORM_FEE_SOL,
       };
     } catch {
       const mintRent = isToken2022 ? 0.00387 : 0.00144;
+      const metadataRent = includeMetadata ? 0.00671 : 0;
       return {
-        networkFee: 0.000005, mintRent, metadataRent: 0, ataRent: 0.00204,
+        networkFee: 0.000005, mintRent, metadataRent, ataRent: 0.00204,
         platformFee: PLATFORM_FEE_SOL, launchFee: 0, liquidityAmount: 0, priorityFee: 0,
-        totalRequiredSol: 0.000005 + mintRent + 0.00204 + PLATFORM_FEE_SOL,
+        totalRequiredSol: 0.000005 + mintRent + 0.00204 + metadataRent + PLATFORM_FEE_SOL,
       };
     }
   }

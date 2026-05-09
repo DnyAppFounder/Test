@@ -16,6 +16,7 @@
 import Constants from 'expo-constants';
 import { SolanaConnectionService } from './connectionService';
 import { jupiterTokenListService } from '../jupiter/tokenListService';
+import { supabase } from '@/lib/supabase';
 
 export interface TokenMetadata {
   mint: string;
@@ -151,6 +152,57 @@ async function resolveImageFromUri(uri: string): Promise<string | undefined> {
     URI_CACHE.set(uri, null);
     return undefined;
   }
+}
+
+// ─── DAWEN Launchpad DB resolver ──────────────────────────────────────────────
+// Newly created tokens appear here immediately after launch, before any indexer
+
+async function fetchLaunchpadMetadata(mint: string): Promise<TokenMetadata | null> {
+  try {
+    const { data } = await supabase
+      .from('launchpad_tokens')
+      .select('name, symbol, image_url, decimals')
+      .eq('mint_address', mint)
+      .in('status', ['deployed', 'pending'])
+      .maybeSingle();
+    if (!data?.name) return null;
+    return {
+      mint,
+      name: data.name,
+      symbol: data.symbol,
+      logoURI: data.image_url || undefined,
+      decimals: data.decimals ?? 6,
+      verified: false,
+      tokenProgram: 'spl',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLaunchpadMetadataBatch(mints: string[]): Promise<Map<string, TokenMetadata>> {
+  const result = new Map<string, TokenMetadata>();
+  if (mints.length === 0) return result;
+  try {
+    const { data } = await supabase
+      .from('launchpad_tokens')
+      .select('mint_address, name, symbol, image_url, decimals')
+      .in('mint_address', mints)
+      .in('status', ['deployed', 'pending']);
+    for (const row of data ?? []) {
+      if (!row.mint_address || !row.name) continue;
+      result.set(row.mint_address, {
+        mint: row.mint_address,
+        name: row.name,
+        symbol: row.symbol,
+        logoURI: row.image_url || undefined,
+        decimals: row.decimals ?? 6,
+        verified: false,
+        tokenProgram: 'spl',
+      });
+    }
+  } catch {}
+  return result;
 }
 
 // ─── Helius DAS single-asset resolver ────────────────────────────────────────
@@ -342,14 +394,21 @@ export class TokenMetadataService {
       return WELL_KNOWN[mint];
     }
 
-    // 3. Helius DAS (primary)
+    // 3. DAWEN launchpad DB — immediate fallback for newly created tokens
+    const launchpadMeta = await fetchLaunchpadMetadata(mint);
+    if (launchpadMeta) {
+      this.cache.set(mint, launchpadMeta);
+      return launchpadMeta;
+    }
+
+    // 4. Helius DAS (primary for external tokens)
     const dasMeta = await fetchDasMetadata(mint);
     if (dasMeta) {
       this.cache.set(mint, dasMeta);
       return dasMeta;
     }
 
-    // 4. Jupiter token list
+    // 5. Jupiter token list (large curated list)
     try {
       const jupToken = await jupiterTokenListService.getTokenByAddress(mint);
       if (jupToken) {
@@ -368,17 +427,17 @@ export class TokenMetadataService {
       }
     } catch {}
 
-    // 5. pump.fun
+    // 6. pump.fun
     const pumpMeta = await fetchPumpFunMetadata(mint);
     if (pumpMeta) {
       this.cache.set(mint, pumpMeta);
       return pumpMeta;
     }
 
-    // 6. On-chain mint account (for decimals + program type)
+    // 7. On-chain mint account (for decimals + program type)
     const onChain = await fetchOnChainMintInfo(mint, this.connectionService);
 
-    // 7. Graceful stub — never hide the token
+    // 8. Graceful stub — never hide the token
     const stub: TokenMetadata = {
       mint,
       name: mint.slice(0, 8) + '...',
@@ -410,8 +469,16 @@ export class TokenMetadataService {
 
     if (needsFetch.length === 0) return results;
 
-    // DAS batch for uncached mints
-    const dasResults = await fetchDasMetadataBatch(needsFetch);
+    // Launchpad DB batch — immediately resolves newly created DAWEN tokens
+    const launchpadResults = await fetchLaunchpadMetadataBatch(needsFetch);
+    for (const [mint, meta] of launchpadResults) {
+      this.cache.set(mint, meta);
+      results.set(mint, meta);
+    }
+
+    // DAS batch for mints not found in launchpad
+    const needsDas = needsFetch.filter(m => !results.has(m));
+    const dasResults = await fetchDasMetadataBatch(needsDas);
     for (const [mint, meta] of dasResults) {
       this.cache.set(mint, meta);
       results.set(mint, meta);
