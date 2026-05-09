@@ -48,23 +48,71 @@ export interface LaunchpadSigner {
 }
 
 /**
- * Poll for transaction confirmation using getSignatureStatuses (HTTP, no websocket).
- * Retries every 2s for up to maxAttempts (default 30 = 60s).
- * On timeout, throws an error with .signature and .solscan so callers can surface the tx.
+ * Poll for transaction confirmation via getSignatureStatuses (HTTP — no WebSocket needed).
+ *
+ * Uses two stopping conditions:
+ *   1. Block height exceeds lastValidBlockHeight → blockhash window expired → fail fast
+ *   2. maxAttempts (80s) hit without confirmation → timeout with signature attached
+ *
+ * Both errors carry .signature and .solscan so callers can show the tx link.
  */
 async function pollConfirmation(
+  connSvc: SolanaConnectionService,
   connection: Connection,
   signature: string,
-  maxAttempts = 30
+  lastValidBlockHeight: number,
+  maxAttempts = 40
 ): Promise<void> {
   diag('CONFIRMATION_PENDING', {
     signature,
     solscan: `https://solscan.io/tx/${signature}`,
+    lastValidBlockHeight,
     maxWaitSeconds: maxAttempts * 2,
   });
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise(r => setTimeout(r, 2000));
+
+    // Every 5 attempts (10s) check if the blockhash window has expired.
+    // This is a cheap HTTP call through the proxy — no WebSocket required.
+    if (attempt > 0 && attempt % 5 === 0) {
+      try {
+        const currentHeight: number = await connSvc.rpcCall('getBlockHeight', []);
+        diag('CONFIRMATION_HEIGHT_CHECK', { attempt: attempt + 1, currentHeight, lastValidBlockHeight });
+
+        if (currentHeight > lastValidBlockHeight) {
+          // Window expired — do one final status check before giving up
+          const { value: finalCheck } = await connection.getSignatureStatuses([signature], {
+            searchTransactionHistory: true,
+          });
+          const finalStatus = finalCheck?.[0];
+          if (
+            finalStatus && !finalStatus.err &&
+            (finalStatus.confirmationStatus === 'confirmed' || finalStatus.confirmationStatus === 'finalized')
+          ) {
+            diag('CONFIRMATION_RESULT_FINAL', {
+              signature, confirmationStatus: finalStatus.confirmationStatus,
+              solscan: `https://solscan.io/tx/${signature}`,
+              note: 'Confirmed just before window closed',
+            });
+            return;
+          }
+
+          const expiredErr: any = new Error(
+            `Blockhash window expired (block ${currentHeight} > lastValid ${lastValidBlockHeight}). ` +
+            `The transaction was not included. Check Solscan: https://solscan.io/tx/${signature}`
+          );
+          expiredErr.signature = signature;
+          expiredErr.solscan   = `https://solscan.io/tx/${signature}`;
+          throw expiredErr;
+        }
+      } catch (heightErr: any) {
+        if (heightErr?.signature) throw heightErr; // our own structured error — re-throw
+        console.warn('[LaunchpadSigner] getBlockHeight check failed:', heightErr?.message);
+      }
+    }
+
+    // Primary poll: getSignatureStatuses
     try {
       const { value } = await connection.getSignatureStatuses([signature], {
         searchTransactionHistory: true,
@@ -74,8 +122,7 @@ async function pollConfirmation(
       diag('CONFIRMATION_RESULT', {
         attempt: attempt + 1,
         signature: signature.slice(0, 16) + '...',
-        status: status ?? 'null (not yet seen)',
-        confirmationStatus: status?.confirmationStatus ?? null,
+        confirmationStatus: status?.confirmationStatus ?? 'not seen',
         err: status?.err ?? null,
       });
 
@@ -91,21 +138,21 @@ async function pollConfirmation(
         const conf = status.confirmationStatus;
         if (conf === 'confirmed' || conf === 'finalized') {
           diag('CONFIRMATION_RESULT_FINAL', {
-            signature,
-            confirmationStatus: conf,
+            signature, confirmationStatus: conf,
             solscan: `https://solscan.io/tx/${signature}`,
           });
           return;
         }
       }
     } catch (e: any) {
-      if (e?.message?.startsWith('Transaction failed on-chain:')) throw e;
-      console.warn(`[LaunchpadSigner] pollConfirmation attempt ${attempt + 1} network error:`, e?.message);
+      if (e?.signature) throw e; // our own structured error — re-throw
+      console.warn(`[LaunchpadSigner] pollConfirmation attempt ${attempt + 1} error:`, e?.message);
     }
   }
 
   const timeoutErr: any = new Error(
-    `Confirmation timed out after ${maxAttempts * 2}s — tx may still confirm. Check Solscan: https://solscan.io/tx/${signature}`
+    `Confirmation timed out after ${maxAttempts * 2}s. Tx may still confirm. ` +
+    `Check Solscan: https://solscan.io/tx/${signature}`
   );
   timeoutErr.signature = signature;
   timeoutErr.solscan   = `https://solscan.io/tx/${signature}`;
@@ -186,11 +233,9 @@ class LaunchpadSigningService {
             const rawTx = freshTx.serialize();
             const encodedTx = Buffer.from(rawTx).toString('base64');
 
-            // skipPreflight: true bypasses simulation-layer blockhash checks;
-            // the cluster validates the blockhash authoritatively during processing.
             const sig = await connSvc.rpcCall('sendTransaction', [
               encodedTx,
-              { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
+              { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 5 },
             ]);
 
             diag('RAW_TRANSACTION_SENT', {
@@ -200,17 +245,19 @@ class LaunchpadSigningService {
               attempt,
             });
 
-            await pollConfirmation(connection, sig);
+            await pollConfirmation(connSvc, connection, sig, lastValidBlockHeight);
             return sig;
 
           } catch (err: any) {
             lastError = err;
             const msg = err?.message || String(err);
 
-            // Retry only on blockhash expiry
-            if ((msg.includes('blockhash') || msg.includes('BlockhashNotFound')) && attempt < MAX_ATTEMPTS) {
+            // Only retry when the cluster rejected the blockhash at send time (tx was never processed).
+            // Do NOT retry on "window expired" — that error is thrown AFTER the tx was sent,
+            // so we can't know for certain that it wasn't included.
+            if (msg.includes('BlockhashNotFound') && attempt < MAX_ATTEMPTS) {
               console.warn(
-                `[LaunchpadSigner] Internal blockhash error (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
+                `[LaunchpadSigner] BlockhashNotFound at send (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
               );
               continue;
             }
@@ -307,14 +354,12 @@ class LaunchpadSigningService {
               );
             }
 
-            // 6. Submit immediately with skipPreflight to bypass simulation-layer blockhash checks.
-            //    The cluster will validate the blockhash itself during actual processing.
             const rawTx = (signed as Transaction).serialize();
             const encodedTx = Buffer.from(rawTx).toString('base64');
 
             const sig = await connSvc.rpcCall('sendTransaction', [
               encodedTx,
-              { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 },
+              { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 5 },
             ]);
 
             diag('RAW_TRANSACTION_SENT', {
@@ -325,7 +370,7 @@ class LaunchpadSigningService {
               attempt,
             });
 
-            await pollConfirmation(connection, sig);
+            await pollConfirmation(connSvc, connection, sig, lastValidBlockHeight);
             return sig;
 
           } catch (err: any) {
@@ -340,10 +385,11 @@ class LaunchpadSigningService {
               throw err;
             }
 
-            // Auto-retry on blockhash expiry reported by the cluster
-            if ((msg.includes('blockhash') || msg.includes('BlockhashNotFound')) && attempt < MAX_ATTEMPTS) {
+            // Only retry when the cluster rejected the blockhash at send time (BlockhashNotFound).
+            // Do NOT retry on "window expired" — that is thrown after the tx was broadcast.
+            if (msg.includes('BlockhashNotFound') && attempt < MAX_ATTEMPTS) {
               console.warn(
-                `[LaunchpadSigner] Cluster rejected: blockhash not found (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
+                `[LaunchpadSigner] BlockhashNotFound at send (attempt ${attempt}), rebuilding for attempt ${attempt + 1}...`
               );
               continue;
             }
