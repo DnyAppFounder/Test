@@ -1,8 +1,14 @@
 [workspace]
-members = ["programs/*"]
+members = [
+  "programs/dawen_curve"
+]
 resolver = "2"
 
+[workspace.dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
 [profile.release]
+opt-level = 3
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
