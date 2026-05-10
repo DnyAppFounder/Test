@@ -50,10 +50,8 @@ pub struct InitializeLaunch<'info> {
     pub mint: Account<'info, Mint>,
 
     /// LaunchState PDA — stores all curve parameters and running state.
-    /// init_if_needed avoids the try_from_unchecked expand path that plain `init` triggers.
-    /// Re-initialization is blocked in the handler by checking created_at == 0.
     #[account(
-        init_if_needed,
+        init,
         payer = creator,
         space = LaunchState::SIZE,
         seeds = [LAUNCH_SEED, mint.key().as_ref()],
@@ -62,21 +60,20 @@ pub struct InitializeLaunch<'info> {
     pub launch_state: Account<'info, LaunchState>,
 
     /// SOL vault PDA — holds real SOL collected from net buys.
+    /// Not initialized here; receives SOL via system_program::transfer in buy.
     ///
-    /// CHECK: Program-owned PDA. Only stores lamports. Created here, drained only by sell.
+    /// CHECK: Program-derived PDA validated by seeds. Only stores lamports.
     #[account(
-        init_if_needed,
-        payer = creator,
-        space = 0,
+        mut,
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
         bump,
     )]
-    pub sol_vault: SystemAccount<'info>,
+    pub sol_vault: UncheckedAccount<'info>,
 
     /// Bonding curve token vault — ATA of the launch_state PDA.
     /// Receives 95% of total supply (curve_token_allocation).
     #[account(
-        init_if_needed,
+        init,
         payer = creator,
         associated_token::mint = mint,
         associated_token::authority = launch_state,
@@ -86,7 +83,7 @@ pub struct InitializeLaunch<'info> {
     /// Creator reward vault — program-derived token account at a fixed PDA.
     /// Receives 5% of total supply. Locked until graduation.
     #[account(
-        init_if_needed,
+        init,
         payer = creator,
         seeds = [CREATOR_REWARD_SEED, mint.key().as_ref()],
         bump,
