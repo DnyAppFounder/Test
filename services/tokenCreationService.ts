@@ -330,7 +330,7 @@ class TokenCreationService {
             creator:  creatorWallet,
           },
         };
-        metadataUri = await launchpadService.uploadMetadata(metadata, record.id);
+        metadataUri = await launchpadService.uploadMetadata(metadata, record.id, creatorWallet);
         diag('TOKEN_METADATA_UPLOAD_RESULT', { metadataUri });
       } catch (metaErr: any) {
         metadataUploadError = metaErr?.message || 'Unknown storage error during metadata upload';
