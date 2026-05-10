@@ -54,21 +54,22 @@ pub struct ClaimCreatorReward<'info> {
 }
 
 pub fn handler(ctx: Context<ClaimCreatorReward>) -> Result<()> {
-    // ── Phase 1: read + validate (no mutable borrows stored) ─────────────────
+    // ── Phase 1: validate + copy all values before any borrow ─────────────────
     require!(ctx.accounts.launch_state.is_graduated(), CurveError::LaunchNotGraduated);
     require!(!ctx.accounts.launch_state.creator_reward_claimed, CurveError::AlreadyClaimed);
 
-    // Snapshot reward amount and PDA bump before any mutable borrow.
     let reward_amount = ctx.accounts.creator_reward_vault.amount;
     require!(reward_amount > 0, CurveError::NoRewardToClaim);
 
-    let launch_bump = ctx.accounts.launch_state.bump;
-    let mint_key = ctx.accounts.mint.key();
+    // Copy all primitives needed for CPI signing and logging.
+    // Pubkey is Copy, u8 is Copy — no borrows retained after these lines.
+    let launch_bump  = ctx.accounts.launch_state.bump;
+    let log_mint     = ctx.accounts.launch_state.mint;
+    let log_creator  = ctx.accounts.launch_state.creator;
+    let mint_key     = ctx.accounts.mint.key();
 
-    // ── Phase 2: CPI (no stored mutable borrow during this phase) ────────────
-    // The creator_reward_vault's authority is the launch_state PDA, so sign
-    // the CPI with launch_state seeds.
-    let bump_bytes = [launch_bump];
+    // ── Phase 2: CPI signed by launch_state PDA ───────────────────────────────
+    let bump_bytes   = [launch_bump];
     let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &bump_bytes];
     let signer_seeds = &[seeds];
 
@@ -76,8 +77,8 @@ pub fn handler(ctx: Context<ClaimCreatorReward>) -> Result<()> {
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from: ctx.accounts.creator_reward_vault.to_account_info(),
-                to: ctx.accounts.creator_token_account.to_account_info(),
+                from:      ctx.accounts.creator_reward_vault.to_account_info(),
+                to:        ctx.accounts.creator_token_account.to_account_info(),
                 authority: ctx.accounts.launch_state.to_account_info(),
             },
             signer_seeds,
@@ -85,14 +86,13 @@ pub fn handler(ctx: Context<ClaimCreatorReward>) -> Result<()> {
         reward_amount,
     )?;
 
-    // ── Phase 3: mutate state (single mutable borrow at the end) ─────────────
-    let state = &mut ctx.accounts.launch_state;
-    state.creator_reward_claimed = true;
+    // ── Phase 3: direct field write — no intermediate &mut binding ────────────
+    ctx.accounts.launch_state.creator_reward_claimed = true;
 
     msg!(
         "CREATOR REWARD CLAIMED: mint={} creator={} amount={}",
-        state.mint,
-        state.creator,
+        log_mint,
+        log_creator,
         reward_amount,
     );
 

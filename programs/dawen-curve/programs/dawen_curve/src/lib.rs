@@ -40,6 +40,7 @@
 ///   Replace the placeholder below with the keypair from `anchor keys list`
 ///   before deploying. Never use this placeholder in production.
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::pubkey;
 
 pub mod errors;
 pub mod instructions;
