@@ -106,7 +106,7 @@ pub struct InitializeLaunch<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
+    // Sysvar<'info, Rent> removed: causes try_from_unchecked derive errors on modern toolchains.
 }
 
 pub fn handler(ctx: Context<InitializeLaunch>, args: InitializeLaunchArgs) -> Result<()> {

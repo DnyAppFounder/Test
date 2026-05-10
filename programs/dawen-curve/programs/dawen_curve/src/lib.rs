@@ -40,7 +40,6 @@
 ///   Replace the placeholder below with the keypair from `anchor keys list`
 ///   before deploying. Never use this placeholder in production.
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::pubkey;
 
 pub mod errors;
 pub mod instructions;
@@ -52,7 +51,8 @@ use instructions::*;
 declare_id!("DCurve1vZEq4cPjhfRDsGBrXJGBnwuQ8LqFp5gNmpBJv");
 
 /// DAWEN platform fee treasury. Buy/sell fees are forwarded here atomically.
-pub const TREASURY: Pubkey = pubkey!("FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X");
+pub const TREASURY: Pubkey =
+    anchor_lang::solana_program::pubkey!("FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X");
 
 /// LaunchState PDA seed.
 pub const LAUNCH_SEED: &[u8] = b"launch";
