@@ -1,5 +1,5 @@
 [package]
-name = "dawen-curve"
+name = "dawen_curve"
 version = "0.1.0"
 description = "DAWEN Bonding Curve Program — pump.fun-style virtual reserve AMM"
 edition = "2021"
