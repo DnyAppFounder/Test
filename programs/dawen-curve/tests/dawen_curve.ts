@@ -1,12 +1,19 @@
 /**
- * DAWEN Bonding Curve — Anchor Test Suite
+ * DAWEN Bonding Curve — V1 Anchor Test Suite
  *
- * Run with:
- *   anchor test                 (spins up a local validator automatically)
- *   anchor test --skip-local-validator  (if validator already running)
+ * V1 Tokenomics:
+ *   Total supply:   1,000,000,000 tokens  (6 decimals)
+ *   Curve vault:      950,000,000 tokens  (95%) — bonding curve
+ *   Creator reward:    50,000,000 tokens  ( 5%) — locked until graduation
  *
- * Each describe block is independent and creates its own mint + launch so
- * tests don't interfere with each other.
+ *   Initial virtual SOL reserve:   30 SOL
+ *   Initial virtual token reserve: ~1.073B tokens
+ *   Initial market cap:            ~28 SOL (~$2,500 at $89/SOL)
+ *   Graduation threshold:          85 SOL (real SOL collected)
+ *   Buy/sell fee:                  1% to DAWEN treasury
+ *
+ * Run:
+ *   cd programs/dawen-curve && anchor test
  */
 
 import * as anchor from "@coral-xyz/anchor";
@@ -16,7 +23,6 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
-  Transaction,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -30,33 +36,53 @@ import {
 import { expect } from "chai";
 import { DawenCurve } from "../target/types/dawen_curve";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── V1 Tokenomics Constants ──────────────────────────────────────────────────
+
+const DECIMALS = 6;
+const ONE_TOKEN = 10 ** DECIMALS; // 1_000_000
+
+// Raw unit amounts (whole_tokens × 10^6)
+const TOTAL_SUPPLY_RAW = new BN("1000000000000000");   // 1B  tokens
+const CURVE_ALLOC_RAW  = new BN("950000000000000");    // 950M tokens (95%)
+const CREATOR_ALLOC_RAW = new BN("50000000000000");    // 50M  tokens ( 5%)
+
+// Virtual reserves — gives ~28 SOL initial mcap (~$2,500 at $89/SOL)
+const INIT_VIRTUAL_SOL   = new BN(30 * LAMPORTS_PER_SOL);  // 30 SOL
+const INIT_VIRTUAL_TOKEN = new BN("1073000191000000");      // ~1.073B tokens raw
+
+// Use a LOW threshold in tests so we don't need 85 SOL per test.
+// Tests that check the 85 SOL default use GRAD_THRESHOLD_DEFAULT.
+const GRAD_THRESHOLD_TEST    = new BN(0.5 * LAMPORTS_PER_SOL); // 0.5 SOL (fast tests)
+const GRAD_THRESHOLD_DEFAULT = new BN(85 * LAMPORTS_PER_SOL);  // 85 SOL (production)
+
+const PLATFORM_FEE_BPS = 100; // 1%
 
 const TREASURY = new PublicKey("FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X");
 
-// Pump.fun-style initial virtual reserves for a 9-decimal token
-const INIT_VIRTUAL_SOL = new BN(30 * LAMPORTS_PER_SOL);          // 30 SOL
-const INIT_VIRTUAL_TOKEN = new BN("1073000191000000000");          // ~1.073B tokens
-const CURVE_ALLOCATION = new BN("793100000000000000");             // ~793.1M tokens
-const TOTAL_SUPPLY = new BN("1000000000000000000");                // 1B tokens
-const GRADUATION_THRESHOLD = new BN(85 * LAMPORTS_PER_SOL);       // 85 SOL
-const PLATFORM_FEE_BPS = 100;                                       // 1%
+// ─── PDA Helpers ──────────────────────────────────────────────────────────────
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-async function derivelaunchState(mint: PublicKey, programId: PublicKey) {
+function derivelaunchState(mint: PublicKey, programId: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("launch"), mint.toBuffer()],
     programId
   );
 }
 
-async function deriveSolVault(mint: PublicKey, programId: PublicKey) {
+function deriveSolVault(mint: PublicKey, programId: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("sol_vault"), mint.toBuffer()],
     programId
   );
 }
+
+function deriveCreatorRewardVault(mint: PublicKey, programId: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("creator_reward"), mint.toBuffer()],
+    programId
+  );
+}
+
+// ─── Airdrop Helper ───────────────────────────────────────────────────────────
 
 async function airdrop(
   connection: anchor.web3.Connection,
@@ -68,32 +94,42 @@ async function airdrop(
   await connection.confirmTransaction({ signature: sig, ...latest });
 }
 
+// ─── Setup Helper ─────────────────────────────────────────────────────────────
+
+interface LaunchContext {
+  creator: Keypair;
+  mint: PublicKey;
+  launchState: PublicKey;
+  solVault: PublicKey;
+  tokenVault: PublicKey;
+  creatorRewardVault: PublicKey;
+  creatorAta: PublicKey;
+}
+
 /**
- * Set up a fresh mint and launch for use in a test.
- * Returns everything the test needs to make further calls.
+ * Create a fresh mint, mint total supply to creator, and call initialize_launch.
+ * Returns all relevant accounts.
  */
 async function setupLaunch(
   program: Program<DawenCurve>,
   provider: anchor.AnchorProvider,
-  args?: {
-    virtualSol?: BN;
-    virtualToken?: BN;
-    allocation?: BN;
-    total?: BN;
+  opts: {
     threshold?: BN;
     feeBps?: number;
-  }
-) {
+    virtualSol?: BN;
+    virtualToken?: BN;
+  } = {}
+): Promise<LaunchContext> {
   const creator = Keypair.generate();
-  await airdrop(provider.connection, creator.publicKey, 10);
+  await airdrop(provider.connection, creator.publicKey, 15);
 
-  // Create SPL mint (9 decimals)
+  // Create 6-decimal mint
   const mint = await createMint(
     provider.connection,
     creator,
     creator.publicKey,
     null,
-    9
+    DECIMALS
   );
 
   // Mint total supply to creator
@@ -103,42 +139,41 @@ async function setupLaunch(
     mint,
     creator.publicKey
   );
-  const totalSupply = args?.total ?? TOTAL_SUPPLY;
   await mintTo(
     provider.connection,
     creator,
     mint,
     creatorAta,
     creator,
-    BigInt(totalSupply.toString())
+    BigInt(TOTAL_SUPPLY_RAW.toString())
   );
 
-  const [launchState, launchBump] = await derivelaunchState(
-    mint,
-    program.programId
-  );
-  const [solVault] = await deriveSolVault(mint, program.programId);
+  const [launchState] = derivelaunchState(mint, program.programId);
+  const [solVault]    = deriveSolVault(mint, program.programId);
+  const [creatorRewardVault] = deriveCreatorRewardVault(mint, program.programId);
   const tokenVault = await getAssociatedTokenAddress(mint, launchState, true);
 
   await program.methods
     .initializeLaunch({
-      virtualSolReserve: args?.virtualSol ?? INIT_VIRTUAL_SOL,
-      virtualTokenReserve: args?.virtualToken ?? INIT_VIRTUAL_TOKEN,
-      curveTokenAllocation: args?.allocation ?? CURVE_ALLOCATION,
-      totalSupply: totalSupply,
-      graduationThreshold: args?.threshold ?? GRADUATION_THRESHOLD,
-      platformFeeBps: args?.feeBps ?? PLATFORM_FEE_BPS,
+      virtualSolReserve:     opts.virtualSol  ?? INIT_VIRTUAL_SOL,
+      virtualTokenReserve:   opts.virtualToken ?? INIT_VIRTUAL_TOKEN,
+      curveTokenAllocation:  CURVE_ALLOC_RAW,
+      creatorRewardAmount:   CREATOR_ALLOC_RAW,
+      totalSupply:           TOTAL_SUPPLY_RAW,
+      graduationThreshold:   opts.threshold ?? GRAD_THRESHOLD_TEST,
+      platformFeeBps:        opts.feeBps    ?? PLATFORM_FEE_BPS,
     })
     .accounts({
-      creator: creator.publicKey,
+      creator:             creator.publicKey,
       mint,
       launchState,
       solVault,
       tokenVault,
+      creatorRewardVault,
       creatorTokenAccount: creatorAta,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
+      tokenProgram:             TOKEN_PROGRAM_ID,
+      associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram:            SystemProgram.programId,
     })
     .signers([creator])
     .rpc();
@@ -149,13 +184,70 @@ async function setupLaunch(
     launchState,
     solVault,
     tokenVault,
+    creatorRewardVault,
     creatorAta,
   };
 }
 
+// ─── Buy Helper ───────────────────────────────────────────────────────────────
+
+async function executeBuy(
+  program: Program<DawenCurve>,
+  ctx: LaunchContext,
+  buyer: Keypair,
+  buyerAta: PublicKey,
+  solAmount: BN,
+  minTokensOut: BN = new BN(0)
+) {
+  return program.methods
+    .buy({ solAmount, minTokensOut })
+    .accounts({
+      buyer:             buyer.publicKey,
+      mint:              ctx.mint,
+      launchState:       ctx.launchState,
+      tokenVault:        ctx.tokenVault,
+      solVault:          ctx.solVault,
+      buyerTokenAccount: buyerAta,
+      treasury:          TREASURY,
+      tokenProgram:             TOKEN_PROGRAM_ID,
+      associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram:            SystemProgram.programId,
+    })
+    .signers([buyer])
+    .rpc();
+}
+
+// ─── Sell Helper ──────────────────────────────────────────────────────────────
+
+async function executeSell(
+  program: Program<DawenCurve>,
+  ctx: LaunchContext,
+  seller: Keypair,
+  sellerAta: PublicKey,
+  tokenAmount: BN,
+  minSolOut: BN = new BN(0)
+) {
+  return program.methods
+    .sell({ tokenAmount, minSolOut })
+    .accounts({
+      seller:              seller.publicKey,
+      mint:                ctx.mint,
+      launchState:         ctx.launchState,
+      tokenVault:          ctx.tokenVault,
+      solVault:            ctx.solVault,
+      sellerTokenAccount:  sellerAta,
+      treasury:            TREASURY,
+      tokenProgram:             TOKEN_PROGRAM_ID,
+      associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram:            SystemProgram.programId,
+    })
+    .signers([seller])
+    .rpc();
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("dawen_curve", () => {
+describe("dawen_curve — V1", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.DawenCurve as Program<DawenCurve>;
@@ -164,38 +256,47 @@ describe("dawen_curve", () => {
 
   describe("initialize_launch", () => {
     it("creates LaunchState with correct fields", async () => {
-      const { mint, launchState, tokenVault } = await setupLaunch(
-        program,
-        provider
-      );
+      const ctx = await setupLaunch(program, provider);
+      const state = await program.account.launchState.fetch(ctx.launchState);
 
-      const state = await program.account.launchState.fetch(launchState);
-
-      expect(state.mint.toBase58()).to.equal(mint.toBase58());
+      expect(state.mint.toBase58()).to.equal(ctx.mint.toBase58());
+      expect(state.creator.toBase58()).to.equal(ctx.creator.publicKey.toBase58());
       expect(state.virtualSolReserve.eq(INIT_VIRTUAL_SOL)).to.be.true;
       expect(state.virtualTokenReserve.eq(INIT_VIRTUAL_TOKEN)).to.be.true;
-      expect(state.curveTokenAllocation.eq(CURVE_ALLOCATION)).to.be.true;
+      expect(state.curveTokenAllocation.eq(CURVE_ALLOC_RAW)).to.be.true;
+      expect(state.creatorRewardAmount.eq(CREATOR_ALLOC_RAW)).to.be.true;
+      expect(state.totalSupply.eq(TOTAL_SUPPLY_RAW)).to.be.true;
       expect(state.realSolCollected.toNumber()).to.equal(0);
       expect(state.tokensSold.toNumber()).to.equal(0);
       expect(state.platformFeeBps).to.equal(PLATFORM_FEE_BPS);
       expect(state.status).to.deep.equal({ active: {} });
+      expect(state.creatorRewardClaimed).to.be.false;
       expect(state.graduatedAt).to.be.null;
     });
 
-    it("moves curve allocation into token vault", async () => {
-      const { tokenVault } = await setupLaunch(program, provider);
-      const vault = await getAccount(provider.connection, tokenVault);
-      expect(vault.amount.toString()).to.equal(CURVE_ALLOCATION.toString());
+    it("bonding curve vault receives exactly 950,000,000 tokens (95%)", async () => {
+      const ctx = await setupLaunch(program, provider);
+      const vault = await getAccount(provider.connection, ctx.tokenVault);
+      expect(vault.amount.toString()).to.equal(CURVE_ALLOC_RAW.toString());
     });
 
-    it("rejects fee_bps > 1000", async () => {
+    it("creator reward vault receives exactly 50,000,000 tokens (5%)", async () => {
+      const ctx = await setupLaunch(program, provider);
+      const vault = await getAccount(provider.connection, ctx.creatorRewardVault);
+      expect(vault.amount.toString()).to.equal(CREATOR_ALLOC_RAW.toString());
+    });
+
+    it("allocations sum to total supply", () => {
+      const sum = CURVE_ALLOC_RAW.add(CREATOR_ALLOC_RAW);
+      expect(sum.eq(TOTAL_SUPPLY_RAW)).to.be.true;
+    });
+
+    it("rejects platform_fee_bps > 1000", async () => {
       try {
         await setupLaunch(program, provider, { feeBps: 1001 });
         expect.fail("should have thrown");
       } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "InvalidFeeBps"
-        );
+        expect(e.error?.errorCode?.code ?? e.message).to.include("InvalidFeeBps");
       }
     });
 
@@ -213,7 +314,7 @@ describe("dawen_curve", () => {
     it("rejects virtual_token_reserve < curve_allocation", async () => {
       try {
         await setupLaunch(program, provider, {
-          virtualToken: CURVE_ALLOCATION.subn(1),
+          virtualToken: CURVE_ALLOC_RAW.subn(1),
         });
         expect.fail("should have thrown");
       } catch (e: any) {
@@ -227,7 +328,7 @@ describe("dawen_curve", () => {
   // ── buy ────────────────────────────────────────────────────────────────────
 
   describe("buy", () => {
-    let ctx: Awaited<ReturnType<typeof setupLaunch>>;
+    let ctx: LaunchContext;
     let buyer: Keypair;
     let buyerAta: PublicKey;
 
@@ -243,279 +344,182 @@ describe("dawen_curve", () => {
       );
     });
 
-    async function executeBuy(solAmount: BN, minTokensOut: BN = new BN(0)) {
-      return program.methods
-        .buy({ solAmount, minTokensOut })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
-    }
-
-    it("buyer receives tokens after buy", async () => {
-      const solIn = new BN(1 * LAMPORTS_PER_SOL);
-      await executeBuy(solIn);
-
-      const buyerAcct = await getAccount(provider.connection, buyerAta);
-      expect(Number(buyerAcct.amount)).to.be.greaterThan(0);
+    it("buyer receives tokens from bonding curve vault", async () => {
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
+      const acct = await getAccount(provider.connection, buyerAta);
+      expect(Number(acct.amount)).to.be.greaterThan(0);
     });
 
-    it("SOL vault balance increases by net SOL (after fee)", async () => {
-      const solIn = new BN(1 * LAMPORTS_PER_SOL);
-      const vaultBefore = await provider.connection.getBalance(ctx.solVault);
+    it("sends 1% fee to DAWEN treasury", async () => {
+      const solIn = new BN(LAMPORTS_PER_SOL); // 1 SOL
+      const expectedFee = Math.floor(LAMPORTS_PER_SOL * PLATFORM_FEE_BPS / 10_000);
 
-      await executeBuy(solIn);
-
-      const vaultAfter = await provider.connection.getBalance(ctx.solVault);
-      const fee = Math.floor((1 * LAMPORTS_PER_SOL * PLATFORM_FEE_BPS) / 10_000);
-      const expectedNet = 1 * LAMPORTS_PER_SOL - fee;
-      expect(vaultAfter - vaultBefore).to.equal(expectedNet);
-    });
-
-    it("platform fee is sent to DAWEN treasury", async () => {
-      const solIn = new BN(1 * LAMPORTS_PER_SOL);
       const treasuryBefore = await provider.connection.getBalance(TREASURY);
-
-      await executeBuy(solIn);
-
+      await executeBuy(program, ctx, buyer, buyerAta, solIn);
       const treasuryAfter = await provider.connection.getBalance(TREASURY);
-      const expectedFee = Math.floor(
-        (1 * LAMPORTS_PER_SOL * PLATFORM_FEE_BPS) / 10_000
-      );
+
       expect(treasuryAfter - treasuryBefore).to.equal(expectedFee);
     });
 
-    it("virtual reserves update correctly after buy", async () => {
-      const solIn = new BN(1 * LAMPORTS_PER_SOL);
-      const stateBefore = await program.account.launchState.fetch(
-        ctx.launchState
-      );
+    it("SOL vault receives net SOL (gross − 1% fee)", async () => {
+      const solIn = new BN(LAMPORTS_PER_SOL);
+      const fee = Math.floor(LAMPORTS_PER_SOL * PLATFORM_FEE_BPS / 10_000);
+      const expectedNet = LAMPORTS_PER_SOL - fee;
 
-      await executeBuy(solIn);
+      const vaultBefore = await provider.connection.getBalance(ctx.solVault);
+      await executeBuy(program, ctx, buyer, buyerAta, solIn);
+      const vaultAfter = await provider.connection.getBalance(ctx.solVault);
 
-      const stateAfter = await program.account.launchState.fetch(
-        ctx.launchState
-      );
-      expect(stateAfter.virtualSolReserve.gt(stateBefore.virtualSolReserve)).to
-        .be.true;
-      expect(
-        stateAfter.virtualTokenReserve.lt(stateBefore.virtualTokenReserve)
-      ).to.be.true;
-      expect(stateAfter.realSolCollected.gt(new BN(0))).to.be.true;
-      expect(stateAfter.tokensSold.gt(new BN(0))).to.be.true;
+      expect(vaultAfter - vaultBefore).to.equal(expectedNet);
     });
 
-    it("slippage protection rejects buy with min_tokens_out too high", async () => {
-      const solIn = new BN(1 * LAMPORTS_PER_SOL);
-      const impossibleMin = new BN("999999999999999999");
+    it("updates realSolCollected and tokensSold after buy", async () => {
+      const before = await program.account.launchState.fetch(ctx.launchState);
+
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
+
+      const after = await program.account.launchState.fetch(ctx.launchState);
+      expect(after.realSolCollected.gt(before.realSolCollected)).to.be.true;
+      expect(after.tokensSold.gt(before.tokensSold)).to.be.true;
+    });
+
+    it("virtual reserves update correctly (price rises)", async () => {
+      const before = await program.account.launchState.fetch(ctx.launchState);
+      const priceBefore =
+        before.virtualSolReserve.toNumber() / before.virtualTokenReserve.toNumber();
+
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
+
+      const after = await program.account.launchState.fetch(ctx.launchState);
+      const priceAfter =
+        after.virtualSolReserve.toNumber() / after.virtualTokenReserve.toNumber();
+
+      expect(priceAfter).to.be.greaterThan(priceBefore);
+      expect(after.virtualSolReserve.gt(before.virtualSolReserve)).to.be.true;
+      expect(after.virtualTokenReserve.lt(before.virtualTokenReserve)).to.be.true;
+    });
+
+    it("rejects buy with slippage — min_tokens_out too high", async () => {
       try {
-        await executeBuy(solIn, impossibleMin);
+        const impossibleMin = new BN("999999999999999");
+        await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL), impossibleMin);
         expect.fail("should have thrown");
       } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "SlippageExceeded"
-        );
+        expect(e.error?.errorCode?.code ?? e.message).to.include("SlippageExceeded");
       }
     });
 
     it("rejects buy with zero sol_amount", async () => {
       try {
-        await executeBuy(new BN(0));
+        await executeBuy(program, ctx, buyer, buyerAta, new BN(0));
         expect.fail("should have thrown");
       } catch (e: any) {
         expect(e.error?.errorCode?.code ?? e.message).to.include("ZeroAmount");
       }
-    });
-
-    it("price rises after each buy", async () => {
-      const stateBefore = await program.account.launchState.fetch(
-        ctx.launchState
-      );
-      const priceBefore =
-        stateBefore.virtualSolReserve.toNumber() /
-        stateBefore.virtualTokenReserve.toNumber();
-
-      await executeBuy(new BN(1 * LAMPORTS_PER_SOL));
-
-      const stateAfter = await program.account.launchState.fetch(
-        ctx.launchState
-      );
-      const priceAfter =
-        stateAfter.virtualSolReserve.toNumber() /
-        stateAfter.virtualTokenReserve.toNumber();
-
-      expect(priceAfter).to.be.greaterThan(priceBefore);
     });
   });
 
   // ── sell ───────────────────────────────────────────────────────────────────
 
   describe("sell", () => {
-    let ctx: Awaited<ReturnType<typeof setupLaunch>>;
-    let buyer: Keypair;
-    let buyerAta: PublicKey;
+    let ctx: LaunchContext;
+    let trader: Keypair;
+    let traderAta: PublicKey;
 
     beforeEach(async () => {
       ctx = await setupLaunch(program, provider);
-      buyer = Keypair.generate();
-      await airdrop(provider.connection, buyer.publicKey, 5);
-      buyerAta = await createAssociatedTokenAccount(
+      trader = Keypair.generate();
+      await airdrop(provider.connection, trader.publicKey, 5);
+      traderAta = await createAssociatedTokenAccount(
         provider.connection,
-        buyer,
+        trader,
         ctx.mint,
-        buyer.publicKey
+        trader.publicKey
       );
-      // Buy first so the buyer has tokens to sell
-      await program.methods
-        .buy({
-          solAmount: new BN(2 * LAMPORTS_PER_SOL),
-          minTokensOut: new BN(0),
-        })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
+      // Pre-buy so trader has tokens to sell
+      await executeBuy(program, ctx, trader, traderAta, new BN(2 * LAMPORTS_PER_SOL));
     });
-
-    async function executeSell(tokenAmount: BN, minSolOut: BN = new BN(0)) {
-      return program.methods
-        .sell({ tokenAmount, minSolOut })
-        .accounts({
-          seller: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          sellerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
-    }
 
     it("seller receives SOL after selling tokens", async () => {
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
+      const tokenAcct = await getAccount(provider.connection, traderAta);
       const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
 
-      const sellerLamportsBefore = await provider.connection.getBalance(
-        buyer.publicKey
-      );
-      await executeSell(tokensToSell);
-      const sellerLamportsAfter = await provider.connection.getBalance(
-        buyer.publicKey
-      );
+      const solBefore = await provider.connection.getBalance(trader.publicKey);
+      await executeSell(program, ctx, trader, traderAta, tokensToSell);
+      const solAfter = await provider.connection.getBalance(trader.publicKey);
 
-      // Net of transaction fee, seller should have more SOL
-      expect(sellerLamportsAfter).to.be.greaterThan(sellerLamportsBefore - 0.01 * LAMPORTS_PER_SOL);
+      // Net of tx fee the seller should have more SOL than before
+      expect(solAfter).to.be.greaterThan(solBefore - 0.01 * LAMPORTS_PER_SOL);
     });
 
-    it("seller's token balance decreases", async () => {
-      const tokenAcctBefore = await getAccount(provider.connection, buyerAta);
-      const tokensToSell = new BN(tokenAcctBefore.amount.toString()).divn(2);
-
-      await executeSell(tokensToSell);
-
-      const tokenAcctAfter = await getAccount(provider.connection, buyerAta);
-      expect(Number(tokenAcctAfter.amount)).to.be.lessThan(
-        Number(tokenAcctBefore.amount)
-      );
-    });
-
-    it("platform fee sent to treasury on sell", async () => {
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
+    it("sends 1% fee to DAWEN treasury on sell", async () => {
+      const tokenAcct = await getAccount(provider.connection, traderAta);
       const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
 
       const treasuryBefore = await provider.connection.getBalance(TREASURY);
-      await executeSell(tokensToSell);
+      await executeSell(program, ctx, trader, traderAta, tokensToSell);
       const treasuryAfter = await provider.connection.getBalance(TREASURY);
 
       expect(treasuryAfter).to.be.greaterThan(treasuryBefore);
     });
 
-    it("virtual reserves update correctly after sell", async () => {
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
-      const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
+    it("seller token balance decreases after sell", async () => {
+      const beforeAcct = await getAccount(provider.connection, traderAta);
+      const tokensToSell = new BN(beforeAcct.amount.toString()).divn(2);
 
-      const stateBefore = await program.account.launchState.fetch(
-        ctx.launchState
-      );
-      await executeSell(tokensToSell);
-      const stateAfter = await program.account.launchState.fetch(
-        ctx.launchState
-      );
+      await executeSell(program, ctx, trader, traderAta, tokensToSell);
 
-      expect(
-        stateAfter.virtualSolReserve.lt(stateBefore.virtualSolReserve)
-      ).to.be.true;
-      expect(
-        stateAfter.virtualTokenReserve.gt(stateBefore.virtualTokenReserve)
-      ).to.be.true;
+      const afterAcct = await getAccount(provider.connection, traderAta);
+      expect(Number(afterAcct.amount)).to.be.lessThan(Number(beforeAcct.amount));
     });
 
-    it("price falls after sell", async () => {
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
+    it("virtual reserves update correctly (price falls)", async () => {
+      const tokenAcct = await getAccount(provider.connection, traderAta);
       const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
 
-      const stateBefore = await program.account.launchState.fetch(
-        ctx.launchState
-      );
+      const before = await program.account.launchState.fetch(ctx.launchState);
       const priceBefore =
-        stateBefore.virtualSolReserve.toNumber() /
-        stateBefore.virtualTokenReserve.toNumber();
+        before.virtualSolReserve.toNumber() / before.virtualTokenReserve.toNumber();
 
-      await executeSell(tokensToSell);
+      await executeSell(program, ctx, trader, traderAta, tokensToSell);
 
-      const stateAfter = await program.account.launchState.fetch(
-        ctx.launchState
-      );
+      const after = await program.account.launchState.fetch(ctx.launchState);
       const priceAfter =
-        stateAfter.virtualSolReserve.toNumber() /
-        stateAfter.virtualTokenReserve.toNumber();
+        after.virtualSolReserve.toNumber() / after.virtualTokenReserve.toNumber();
 
       expect(priceAfter).to.be.lessThan(priceBefore);
+      expect(after.virtualSolReserve.lt(before.virtualSolReserve)).to.be.true;
+      expect(after.virtualTokenReserve.gt(before.virtualTokenReserve)).to.be.true;
     });
 
-    it("slippage protection rejects sell with min_sol_out too high", async () => {
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
+    it("updates state correctly after sell", async () => {
+      const tokenAcct = await getAccount(provider.connection, traderAta);
+      const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
+
+      const before = await program.account.launchState.fetch(ctx.launchState);
+      await executeSell(program, ctx, trader, traderAta, tokensToSell);
+      const after = await program.account.launchState.fetch(ctx.launchState);
+
+      expect(after.realSolCollected.lt(before.realSolCollected)).to.be.true;
+      expect(after.tokensSold.lt(before.tokensSold)).to.be.true;
+    });
+
+    it("rejects sell with slippage — min_sol_out too high", async () => {
+      const tokenAcct = await getAccount(provider.connection, traderAta);
       const tokensToSell = new BN(tokenAcct.amount.toString()).divn(4);
-      const impossibleMin = new BN(1000 * LAMPORTS_PER_SOL);
+      const impossibleMin = new BN(100 * LAMPORTS_PER_SOL);
 
       try {
-        await executeSell(tokensToSell, impossibleMin);
+        await executeSell(program, ctx, trader, traderAta, tokensToSell, impossibleMin);
         expect.fail("should have thrown");
       } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "SlippageExceeded"
-        );
+        expect(e.error?.errorCode?.code ?? e.message).to.include("SlippageExceeded");
       }
     });
 
     it("rejects sell with zero token_amount", async () => {
       try {
-        await executeSell(new BN(0));
+        await executeSell(program, ctx, trader, traderAta, new BN(0));
         expect.fail("should have thrown");
       } catch (e: any) {
         expect(e.error?.errorCode?.code ?? e.message).to.include("ZeroAmount");
@@ -526,13 +530,11 @@ describe("dawen_curve", () => {
   // ── graduation ────────────────────────────────────────────────────────────
 
   describe("graduation", () => {
-    it("buy auto-graduates when realSolCollected >= threshold", async () => {
-      // Use a very low graduation threshold so a single buy triggers it
-      const lowThreshold = new BN(0.5 * LAMPORTS_PER_SOL);
+    it("buy auto-graduates when realSolCollected reaches threshold (0.5 SOL test)", async () => {
+      // threshold = 0.5 SOL so a 1 SOL buy triggers it
       const ctx = await setupLaunch(program, provider, {
-        threshold: lowThreshold,
+        threshold: GRAD_THRESHOLD_TEST,
       });
-
       const buyer = Keypair.generate();
       await airdrop(provider.connection, buyer.publicKey, 5);
       const buyerAta = await createAssociatedTokenAccount(
@@ -542,37 +544,124 @@ describe("dawen_curve", () => {
         buyer.publicKey
       );
 
-      // This buy should push realSolCollected above 0.5 SOL threshold
-      await program.methods
-        .buy({ solAmount: new BN(1 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
 
       const state = await program.account.launchState.fetch(ctx.launchState);
       expect(state.status).to.deep.equal({ graduated: {} });
       expect(state.graduatedAt).to.not.be.null;
     });
 
-    it("explicit graduate succeeds when threshold is reached", async () => {
-      const lowThreshold = new BN(0.5 * LAMPORTS_PER_SOL);
+    it("85 SOL graduation threshold is stored correctly at default", async () => {
       const ctx = await setupLaunch(program, provider, {
-        threshold: lowThreshold,
+        threshold: GRAD_THRESHOLD_DEFAULT,
       });
+      const state = await program.account.launchState.fetch(ctx.launchState);
+      expect(state.graduationThreshold.eq(GRAD_THRESHOLD_DEFAULT)).to.be.true;
+    });
 
-      // Do a large enough buy to hit threshold but it won't auto-graduate
-      // because we'll use a buy that leaves state.real_sol_collected just above threshold
+    it("explicit graduate fails when threshold is not reached", async () => {
+      const ctx = await setupLaunch(program, provider, {
+        threshold: GRAD_THRESHOLD_DEFAULT, // 85 SOL, won't be hit
+      });
+      const [solVault] = deriveSolVault(ctx.mint, program.programId);
+
+      try {
+        await program.methods
+          .graduate()
+          .accounts({ mint: ctx.mint, launchState: ctx.launchState, solVault })
+          .rpc();
+        expect.fail("should have thrown");
+      } catch (e: any) {
+        expect(e.error?.errorCode?.code ?? e.message).to.include("ThresholdNotReached");
+      }
+    });
+
+    it("buy is blocked after graduation", async () => {
+      const ctx = await setupLaunch(program, provider);
+      const buyer = Keypair.generate();
+      await airdrop(provider.connection, buyer.publicKey, 10);
+      const buyerAta = await createAssociatedTokenAccount(
+        provider.connection,
+        buyer,
+        ctx.mint,
+        buyer.publicKey
+      );
+
+      // First buy graduates (threshold = 0.5 SOL)
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
+
+      // Second buy must fail
+      try {
+        await executeBuy(program, ctx, buyer, buyerAta, new BN(0.1 * LAMPORTS_PER_SOL));
+        expect.fail("should have thrown");
+      } catch (e: any) {
+        expect(e.error?.errorCode?.code ?? e.message).to.include("LaunchNotActive");
+      }
+    });
+
+    it("sell is blocked after graduation", async () => {
+      const ctx = await setupLaunch(program, provider);
+      const trader = Keypair.generate();
+      await airdrop(provider.connection, trader.publicKey, 10);
+      const traderAta = await createAssociatedTokenAccount(
+        provider.connection,
+        trader,
+        ctx.mint,
+        trader.publicKey
+      );
+
+      // Buy triggers graduation and gives trader tokens
+      await executeBuy(program, ctx, trader, traderAta, new BN(LAMPORTS_PER_SOL));
+
+      const tokenAcct = await getAccount(provider.connection, traderAta);
+      const tokensToSell = new BN(tokenAcct.amount.toString()).divn(4);
+
+      try {
+        await executeSell(program, ctx, trader, traderAta, tokensToSell);
+        expect.fail("should have thrown");
+      } catch (e: any) {
+        expect(e.error?.errorCode?.code ?? e.message).to.include("LaunchNotActive");
+      }
+    });
+  });
+
+  // ── claim_creator_reward ──────────────────────────────────────────────────
+
+  describe("claim_creator_reward", () => {
+    it("fails before graduation", async () => {
+      // threshold = 85 SOL so no buy will graduate it
+      const ctx = await setupLaunch(program, provider, {
+        threshold: GRAD_THRESHOLD_DEFAULT,
+      });
+      const creatorAta = await getAssociatedTokenAddress(
+        ctx.mint,
+        ctx.creator.publicKey
+      );
+
+      try {
+        await program.methods
+          .claimCreatorReward()
+          .accounts({
+            creator:             ctx.creator.publicKey,
+            mint:                ctx.mint,
+            launchState:         ctx.launchState,
+            creatorRewardVault:  ctx.creatorRewardVault,
+            creatorTokenAccount: creatorAta,
+            tokenProgram:             TOKEN_PROGRAM_ID,
+            associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram:            SystemProgram.programId,
+          })
+          .signers([ctx.creator])
+          .rpc();
+        expect.fail("should have thrown");
+      } catch (e: any) {
+        expect(e.error?.errorCode?.code ?? e.message).to.include("LaunchNotGraduated");
+      }
+    });
+
+    it("succeeds after graduation — creator receives 50M tokens", async () => {
+      // Graduate via buy
+      const ctx = await setupLaunch(program, provider);
       const buyer = Keypair.generate();
       await airdrop(provider.connection, buyer.publicKey, 5);
       const buyerAta = await createAssociatedTokenAccount(
@@ -581,167 +670,152 @@ describe("dawen_curve", () => {
         ctx.mint,
         buyer.publicKey
       );
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
 
-      await program.methods
-        .buy({ solAmount: new BN(1 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
-
-      // The buy already graduated, so we verify the state is Graduated
+      // Verify graduated
       const state = await program.account.launchState.fetch(ctx.launchState);
       expect(state.status).to.deep.equal({ graduated: {} });
+
+      // Creator claims reward
+      const creatorAta = await createAssociatedTokenAccount(
+        provider.connection,
+        ctx.creator,
+        ctx.mint,
+        ctx.creator.publicKey
+      );
+
+      const rewardVaultBefore = await getAccount(
+        provider.connection,
+        ctx.creatorRewardVault
+      );
+
+      await program.methods
+        .claimCreatorReward()
+        .accounts({
+          creator:             ctx.creator.publicKey,
+          mint:                ctx.mint,
+          launchState:         ctx.launchState,
+          creatorRewardVault:  ctx.creatorRewardVault,
+          creatorTokenAccount: creatorAta,
+          tokenProgram:             TOKEN_PROGRAM_ID,
+          associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram:            SystemProgram.programId,
+        })
+        .signers([ctx.creator])
+        .rpc();
+
+      // Creator ATA now holds the reward
+      const creatorAcct = await getAccount(provider.connection, creatorAta);
+      expect(creatorAcct.amount.toString()).to.equal(
+        rewardVaultBefore.amount.toString()
+      );
+      expect(creatorAcct.amount.toString()).to.equal(CREATOR_ALLOC_RAW.toString());
+
+      // Reward vault is now empty
+      const rewardVaultAfter = await getAccount(
+        provider.connection,
+        ctx.creatorRewardVault
+      );
+      expect(rewardVaultAfter.amount.toString()).to.equal("0");
+
+      // State marks reward as claimed
+      const stateAfter = await program.account.launchState.fetch(ctx.launchState);
+      expect(stateAfter.creatorRewardClaimed).to.be.true;
     });
 
-    it("explicit graduate fails when threshold is NOT reached", async () => {
+    it("double claim fails — AlreadyClaimed", async () => {
+      // Graduate
       const ctx = await setupLaunch(program, provider);
-      const [solVault] = await deriveSolVault(ctx.mint, program.programId);
-
-      try {
-        await program.methods
-          .graduate()
-          .accounts({
-            mint: ctx.mint,
-            launchState: ctx.launchState,
-            solVault,
-          })
-          .rpc();
-        expect.fail("should have thrown");
-      } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "ThresholdNotReached"
-        );
-      }
-    });
-
-    it("buy is blocked after graduation", async () => {
-      const lowThreshold = new BN(0.5 * LAMPORTS_PER_SOL);
-      const ctx = await setupLaunch(program, provider, {
-        threshold: lowThreshold,
-      });
-
       const buyer = Keypair.generate();
-      await airdrop(provider.connection, buyer.publicKey, 10);
+      await airdrop(provider.connection, buyer.publicKey, 5);
       const buyerAta = await createAssociatedTokenAccount(
         provider.connection,
         buyer,
         ctx.mint,
         buyer.publicKey
       );
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
 
-      // First buy triggers graduation
+      const creatorAta = await createAssociatedTokenAccount(
+        provider.connection,
+        ctx.creator,
+        ctx.mint,
+        ctx.creator.publicKey
+      );
+
+      const claimAccounts = {
+        creator:             ctx.creator.publicKey,
+        mint:                ctx.mint,
+        launchState:         ctx.launchState,
+        creatorRewardVault:  ctx.creatorRewardVault,
+        creatorTokenAccount: creatorAta,
+        tokenProgram:             TOKEN_PROGRAM_ID,
+        associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram:            SystemProgram.programId,
+      };
+
+      // First claim succeeds
       await program.methods
-        .buy({ solAmount: new BN(1 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
+        .claimCreatorReward()
+        .accounts(claimAccounts)
+        .signers([ctx.creator])
         .rpc();
 
-      // Second buy should fail with LaunchNotActive
+      // Second claim must fail
       try {
         await program.methods
-          .buy({ solAmount: new BN(0.1 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-          .accounts({
-            buyer: buyer.publicKey,
-            mint: ctx.mint,
-            launchState: ctx.launchState,
-            tokenVault: ctx.tokenVault,
-            solVault: ctx.solVault,
-            buyerTokenAccount: buyerAta,
-            treasury: TREASURY,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([buyer])
+          .claimCreatorReward()
+          .accounts(claimAccounts)
+          .signers([ctx.creator])
           .rpc();
         expect.fail("should have thrown");
       } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "LaunchNotActive"
-        );
+        expect(e.error?.errorCode?.code ?? e.message).to.include("AlreadyClaimed");
       }
     });
 
-    it("sell is blocked after graduation", async () => {
-      const lowThreshold = new BN(0.5 * LAMPORTS_PER_SOL);
-      const ctx = await setupLaunch(program, provider, {
-        threshold: lowThreshold,
-      });
-
+    it("claim by wrong wallet fails — NotCreator", async () => {
+      // Graduate
+      const ctx = await setupLaunch(program, provider);
       const buyer = Keypair.generate();
-      await airdrop(provider.connection, buyer.publicKey, 10);
+      await airdrop(provider.connection, buyer.publicKey, 5);
       const buyerAta = await createAssociatedTokenAccount(
         provider.connection,
         buyer,
         ctx.mint,
         buyer.publicKey
       );
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
 
-      // Buy triggers graduation and gives buyer tokens
-      await program.methods
-        .buy({ solAmount: new BN(1 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-        .accounts({
-          buyer: buyer.publicKey,
-          mint: ctx.mint,
-          launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault,
-          solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta,
-          treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
+      // Attacker tries to claim
+      const attacker = Keypair.generate();
+      await airdrop(provider.connection, attacker.publicKey, 1);
+      const attackerAta = await createAssociatedTokenAccount(
+        provider.connection,
+        attacker,
+        ctx.mint,
+        attacker.publicKey
+      );
 
-      const tokenAcct = await getAccount(provider.connection, buyerAta);
-      const tokensToSell = new BN(tokenAcct.amount.toString()).divn(4);
-
-      // Sell should now fail
       try {
         await program.methods
-          .sell({ tokenAmount: tokensToSell, minSolOut: new BN(0) })
+          .claimCreatorReward()
           .accounts({
-            seller: buyer.publicKey,
-            mint: ctx.mint,
-            launchState: ctx.launchState,
-            tokenVault: ctx.tokenVault,
-            solVault: ctx.solVault,
-            sellerTokenAccount: buyerAta,
-            treasury: TREASURY,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
+            creator:             attacker.publicKey, // wrong wallet
+            mint:                ctx.mint,
+            launchState:         ctx.launchState,
+            creatorRewardVault:  ctx.creatorRewardVault,
+            creatorTokenAccount: attackerAta,
+            tokenProgram:             TOKEN_PROGRAM_ID,
+            associatedTokenProgram:   ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram:            SystemProgram.programId,
           })
-          .signers([buyer])
+          .signers([attacker])
           .rpc();
         expect.fail("should have thrown");
       } catch (e: any) {
-        expect(e.error?.errorCode?.code ?? e.message).to.include(
-          "LaunchNotActive"
+        expect(e.error?.errorCode?.code ?? e.message).to.match(
+          /NotCreator|ConstraintRaw|A has_one constraint was violated/
         );
       }
     });
@@ -750,10 +824,10 @@ describe("dawen_curve", () => {
   // ── vault integrity ────────────────────────────────────────────────────────
 
   describe("vault integrity", () => {
-    it("sol vault balance equals sum of all net SOL from buys minus sells", async () => {
+    it("SOL vault lamports equal realSolCollected after a buy", async () => {
       const ctx = await setupLaunch(program, provider);
       const buyer = Keypair.generate();
-      await airdrop(provider.connection, buyer.publicKey, 10);
+      await airdrop(provider.connection, buyer.publicKey, 5);
       const buyerAta = await createAssociatedTokenAccount(
         provider.connection,
         buyer,
@@ -761,25 +835,41 @@ describe("dawen_curve", () => {
         buyer.publicKey
       );
 
-      // Buy 2 SOL
-      await program.methods
-        .buy({ solAmount: new BN(2 * LAMPORTS_PER_SOL), minTokensOut: new BN(0) })
-        .accounts({
-          buyer: buyer.publicKey, mint: ctx.mint, launchState: ctx.launchState,
-          tokenVault: ctx.tokenVault, solVault: ctx.solVault,
-          buyerTokenAccount: buyerAta, treasury: TREASURY,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([buyer])
-        .rpc();
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(2 * LAMPORTS_PER_SOL));
 
       const state = await program.account.launchState.fetch(ctx.launchState);
       const vaultBalance = await provider.connection.getBalance(ctx.solVault);
 
-      // The SOL vault should hold exactly realSolCollected
       expect(vaultBalance).to.equal(state.realSolCollected.toNumber());
+    });
+
+    it("creator reward vault is untouched by buy/sell operations", async () => {
+      const ctx = await setupLaunch(program, provider, {
+        threshold: GRAD_THRESHOLD_DEFAULT, // won't graduate
+      });
+      const buyer = Keypair.generate();
+      await airdrop(provider.connection, buyer.publicKey, 5);
+      const buyerAta = await createAssociatedTokenAccount(
+        provider.connection,
+        buyer,
+        ctx.mint,
+        buyer.publicKey
+      );
+
+      // Buy
+      await executeBuy(program, ctx, buyer, buyerAta, new BN(LAMPORTS_PER_SOL));
+
+      // Sell half back
+      const tokenAcct = await getAccount(provider.connection, buyerAta);
+      const tokensToSell = new BN(tokenAcct.amount.toString()).divn(2);
+      await executeSell(program, ctx, buyer, buyerAta, tokensToSell);
+
+      // Creator reward vault must still hold 50M tokens
+      const rewardVault = await getAccount(
+        provider.connection,
+        ctx.creatorRewardVault
+      );
+      expect(rewardVault.amount.toString()).to.equal(CREATOR_ALLOC_RAW.toString());
     });
   });
 });
