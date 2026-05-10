@@ -20,17 +20,20 @@ import { realtimeChartService, CandleUpdateListener } from '@/services/realtimeC
 
 type ChartMode = 'candles' | 'line' | 'area' | 'bars' | 'mountain' | 'bonding';
 
-const CHART_HEIGHT = 340;
-const PRICE_AXIS_WIDTH = 76;   // wider for readable labels
-const VOLUME_HEIGHT = 52;
-const VOLUME_GAP = 8;
-const PADDING_TOP = 12;
-const PADDING_BOTTOM = 4;
-const MIN_CANDLE_WIDTH = 4;
-const MAX_CANDLE_WIDTH = 20;
-const CANDLE_GAP_RATIO = 0.25;
-const PATTERN_W = 120;         // background grid repeat width — must be multiple of 40 for seamless loop
-const MAX_PAN_EXTRA = 4000;    // max pixels user can pan past live view
+// ─── Layout constants ─────────────────────────────────────────────────────────
+const CHART_HEIGHT       = 460;  // ~real trading chart height on mobile
+const PRICE_AXIS_WIDTH   = 78;   // enough room for price labels
+const VOLUME_HEIGHT      = 90;   // ~20% of CHART_HEIGHT
+const VOLUME_GAP         = 10;
+const PADDING_TOP        = 14;
+const PADDING_BOTTOM     = 6;
+const MIN_CANDLE_WIDTH   = 6;    // thicker candles for readability
+const MAX_CANDLE_WIDTH   = 18;
+const CANDLE_GAP_RATIO   = 0.28; // gap fraction of candle width
+const TARGET_VISIBLE     = 40;   // default visible candles on screen
+const MAX_VISIBLE        = 60;   // hard cap — never squeeze more than this
+const PATTERN_W          = 120;  // bg grid pattern width — multiple of 40 for seamless loop
+const MAX_PAN_EXTRA      = 6000; // max extra pixels user can pan left
 
 const CHART_MODES: { id: ChartMode; label: string }[] = [
   { id: 'candles',  label: 'Candles'  },
@@ -64,7 +67,7 @@ function deduplicateCandles(candles: CandleData[]): CandleData[] {
 function formatPrice(price: number): string {
   if (price === 0) return '0';
   if (price >= 1000) return price.toFixed(0);
-  if (price >= 1) return price.toFixed(2);
+  if (price >= 1)    return price.toFixed(2);
   if (price >= 0.01) return price.toFixed(4);
   if (price >= 0.0001) return price.toFixed(6);
   return price.toExponential(2);
@@ -72,7 +75,7 @@ function formatPrice(price: number): string {
 
 function formatVolume(vol: number): string {
   if (vol >= 1_000_000) return `${(vol / 1_000_000).toFixed(1)}M`;
-  if (vol >= 1_000) return `${(vol / 1_000).toFixed(1)}K`;
+  if (vol >= 1_000)     return `${(vol / 1_000).toFixed(1)}K`;
   return vol.toFixed(0);
 }
 
@@ -82,35 +85,35 @@ function formatTime(ts: number): string {
 
 export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) {
   const [rawCandles, setRawCandles] = useState<CandleData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [timeFrame, setTimeFrame] = useState<TimeFrame>('15m');
-  const [chartMode, setChartMode] = useState<ChartMode>('candles');
+  const [loading,       setLoading]       = useState(true);
+  const [timeFrame,     setTimeFrame]     = useState<TimeFrame>('15m');
+  const [chartMode,     setChartMode]     = useState<ChartMode>('candles');
   const [containerWidth, setContainerWidth] = useState(Dimensions.get('window').width - 32);
-  const [panOffset, setPanOffset] = useState(0);
-  const [isLive, setIsLive] = useState(true);
-  const [crosshair, setCrosshair] = useState<CrosshairState | null>(null);
+  const [panOffset,     setPanOffset]     = useState(0);
+  const [isLive,        setIsLive]        = useState(true);
+  const [crosshair,     setCrosshair]     = useState<CrosshairState | null>(null);
 
   const timeFrames: TimeFrame[] = ['1m', '5m', '15m', '1H', '4H', '1D'];
 
-  const listenerRef       = useRef<CandleUpdateListener | null>(null);
-  const currentTokenRef   = useRef<string>('');
-  const currentTfRef      = useRef<TimeFrame>('15m');
+  // ─── Subscription refs ────────────────────────────────────────────────────────
+  const listenerRef     = useRef<CandleUpdateListener | null>(null);
+  const currentTokenRef = useRef<string>('');
+  const currentTfRef    = useRef<TimeFrame>('15m');
 
-  // Stable refs for PanResponder (avoids stale closure)
-  const candlesRef             = useRef<CandleData[]>([]);
-  const panOffsetRef           = useRef(0);
-  const isLiveRef              = useRef(true);
-  const chartAreaWidthRef      = useRef(0);
-  const rawCandleWidthRef      = useRef(8);
-  const priceChartHeightRef    = useRef(0);
-  const priceMinRef            = useRef(0);
-  const priceRangeRef          = useRef(1);
-  const gestureModeRef         = useRef<'none' | 'crosshair' | 'pan'>('none');
-  const panStartXRef           = useRef(0);
-  const panStartOffsetRef      = useRef(0);
-  const crosshairTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ─── Stable refs for PanResponder closures ────────────────────────────────────
+  const candlesRef          = useRef<CandleData[]>([]);
+  const panOffsetRef        = useRef(0);
+  const isLiveRef           = useRef(true);
+  const chartAreaWidthRef   = useRef(0);
+  const rawCandleWidthRef   = useRef(9);
+  const priceChartHeightRef = useRef(0);
+  const priceMinRef         = useRef(0);
+  const priceRangeRef       = useRef(1);
+  const gestureModeRef      = useRef<'none' | 'crosshair' | 'pan'>('none');
+  const panStartOffsetRef   = useRef(0);
+  const crosshairTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Background animation
+  // ─── Background animation ─────────────────────────────────────────────────────
   const bgAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -127,38 +130,35 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   }, []);
 
   const bgTranslate = bgAnim.interpolate({
-    inputRange: [0, 1],
+    inputRange:  [0, 1],
     outputRange: [0, -PATTERN_W],
   });
 
-  // Sync refs to latest state/derived values
-  useEffect(() => { candlesRef.current = rawCandles; }, [rawCandles]);
-  useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
-  useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
+  // ─── Keep refs synced ─────────────────────────────────────────────────────────
+  useEffect(() => { candlesRef.current   = rawCandles;  }, [rawCandles]);
+  useEffect(() => { panOffsetRef.current = panOffset;   }, [panOffset]);
+  useEffect(() => { isLiveRef.current    = isLive;      }, [isLive]);
 
   // ─── Data subscription ────────────────────────────────────────────────────────
-
   const handleCandleUpdate = useCallback((updated: CandleData[]) => {
     const deduped = deduplicateCandles(updated);
     if (process.env.NODE_ENV !== 'production') {
       const dups = updated.length - deduped.length;
       console.log(
-        `[Chart] mode=${chartMode} tf=${timeFrame} candles=${deduped.length}` +
+        `[Chart] tf=${timeFrame} candles=${deduped.length}` +
         (dups > 0 ? ` (${dups} dupes removed)` : '') +
         (deduped.length > 0 ? ` latest=${new Date(deduped[deduped.length - 1].timestamp).toISOString()}` : '')
       );
     }
     setRawCandles(deduped);
     setLoading(false);
-  }, [chartMode, timeFrame]);
+  }, [timeFrame]);
 
   useEffect(() => {
     if (!tokenAddress) return;
     if (listenerRef.current) {
       realtimeChartService.unsubscribe(
-        currentTokenRef.current,
-        currentTfRef.current,
-        listenerRef.current
+        currentTokenRef.current, currentTfRef.current, listenerRef.current
       );
     }
     currentTokenRef.current = tokenAddress;
@@ -172,10 +172,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     realtimeChartService
       .subscribe(tokenAddress, timeFrame, handleCandleUpdate)
       .then((initial) => { if (initial.length > 0) handleCandleUpdate(initial); })
-      .catch((err) => {
-        console.error('[TradingChart] Subscribe error:', err);
-        setLoading(false);
-      });
+      .catch((err) => { console.error('[TradingChart] Subscribe error:', err); setLoading(false); });
 
     return () => {
       if (listenerRef.current) {
@@ -185,43 +182,53 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     };
   }, [tokenAddress, timeFrame]);
 
-  // ─── Layout ───────────────────────────────────────────────────────────────────
+  // ─── Layout & candle sizing ───────────────────────────────────────────────────
 
-  const chartAreaWidth    = containerWidth - PRICE_AXIS_WIDTH;
-  const priceChartHeight  = CHART_HEIGHT - PADDING_TOP - PADDING_BOTTOM - VOLUME_HEIGHT - VOLUME_GAP;
-  const candles           = rawCandles;
+  const chartAreaWidth   = containerWidth - PRICE_AXIS_WIDTH;
+  const priceChartHeight = CHART_HEIGHT - PADDING_TOP - PADDING_BOTTOM - VOLUME_HEIGHT - VOLUME_GAP;
+  const candles          = rawCandles;
 
+  // Fixed candle width — show TARGET_VISIBLE by default (pan reveals older ones)
+  const visibleCount   = Math.min(candles.length, TARGET_VISIBLE);
   const rawCandleWidth = candles.length > 0
-    ? Math.max(MIN_CANDLE_WIDTH, Math.min(MAX_CANDLE_WIDTH, chartAreaWidth / candles.length))
-    : 8;
-  const bodyWidth = Math.max(2, rawCandleWidth * (1 - CANDLE_GAP_RATIO));
+    ? Math.max(MIN_CANDLE_WIDTH, Math.min(MAX_CANDLE_WIDTH, chartAreaWidth / Math.max(visibleCount, 1)))
+    : 9;
+  const bodyWidth = Math.max(3, rawCandleWidth * (1 - CANDLE_GAP_RATIO));
 
-  const prices   = candles.length > 0 ? candles.flatMap(c => [c.high, c.low]) : [1, 0];
-  const rawMax   = Math.max(...prices);
-  const rawMin   = Math.min(...prices);
-  const rawRange = rawMax - rawMin || rawMax * 0.1 || 1;
-  const priceMax = rawMax + rawRange * 0.05;
-  const priceMin = Math.max(0, rawMin - rawRange * 0.05);
-  const priceRange = priceMax - priceMin || 1;
+  // Start X of candle[0] in chart coordinates (negative = left of viewport)
+  const totalUsed = candles.length * rawCandleWidth;
+  const startX    = candles.length <= 1
+    ? chartAreaWidth / 2 - rawCandleWidth / 2
+    : Math.max(0, chartAreaWidth - totalUsed) - panOffset;
 
-  const volumes  = candles.map(c => c.volume);
-  const maxVol   = Math.max(...volumes, 1);
-  const volBaseY = PADDING_TOP + priceChartHeight + VOLUME_GAP + VOLUME_HEIGHT;
-  const volToHeight = (v: number) => (v / maxVol) * VOLUME_HEIGHT;
+  // Visible candle indices for price scale
+  const visFirstIdx = Math.max(0, Math.floor(-startX / rawCandleWidth));
+  const visLastIdx  = Math.min(candles.length - 1, Math.ceil((chartAreaWidth - startX) / rawCandleWidth));
+  const visSlice    = candles.length > 0 ? candles.slice(visFirstIdx, visLastIdx + 1) : [];
 
-  // Keep refs in sync
+  // Price scale — based on visible candles so it adapts to the pan window
+  const scaleSource  = visSlice.length > 0 ? visSlice : candles;
+  const prices       = scaleSource.length > 0 ? scaleSource.flatMap(c => [c.high, c.low]) : [1, 0];
+  const rawMax       = Math.max(...prices);
+  const rawMin       = Math.min(...prices);
+  const rawRange     = rawMax - rawMin || rawMax * 0.1 || 1;
+  const priceMax     = rawMax + rawRange * 0.06;
+  const priceMin     = Math.max(0, rawMin - rawRange * 0.06);
+  const priceRange   = priceMax - priceMin || 1;
+
+  const volumes      = candles.map(c => c.volume);
+  const maxVol       = Math.max(...volumes, 1);
+  const volBaseY     = PADDING_TOP + priceChartHeight + VOLUME_GAP + VOLUME_HEIGHT;
+  const volToHeight  = (v: number) => (v / maxVol) * (VOLUME_HEIGHT * 0.9);
+
+  // Sync layout refs for PanResponder
   chartAreaWidthRef.current   = chartAreaWidth;
   rawCandleWidthRef.current   = rawCandleWidth;
   priceChartHeightRef.current = priceChartHeight;
   priceMinRef.current         = priceMin;
   priceRangeRef.current       = priceRange;
 
-  const xOf = (index: number): number => {
-    if (candles.length === 1) return chartAreaWidth / 2;
-    const totalUsed = candles.length * rawCandleWidth;
-    const startX    = Math.max(0, chartAreaWidth - totalUsed) - panOffset;
-    return startX + index * rawCandleWidth + rawCandleWidth / 2;
-  };
+  const xOf = (index: number): number => startX + index * rawCandleWidth + rawCandleWidth / 2;
 
   const priceToY = (price: number): number => {
     const ratio = (price - priceMin) / priceRange;
@@ -232,7 +239,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
 
   const clearCrosshairDelayed = () => {
     if (crosshairTimerRef.current) clearTimeout(crosshairTimerRef.current);
-    crosshairTimerRef.current = setTimeout(() => setCrosshair(null), 2200);
+    crosshairTimerRef.current = setTimeout(() => setCrosshair(null), 2400);
   };
 
   const updateCrosshairAt = (touchX: number, touchY: number) => {
@@ -243,26 +250,25 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     const pch = priceChartHeightRef.current;
     if (cs.length === 0) return;
 
-    const totalUsed = cs.length * rcw;
-    const startX    = Math.max(0, cw - totalUsed) - po;
-    const rawIndex  = (touchX - startX) / rcw;
-    const idx       = Math.max(0, Math.min(cs.length - 1, Math.round(rawIndex)));
-    const candleX   = startX + idx * rcw + rcw / 2;
-    const clampedY  = Math.max(PADDING_TOP, Math.min(PADDING_TOP + pch, touchY));
+    const totalW  = cs.length * rcw;
+    const sx      = Math.max(0, cw - totalW) - po;
+    const rawIdx  = (touchX - sx) / rcw;
+    const idx     = Math.max(0, Math.min(cs.length - 1, Math.round(rawIdx)));
+    const candleX = sx + idx * rcw + rcw / 2;
+    const clampY  = Math.max(PADDING_TOP, Math.min(PADDING_TOP + pch, touchY));
 
-    setCrosshair({ x: candleX, y: clampedY, candleIndex: idx });
+    setCrosshair({ x: candleX, y: clampY, candleIndex: idx });
     if (crosshairTimerRef.current) clearTimeout(crosshairTimerRef.current);
   };
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  () => true,
 
       onPanResponderGrant: (e) => {
         if (crosshairTimerRef.current) clearTimeout(crosshairTimerRef.current);
-        gestureModeRef.current = 'crosshair';
-        panStartXRef.current   = e.nativeEvent.locationX;
+        gestureModeRef.current    = 'crosshair';
         panStartOffsetRef.current = panOffsetRef.current;
         updateCrosshairAt(e.nativeEvent.locationX, e.nativeEvent.locationY);
       },
@@ -271,8 +277,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
         const absDx = Math.abs(gs.dx);
         const absDy = Math.abs(gs.dy);
 
-        if (gestureModeRef.current !== 'pan' && absDx > 8 && absDx > absDy * 1.5) {
-          // Switch to pan mode
+        if (gestureModeRef.current !== 'pan' && absDx > 8 && absDx > absDy * 1.4) {
           gestureModeRef.current = 'pan';
           setCrosshair(null);
         }
@@ -281,12 +286,12 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           const cs  = candlesRef.current;
           const cw  = chartAreaWidthRef.current;
           const rcw = rawCandleWidthRef.current;
-          const totalUsed = cs.length * rcw;
-          const maxPan    = Math.max(0, totalUsed - cw) + MAX_PAN_EXTRA;
-          const newOffset = Math.max(0, Math.min(maxPan, panStartOffsetRef.current - gs.dx));
-          setPanOffset(newOffset);
-          panOffsetRef.current = newOffset;
-          if (newOffset > 8 && isLiveRef.current) {
+          const totalW  = cs.length * rcw;
+          const maxPan  = Math.max(0, totalW - cw) + MAX_PAN_EXTRA;
+          const newOff  = Math.max(0, Math.min(maxPan, panStartOffsetRef.current - gs.dx));
+          setPanOffset(newOff);
+          panOffsetRef.current = newOff;
+          if (newOff > 10 && isLiveRef.current) {
             setIsLive(false);
             isLiveRef.current = false;
           }
@@ -295,10 +300,10 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
         }
       },
 
-      onPanResponderRelease: (_, gs) => {
+      onPanResponderRelease: () => {
         if (gestureModeRef.current === 'pan') {
           panStartOffsetRef.current = panOffsetRef.current;
-          if (panOffsetRef.current <= 8) {
+          if (panOffsetRef.current <= 10) {
             setIsLive(true);
             isLiveRef.current = true;
             setPanOffset(0);
@@ -318,7 +323,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
 
   const returnToLive = () => {
     setPanOffset(0);
-    panOffsetRef.current = 0;
+    panOffsetRef.current      = 0;
     panStartOffsetRef.current = 0;
     setIsLive(true);
     isLiveRef.current = true;
@@ -328,66 +333,55 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   // ─── Animated background ──────────────────────────────────────────────────────
 
   const renderAnimatedBackground = () => {
-    const totalBgW  = chartAreaWidth + PRICE_AXIS_WIDTH + PATTERN_W;
-    const numVLines = Math.ceil(totalBgW / 40) + 2;
+    const bgW       = containerWidth + PATTERN_W;
+    const numVLines = Math.ceil(bgW / 40) + 2;
 
     return (
       <Animated.View
         style={[StyleSheet.absoluteFill, { transform: [{ translateX: bgTranslate }] }]}
         pointerEvents="none"
       >
-        <Svg width={totalBgW} height={CHART_HEIGHT}>
+        <Svg width={bgW} height={CHART_HEIGHT}>
           <Defs>
-            {/* Radial glow at bottom-center */}
-            <LinearGradient id="bgGlowH" x1="0" y1="0" x2="1" y2="0">
+            <LinearGradient id="bgH" x1="0" y1="0" x2="1" y2="0">
               <Stop offset="0%"   stopColor="rgba(88,28,135,0)"    stopOpacity="0" />
-              <Stop offset="30%"  stopColor="rgba(88,28,135,0.1)"  stopOpacity="1" />
-              <Stop offset="70%"  stopColor="rgba(88,28,135,0.1)"  stopOpacity="1" />
+              <Stop offset="35%"  stopColor="rgba(88,28,135,0.12)" stopOpacity="1" />
+              <Stop offset="65%"  stopColor="rgba(88,28,135,0.12)" stopOpacity="1" />
               <Stop offset="100%" stopColor="rgba(88,28,135,0)"    stopOpacity="0" />
             </LinearGradient>
-            <LinearGradient id="bgGlowV" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="rgba(0,0,0,0)"        stopOpacity="0" />
-              <Stop offset="60%"  stopColor="rgba(88,28,135,0.08)" stopOpacity="1" />
-              <Stop offset="100%" stopColor="rgba(88,28,135,0.15)" stopOpacity="1" />
+            <LinearGradient id="bgV" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%"   stopColor="rgba(0,0,0,0)"         stopOpacity="0" />
+              <Stop offset="55%"  stopColor="rgba(88,28,135,0.07)"  stopOpacity="1" />
+              <Stop offset="100%" stopColor="rgba(88,28,135,0.18)"  stopOpacity="1" />
             </LinearGradient>
           </Defs>
 
-          {/* Soft purple glow overlays */}
-          <Rect x={0} y={0} width={totalBgW} height={CHART_HEIGHT} fill="url(#bgGlowH)" />
-          <Rect x={0} y={0} width={totalBgW} height={CHART_HEIGHT} fill="url(#bgGlowV)" />
+          {/* Glow overlays */}
+          <Rect x={0} y={0} width={bgW} height={CHART_HEIGHT} fill="url(#bgH)" />
+          <Rect x={0} y={0} width={bgW} height={CHART_HEIGHT} fill="url(#bgV)" />
 
-          {/* Moving vertical grid lines */}
+          {/* Moving vertical grid lines every 40px */}
           {Array.from({ length: numVLines }, (_, i) => (
-            <Line
-              key={i}
-              x1={i * 40} y1={0}
-              x2={i * 40} y2={CHART_HEIGHT}
-              stroke="rgba(139,92,246,0.09)"
-              strokeWidth="1"
+            <Line key={i}
+              x1={i * 40} y1={0} x2={i * 40} y2={CHART_HEIGHT}
+              stroke="rgba(139,92,246,0.08)" strokeWidth="1"
             />
           ))}
 
-          {/* Accent lines every PATTERN_W */}
-          {Array.from({ length: Math.ceil(totalBgW / PATTERN_W) + 1 }, (_, i) => (
-            <Line
-              key={`acc-${i}`}
-              x1={i * PATTERN_W} y1={0}
-              x2={i * PATTERN_W} y2={CHART_HEIGHT}
-              stroke="rgba(139,92,246,0.18)"
-              strokeWidth="1"
+          {/* Accent lines every PATTERN_W — slightly brighter */}
+          {Array.from({ length: Math.ceil(bgW / PATTERN_W) + 1 }, (_, i) => (
+            <Line key={`a${i}`}
+              x1={i * PATTERN_W} y1={0} x2={i * PATTERN_W} y2={CHART_HEIGHT}
+              stroke="rgba(139,92,246,0.22)" strokeWidth="1"
             />
           ))}
 
-          {/* Scanline horizontal stripes */}
-          {Array.from({ length: Math.ceil(CHART_HEIGHT / 8) }, (_, i) => (
-            i % 2 === 0 ? (
-              <Rect
-                key={`sl-${i}`}
-                x={0} y={i * 8}
-                width={totalBgW} height={1}
-                fill="rgba(139,92,246,0.025)"
-              />
-            ) : null
+          {/* Horizontal scanlines — sparse for performance */}
+          {Array.from({ length: Math.ceil(CHART_HEIGHT / 16) }, (_, i) => (
+            <Rect key={`s${i}`}
+              x={0} y={i * 16} width={bgW} height={1}
+              fill="rgba(139,92,246,0.03)"
+            />
           ))}
         </Svg>
       </Animated.View>
@@ -397,7 +391,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   // ─── Price axis ───────────────────────────────────────────────────────────────
 
   const renderPriceAxis = (crosshairY?: number) => {
-    const steps = 5;
+    const steps  = 5;
     const labels: { y: number; label: string }[] = [];
     for (let i = 0; i <= steps; i++) {
       const ratio = i / steps;
@@ -409,11 +403,12 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     const chY = crosshairY ?? null;
 
     return (
-      <View style={[styles.priceAxis, { width: PRICE_AXIS_WIDTH }]}>
+      <View style={styles.priceAxis}>
         <Svg width={PRICE_AXIS_WIDTH} height={CHART_HEIGHT}>
-          {/* Static price labels */}
+          {/* Price labels */}
           {labels.map((l, i) => (
-            <SvgText key={i} x={6} y={l.y + 4} fontSize="11" fill="rgba(255,255,255,0.55)" fontWeight="600">
+            <SvgText key={i} x={6} y={l.y + 4}
+              fontSize="11" fill="rgba(255,255,255,0.65)" fontWeight="600">
               {l.label}
             </SvgText>
           ))}
@@ -421,9 +416,9 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           {/* Current price badge */}
           {cpY !== null && cpY > PADDING_TOP && cpY < PADDING_TOP + priceChartHeight && (
             <>
-              <Rect x={1} y={cpY - 10} width={PRICE_AXIS_WIDTH - 3} height={17} rx={4} fill={colors.primary} />
+              <Rect x={1} y={cpY - 11} width={PRICE_AXIS_WIDTH - 3} height={18} rx={4} fill={colors.primary} />
               <SvgText x={5} y={cpY + 3} fontSize="11" fill="#fff" fontWeight="800">
-                {currentPrice !== undefined ? formatPrice(currentPrice) : ''}
+                {formatPrice(currentPrice!)}
               </SvgText>
             </>
           )}
@@ -431,7 +426,8 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           {/* Crosshair price badge */}
           {chY !== null && chY > PADDING_TOP && chY < PADDING_TOP + priceChartHeight && (
             <>
-              <Rect x={1} y={chY - 10} width={PRICE_AXIS_WIDTH - 3} height={17} rx={4} fill="rgba(255,255,255,0.18)" />
+              <Rect x={1} y={chY - 11} width={PRICE_AXIS_WIDTH - 3} height={18} rx={4}
+                fill="rgba(255,255,255,0.2)" />
               <SvgText x={5} y={chY + 3} fontSize="11" fill="#fff" fontWeight="700">
                 {formatPrice(priceMin + (1 - (chY - PADDING_TOP) / priceChartHeight) * priceRange)}
               </SvgText>
@@ -450,11 +446,11 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       const y = PADDING_TOP + priceChartHeight - ratio * priceChartHeight;
       return (
         <Line key={i} x1={0} y1={y} x2={chartAreaWidth} y2={y}
-          stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
+          stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
       );
     });
 
-  // ─── Crosshair (SVG elements) ─────────────────────────────────────────────────
+  // ─── Crosshair lines (SVG) ────────────────────────────────────────────────────
 
   const renderCrosshairLines = () => {
     if (!crosshair) return null;
@@ -462,16 +458,16 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     return (
       <>
         <Line x1={x} y1={PADDING_TOP} x2={x} y2={PADDING_TOP + priceChartHeight}
-          stroke="rgba(255,255,255,0.45)" strokeWidth="1" strokeDasharray="4,3" />
+          stroke="rgba(255,255,255,0.5)" strokeWidth="1" strokeDasharray="4,3" />
         <Line x1={0} y1={y} x2={chartAreaWidth} y2={y}
-          stroke="rgba(255,255,255,0.45)" strokeWidth="1" strokeDasharray="4,3" />
-        <Circle cx={x} cy={y} r={4} fill="rgba(255,255,255,0.95)" />
-        <Circle cx={x} cy={y} r={7} fill="rgba(255,255,255,0.15)" />
+          stroke="rgba(255,255,255,0.5)" strokeWidth="1" strokeDasharray="4,3" />
+        <Circle cx={x} cy={y} r={5}  fill="rgba(255,255,255,0.95)" />
+        <Circle cx={x} cy={y} r={9}  fill="rgba(255,255,255,0.12)" />
       </>
     );
   };
 
-  // ─── Crosshair tooltip (View overlay) ────────────────────────────────────────
+  // ─── Crosshair tooltip ────────────────────────────────────────────────────────
 
   const renderCrosshairTooltip = () => {
     if (!crosshair) return null;
@@ -511,8 +507,8 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
 
   const renderCandles = () =>
     candles.map((c, i) => {
-      const x       = xOf(i);
-      if (x < -rawCandleWidth || x > chartAreaWidth + rawCandleWidth) return null; // clip off-screen
+      const x = xOf(i);
+      if (x < -rawCandleWidth * 2 || x > chartAreaWidth + rawCandleWidth * 2) return null;
       const isGreen = c.close >= c.open;
       const col     = isGreen ? colors.success : colors.error;
       const openY   = priceToY(c.open);
@@ -520,78 +516,73 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       const highY   = priceToY(c.high);
       const lowY    = priceToY(c.low);
       const bodyTop = Math.min(openY, closeY);
-      const bodyH   = Math.max(1, Math.abs(closeY - openY));
+      const bodyH   = Math.max(1.5, Math.abs(closeY - openY));
       return (
         <>
-          <Line key={`wick-${i}`} x1={x} y1={highY} x2={x} y2={lowY} stroke={col} strokeWidth="1.5" />
-          <Rect key={`body-${i}`} x={x - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={bodyH} fill={col} />
+          <Line key={`w${i}`} x1={x} y1={highY} x2={x} y2={lowY} stroke={col} strokeWidth="2" />
+          <Rect key={`b${i}`} x={x - bodyWidth / 2} y={bodyTop}
+            width={bodyWidth} height={bodyH} fill={col} />
         </>
       );
     });
 
-  // ─── Line / Area / Mountain paths ────────────────────────────────────────────
+  // ─── Shared path builders ─────────────────────────────────────────────────────
 
   const buildLinePath = (): string => {
     if (candles.length === 0) return '';
     return candles.map((c, i) => {
-      const x = xOf(i);
-      const y = priceToY(c.close);
+      const x = xOf(i); const y = priceToY(c.close);
       return i === 0 ? `M${x},${y}` : `L${x},${y}`;
     }).join(' ');
   };
 
   const buildAreaPath = (): string => {
     if (candles.length === 0) return '';
-    const baseY  = PADDING_TOP + priceChartHeight;
-    const first  = `M${xOf(0)},${baseY}`;
-    const line   = candles.map((c, i) => `L${xOf(i)},${priceToY(c.close)}`).join(' ');
-    const last   = `L${xOf(candles.length - 1)},${baseY} Z`;
-    return `${first} ${line} ${last}`;
+    const baseY = PADDING_TOP + priceChartHeight;
+    return `M${xOf(0)},${baseY} ` +
+      candles.map((c, i) => `L${xOf(i)},${priceToY(c.close)}`).join(' ') +
+      ` L${xOf(candles.length - 1)},${baseY} Z`;
   };
 
   const isPositiveTrend = candles.length >= 2
-    ? candles[candles.length - 1].close >= candles[0].close
-    : true;
+    ? candles[candles.length - 1].close >= candles[0].close : true;
   const trendColor = isPositiveTrend ? colors.success : colors.error;
 
   const renderLine = () => {
-    const path = buildLinePath();
-    if (!path) return null;
-    return <Path d={path} stroke={trendColor} strokeWidth="1.5" fill="none" strokeLinejoin="round" />;
+    const p = buildLinePath();
+    return p ? <Path d={p} stroke={trendColor} strokeWidth="2" fill="none" strokeLinejoin="round" /> : null;
   };
 
   const renderArea = () => {
-    const areaPath = buildAreaPath();
-    const linePath = buildLinePath();
-    if (!areaPath) return null;
+    const ap = buildAreaPath(); const lp = buildLinePath();
+    if (!ap) return null;
     return (
       <>
         <Defs>
-          <LinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%"   stopColor={trendColor} stopOpacity="0.35" />
+          <LinearGradient id="aG" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%"   stopColor={trendColor} stopOpacity="0.38" />
             <Stop offset="100%" stopColor={trendColor} stopOpacity="0.02" />
           </LinearGradient>
         </Defs>
-        <Path d={areaPath} fill="url(#areaGrad)" stroke="none" />
-        <Path d={linePath} stroke={trendColor} strokeWidth="1.5" fill="none" strokeLinejoin="round" />
+        <Path d={ap} fill="url(#aG)" stroke="none" />
+        <Path d={lp} stroke={trendColor} strokeWidth="2" fill="none" strokeLinejoin="round" />
       </>
     );
   };
 
   const renderMountain = () => {
-    const areaPath = buildAreaPath();
-    const linePath = buildLinePath();
-    if (!areaPath) return null;
+    const ap = buildAreaPath(); const lp = buildLinePath();
+    if (!ap) return null;
     return (
       <>
         <Defs>
-          <LinearGradient id="mountainGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%"   stopColor={trendColor} stopOpacity="0.55" />
+          <LinearGradient id="mG" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%"   stopColor={trendColor} stopOpacity="0.58" />
             <Stop offset="100%" stopColor={trendColor} stopOpacity="0.05" />
           </LinearGradient>
         </Defs>
-        <Path d={areaPath} fill="url(#mountainGrad)" stroke="none" />
-        <Path d={linePath} stroke={trendColor} strokeWidth="2" fill="none" strokeLinejoin="round" />
+        <Path d={ap} fill="url(#mG)" stroke="none" />
+        <Path d={lp} stroke={trendColor} strokeWidth="2.5" fill="none" strokeLinejoin="round" />
       </>
     );
   };
@@ -602,13 +593,12 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     const barsH = CHART_HEIGHT - PADDING_TOP - PADDING_BOTTOM;
     return candles.map((c, i) => {
       const x = xOf(i);
-      if (x < -rawCandleWidth || x > chartAreaWidth + rawCandleWidth) return null;
-      const isGreen = c.close >= c.open;
-      const col     = isGreen ? colors.success : colors.error;
-      const barH    = (c.volume / maxVol) * (barsH * 0.85);
+      if (x < -rawCandleWidth * 2 || x > chartAreaWidth + rawCandleWidth * 2) return null;
+      const col  = c.close >= c.open ? colors.success : colors.error;
+      const barH = (c.volume / maxVol) * (barsH * 0.85);
       return (
-        <Rect key={`bar-${i}`} x={x - bodyWidth / 2} y={PADDING_TOP + barsH - barH}
-          width={bodyWidth} height={Math.max(1, barH)} fill={col} opacity={0.8} />
+        <Rect key={`bar${i}`} x={x - bodyWidth / 2} y={PADDING_TOP + barsH - barH}
+          width={bodyWidth} height={Math.max(2, barH)} fill={col} opacity={0.85} />
       );
     });
   };
@@ -617,22 +607,21 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
 
   const renderBonding = () => {
     if (candles.length < 2) return null;
-    const path     = buildLinePath();
-    const areaPath = buildAreaPath();
+    const p = buildLinePath(); const ap = buildAreaPath();
     return (
       <>
         <Defs>
-          <LinearGradient id="bondGrad" x1="0" y1="0" x2="1" y2="0">
+          <LinearGradient id="bG" x1="0" y1="0" x2="1" y2="0">
             <Stop offset="0%"   stopColor="#f59e0b" stopOpacity="0.6" />
             <Stop offset="100%" stopColor={colors.success} stopOpacity="0.6" />
           </LinearGradient>
-          <LinearGradient id="bondFill" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%"   stopColor="#f59e0b" stopOpacity="0.2" />
+          <LinearGradient id="bF" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%"   stopColor="#f59e0b" stopOpacity="0.22" />
             <Stop offset="100%" stopColor="#f59e0b" stopOpacity="0.02" />
           </LinearGradient>
         </Defs>
-        <Path d={areaPath} fill="url(#bondFill)" stroke="none" />
-        <Path d={path} stroke="url(#bondGrad)" strokeWidth="2" fill="none" strokeLinejoin="round" />
+        <Path d={ap} fill="url(#bF)" stroke="none" />
+        <Path d={p}  stroke="url(#bG)" strokeWidth="2" fill="none" strokeLinejoin="round" />
         {(() => {
           const last = candles[candles.length - 1];
           const lx   = xOf(candles.length - 1);
@@ -654,12 +643,11 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   const renderVolumeBars = () =>
     candles.map((c, i) => {
       const x = xOf(i);
-      if (x < -rawCandleWidth || x > chartAreaWidth + rawCandleWidth) return null;
-      const isGreen = c.close >= c.open;
-      const col     = isGreen ? 'rgba(20,241,149,0.45)' : 'rgba(255,77,79,0.45)';
-      const h       = Math.max(1, volToHeight(c.volume));
+      if (x < -rawCandleWidth * 2 || x > chartAreaWidth + rawCandleWidth * 2) return null;
+      const col = c.close >= c.open ? 'rgba(20,241,149,0.55)' : 'rgba(255,77,79,0.55)';
+      const h   = Math.max(2, volToHeight(c.volume));
       return (
-        <Rect key={`vol-${i}`} x={x - bodyWidth / 2} y={volBaseY - h}
+        <Rect key={`v${i}`} x={x - bodyWidth / 2} y={volBaseY - h}
           width={bodyWidth} height={h} fill={col} />
       );
     });
@@ -672,7 +660,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     if (y < PADDING_TOP || y > PADDING_TOP + priceChartHeight) return null;
     return (
       <Line x1={0} y1={y} x2={chartAreaWidth} y2={y}
-        stroke={colors.primary} strokeWidth="0.8" strokeDasharray="4,4" opacity={0.7} />
+        stroke={colors.primary} strokeWidth="1" strokeDasharray="5,4" opacity={0.75} />
     );
   };
 
@@ -684,37 +672,29 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     <Svg width={chartAreaWidth} height={CHART_HEIGHT}>
       {!isBarsMode && renderGrid()}
       {!isBarsMode && renderCurrentPriceLine()}
-
       {chartMode === 'candles'  && renderCandles()}
       {chartMode === 'line'     && renderLine()}
       {chartMode === 'area'     && renderArea()}
       {chartMode === 'mountain' && renderMountain()}
       {chartMode === 'bars'     && renderBarsMode()}
       {chartMode === 'bonding'  && renderBonding()}
-
       {!isBarsMode && renderVolumeBars()}
-
-      {/* Crosshair — always on top inside SVG */}
       {renderCrosshairLines()}
     </Svg>
   );
 
-  // ─── Stats ────────────────────────────────────────────────────────────────────
+  // ─── Header stats ─────────────────────────────────────────────────────────────
 
   const latestCandle = candles[candles.length - 1];
   const firstCandle  = candles[0];
   const priceChange  = latestCandle && firstCandle
-    ? ((latestCandle.close - firstCandle.open) / (firstCandle.open || 1)) * 100
-    : 0;
-  const isPositive = priceChange >= 0;
+    ? ((latestCandle.close - firstCandle.open) / (firstCandle.open || 1)) * 100 : 0;
+  const isPositive   = priceChange >= 0;
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <View
-      style={styles.container}
-      onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
-    >
+    <View style={styles.container} onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}>
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.priceSection}>
@@ -735,35 +715,32 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
         </View>
       </View>
 
-      {/* Timeframe selector */}
+      {/* Timeframe */}
       <View style={styles.row}>
         {timeFrames.map((tf) => (
-          <TouchableOpacity
-            key={tf}
+          <TouchableOpacity key={tf}
             style={[styles.tfBtn, timeFrame === tf && styles.tfBtnActive]}
-            onPress={() => setTimeFrame(tf)}
-          >
+            onPress={() => setTimeFrame(tf)}>
             <Text style={[styles.tfText, timeFrame === tf && styles.tfTextActive]}>{tf}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* Chart mode selector */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeRow} contentContainerStyle={styles.modeRowContent}>
+      {/* Chart mode */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        style={styles.modeRow} contentContainerStyle={styles.modeRowContent}>
         {CHART_MODES.map((m) => (
-          <TouchableOpacity
-            key={m.id}
+          <TouchableOpacity key={m.id}
             style={[styles.modeBtn, chartMode === m.id && styles.modeBtnActive]}
-            onPress={() => setChartMode(m.id)}
-          >
+            onPress={() => setChartMode(m.id)}>
             <Text style={[styles.modeText, chartMode === m.id && styles.modeTextActive]}>{m.label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Chart area */}
+      {/* Chart */}
       <View style={styles.chartWrap}>
-        {/* Animated background — always rendered, behind everything */}
+        {/* Animated background — pointer-events none, z-index 1 */}
         {renderAnimatedBackground()}
 
         {loading ? (
@@ -777,18 +754,17 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
           </View>
         ) : (
           <View style={styles.chartInner}>
-            {/* Interactive chart area with PanResponder */}
-            <View style={{ width: chartAreaWidth, height: CHART_HEIGHT }} {...panResponder.panHandlers}>
+            {/* Interactive area — PanResponder handles crosshair + pan */}
+            <View style={styles.chartArea} {...panResponder.panHandlers}>
               {renderChart()}
-              {/* Crosshair OHLC tooltip */}
               {renderCrosshairTooltip()}
             </View>
-            {/* Price axis — NOT part of pan gesture */}
+            {/* Price axis — separate from gesture area */}
             {chartMode !== 'bars' && renderPriceAxis(crosshair?.y)}
           </View>
         )}
 
-        {/* Return to Live button */}
+        {/* Return to Live */}
         {!isLive && (
           <TouchableOpacity style={styles.liveBtn} onPress={returnToLive} activeOpacity={0.8}>
             <View style={styles.liveBtnDot} />
@@ -823,10 +799,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  priceChange: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-  },
+  priceChange: { fontSize: fontSize.sm, fontWeight: '700' },
   up:   { color: colors.success },
   down: { color: colors.error   },
   liveIndicator: {
@@ -845,73 +818,43 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,165,0,0.3)',
   },
   liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 6, height: 6, borderRadius: 3,
     backgroundColor: colors.success,
   },
   liveText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.success,
-    letterSpacing: 0.5,
+    fontSize: 11, fontWeight: '800',
+    color: colors.success, letterSpacing: 0.5,
   },
-  liveTextHistory: {
-    color: '#f97316',
-  },
+  liveTextHistory: { color: '#f97316' },
   row: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.xs,
+    flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.xs,
   },
   tfBtn: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
-    borderRadius: borderRadius.sm,
-    backgroundColor: colors.surfaceLight,
+    paddingHorizontal: spacing.sm, paddingVertical: 5,
+    borderRadius: borderRadius.sm, backgroundColor: colors.surfaceLight,
   },
-  tfBtnActive: {
-    backgroundColor: colors.primary,
-  },
-  tfText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textMuted,
-  },
-  tfTextActive: {
-    color: '#fff',
-  },
-  modeRow: {
-    marginBottom: spacing.sm,
-  },
-  modeRowContent: {
-    gap: spacing.xs,
-    paddingRight: spacing.xs,
-  },
+  tfBtnActive: { backgroundColor: colors.primary },
+  tfText:      { fontSize: 11, fontWeight: '700', color: colors.textMuted },
+  tfTextActive: { color: '#fff' },
+  modeRow:        { marginBottom: spacing.sm },
+  modeRowContent: { gap: spacing.xs, paddingRight: spacing.xs },
   modeBtn: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
     borderRadius: borderRadius.sm,
     backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   modeBtnActive: {
     borderColor: colors.primary,
     backgroundColor: `${colors.primary}20`,
   },
-  modeText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: colors.textMuted,
-  },
-  modeTextActive: {
-    color: colors.primary,
-  },
+  modeText:      { fontSize: 10, fontWeight: '600', color: colors.textMuted },
+  modeTextActive: { color: colors.primary },
   chartWrap: {
     height: CHART_HEIGHT,
     overflow: 'hidden',
     position: 'relative',
+    borderRadius: borderRadius.md,
   },
   loader: {
     flex: 1,
@@ -921,9 +864,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   loaderText: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    fontWeight: '600',
+    fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '600',
   },
   chartInner: {
     flexDirection: 'row',
@@ -931,86 +872,69 @@ const styles = StyleSheet.create({
     position: 'relative',
     zIndex: 2,
   },
+  chartArea: {
+    flex: 1,
+    height: CHART_HEIGHT,
+  },
   priceAxis: {
+    width: PRICE_AXIS_WIDTH,
     zIndex: 3,
   },
-  // Crosshair tooltip
   tooltip: {
     position: 'absolute',
-    top: 8,
-    backgroundColor: 'rgba(10,10,20,0.88)',
-    borderRadius: 8,
-    padding: 8,
+    top: 10,
+    backgroundColor: 'rgba(8,8,18,0.92)',
+    borderRadius: 10,
+    padding: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    minWidth: 120,
+    borderColor: 'rgba(255,255,255,0.14)',
+    minWidth: 130,
     zIndex: 10,
   },
-  tooltipLeft: {
-    left: 8,
-  },
-  tooltipRight: {
-    right: 8,
-  },
+  tooltipLeft:  { left: 8  },
+  tooltipRight: { right: 8 },
   tooltipTime: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.6)',
-    marginBottom: 5,
+    fontSize: 11, fontWeight: '700',
+    color: 'rgba(255,255,255,0.65)', marginBottom: 6,
   },
   tooltipGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
+    flexDirection: 'row', flexWrap: 'wrap', gap: 4,
   },
   tooltipCell: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    width: '47%',
+    flexDirection: 'row', alignItems: 'center', gap: 3, width: '47%',
   },
   tooltipLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.4)',
-    width: 12,
+    fontSize: 11, fontWeight: '700',
+    color: 'rgba(255,255,255,0.4)', width: 12,
   },
   tooltipVal: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.9)',
+    fontSize: 11, fontWeight: '700',
+    color: 'rgba(255,255,255,0.92)',
   },
   tooltipVol: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.5)',
-    marginTop: 4,
+    fontSize: 10, fontWeight: '600',
+    color: 'rgba(255,255,255,0.5)', marginTop: 5,
   },
-  // Return to Live button
   liveBtn: {
     position: 'absolute',
-    bottom: 10,
-    right: PRICE_AXIS_WIDTH + 6,
+    bottom: 12,
+    right: PRICE_AXIS_WIDTH + 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(16,185,129,0.18)',
+    backgroundColor: 'rgba(16,185,129,0.2)',
     borderWidth: 1,
-    borderColor: 'rgba(16,185,129,0.5)',
+    borderColor: 'rgba(16,185,129,0.55)',
     borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     zIndex: 20,
   },
   liveBtnDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 6, height: 6, borderRadius: 3,
     backgroundColor: colors.success,
   },
   liveBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.success,
+    fontSize: 12, fontWeight: '800', color: colors.success,
   },
 });
