@@ -77,39 +77,39 @@ pub struct Sell<'info> {
 }
 
 pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
-    let state = &mut ctx.accounts.launch_state;
-
-    // ── Guards ────────────────────────────────────────────────────────────────
-    require!(state.is_active(), CurveError::LaunchNotActive);
+    // ── Phase 1: read + validate (no mutable borrows stored) ─────────────────
+    require!(ctx.accounts.launch_state.is_active(), CurveError::LaunchNotActive);
     require!(args.token_amount > 0, CurveError::ZeroAmount);
+
+    // Snapshot seller token balance before CPIs.
+    let seller_balance = ctx.accounts.seller_token_account.amount;
     require!(
-        ctx.accounts.seller_token_account.amount >= args.token_amount,
+        seller_balance >= args.token_amount,
         CurveError::InsufficientTokenLiquidity
     );
 
-    // ── Constant-product price calculation ────────────────────────────────────
-    let gross_sol_out = get_sol_out(
-        state.virtual_sol_reserve,
-        state.virtual_token_reserve,
-        args.token_amount,
-    )?;
+    // Copy all fields we need from launch_state before any mutable borrow.
+    let platform_fee_bps      = ctx.accounts.launch_state.platform_fee_bps;
+    let virtual_sol_reserve   = ctx.accounts.launch_state.virtual_sol_reserve;
+    let virtual_token_reserve = ctx.accounts.launch_state.virtual_token_reserve;
 
-    // ── Fee split: 1% from gross SOL → treasury ───────────────────────────────
-    let fee = calc_fee(gross_sol_out, state.platform_fee_bps)?;
+    // Snapshot SOL vault balance before CPIs.
+    let vault_lamports = ctx.accounts.sol_vault.lamports();
+
+    // Curve calculation.
+    let gross_sol_out = get_sol_out(virtual_sol_reserve, virtual_token_reserve, args.token_amount)?;
+
+    let fee = calc_fee(gross_sol_out, platform_fee_bps)?;
     let net_sol_out = gross_sol_out
         .checked_sub(fee)
         .ok_or(CurveError::MathOverflow)?;
 
-    require!(
-        net_sol_out >= args.min_sol_out,
-        CurveError::SlippageExceeded
-    );
-    require!(
-        ctx.accounts.sol_vault.lamports() >= gross_sol_out,
-        CurveError::InsufficientSolLiquidity
-    );
+    require!(net_sol_out >= args.min_sol_out, CurveError::SlippageExceeded);
+    require!(vault_lamports >= gross_sol_out, CurveError::InsufficientSolLiquidity);
 
-    // ── Transfer tokens: seller ATA → token_vault ────────────────────────────
+    // ── Phase 2: CPIs (no stored mutable borrow during this phase) ───────────
+
+    // Transfer tokens: seller ATA → token_vault.
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -122,9 +122,8 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         args.token_amount,
     )?;
 
-    // ── Transfer 1% fee: sol_vault → treasury ─────────────────────────────────
-    // Direct lamport manipulation is safe: sol_vault is program-owned and
-    // we verified its balance above.
+    // Transfer 1% fee: sol_vault → treasury (direct lamport transfer).
+    // sol_vault is program-owned so we can manipulate lamports directly.
     if fee > 0 {
         **ctx
             .accounts
@@ -138,7 +137,7 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
             .try_borrow_mut_lamports()? += fee;
     }
 
-    // ── Transfer net SOL: sol_vault → seller ─────────────────────────────────
+    // Transfer net SOL: sol_vault → seller.
     **ctx
         .accounts
         .sol_vault
@@ -150,7 +149,9 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         .to_account_info()
         .try_borrow_mut_lamports()? += net_sol_out;
 
-    // ── Update virtual reserves ───────────────────────────────────────────────
+    // ── Phase 3: mutate state (single mutable borrow at the end) ─────────────
+    let state = &mut ctx.accounts.launch_state;
+
     state.virtual_sol_reserve = state
         .virtual_sol_reserve
         .checked_sub(gross_sol_out)
@@ -160,7 +161,6 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         .checked_add(args.token_amount)
         .ok_or(CurveError::MathOverflow)?;
 
-    // ── Update counters ───────────────────────────────────────────────────────
     state.real_sol_collected = state.real_sol_collected.saturating_sub(gross_sol_out);
     state.tokens_sold = state.tokens_sold.saturating_sub(args.token_amount);
 

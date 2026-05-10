@@ -28,7 +28,7 @@ pub struct ClaimCreatorReward<'info> {
     pub launch_state: Account<'info, LaunchState>,
 
     /// Creator reward vault — program-owned token account holding the 5%.
-    /// Authority is launch_state PDA; transfer is signed by launch_state seeds.
+    /// Authority is launch_state PDA; transfer is signed with launch_state seeds.
     #[account(
         mut,
         seeds = [CREATOR_REWARD_SEED, mint.key().as_ref()],
@@ -54,20 +54,22 @@ pub struct ClaimCreatorReward<'info> {
 }
 
 pub fn handler(ctx: Context<ClaimCreatorReward>) -> Result<()> {
-    let state = &mut ctx.accounts.launch_state;
+    // ── Phase 1: read + validate (no mutable borrows stored) ─────────────────
+    require!(ctx.accounts.launch_state.is_graduated(), CurveError::LaunchNotGraduated);
+    require!(!ctx.accounts.launch_state.creator_reward_claimed, CurveError::AlreadyClaimed);
 
-    // ── Guards ────────────────────────────────────────────────────────────────
-    require!(state.is_graduated(), CurveError::LaunchNotGraduated);
-    require!(!state.creator_reward_claimed, CurveError::AlreadyClaimed);
-
+    // Snapshot reward amount and PDA bump before any mutable borrow.
     let reward_amount = ctx.accounts.creator_reward_vault.amount;
     require!(reward_amount > 0, CurveError::NoRewardToClaim);
 
-    // ── Transfer creator reward vault → creator ATA ───────────────────────────
-    // The creator_reward_vault's authority is the launch_state PDA, so we
-    // sign the CPI with launch_state seeds.
+    let launch_bump = ctx.accounts.launch_state.bump;
     let mint_key = ctx.accounts.mint.key();
-    let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &[state.bump]];
+
+    // ── Phase 2: CPI (no stored mutable borrow during this phase) ────────────
+    // The creator_reward_vault's authority is the launch_state PDA, so sign
+    // the CPI with launch_state seeds.
+    let bump_bytes = [launch_bump];
+    let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &bump_bytes];
     let signer_seeds = &[seeds];
 
     token::transfer(
@@ -83,7 +85,8 @@ pub fn handler(ctx: Context<ClaimCreatorReward>) -> Result<()> {
         reward_amount,
     )?;
 
-    // ── Mark as claimed — prevents double-claim ───────────────────────────────
+    // ── Phase 3: mutate state (single mutable borrow at the end) ─────────────
+    let state = &mut ctx.accounts.launch_state;
     state.creator_reward_claimed = true;
 
     msg!(

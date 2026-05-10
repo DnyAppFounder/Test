@@ -57,7 +57,7 @@ pub struct Buy<'info> {
     )]
     pub sol_vault: SystemAccount<'info>,
 
-    /// Buyer's ATA — receives purchased tokens. Created if it doesn't exist.
+    /// Buyer's ATA — receives purchased tokens.
     #[account(
         init_if_needed,
         payer = buyer,
@@ -81,36 +81,38 @@ pub struct Buy<'info> {
 }
 
 pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
-    let state = &mut ctx.accounts.launch_state;
-
-    // ── Guards ────────────────────────────────────────────────────────────────
-    require!(state.is_active(), CurveError::LaunchNotActive);
+    // ── Phase 1: read + validate (no mutable borrows stored) ─────────────────
+    require!(ctx.accounts.launch_state.is_active(), CurveError::LaunchNotActive);
     require!(args.sol_amount > 0, CurveError::ZeroAmount);
 
-    // ── Fee split: 1% → treasury, 99% → curve ────────────────────────────────
-    let fee = calc_fee(args.sol_amount, state.platform_fee_bps)?;
+    // Copy all fields we need from launch_state before any mutable borrow.
+    let platform_fee_bps     = ctx.accounts.launch_state.platform_fee_bps;
+    let virtual_sol_reserve  = ctx.accounts.launch_state.virtual_sol_reserve;
+    let virtual_token_reserve = ctx.accounts.launch_state.virtual_token_reserve;
+    let launch_bump          = ctx.accounts.launch_state.bump;
+    let graduation_threshold = ctx.accounts.launch_state.graduation_threshold;
+
+    // Copy mint key (Pubkey is Copy so this frees the borrow immediately).
+    let mint_key = ctx.accounts.mint.key();
+
+    // Snapshot token vault balance before CPIs.
+    let vault_amount = ctx.accounts.token_vault.amount;
+
+    // Fee and curve calculations.
+    let fee = calc_fee(args.sol_amount, platform_fee_bps)?;
     let net_sol = args
         .sol_amount
         .checked_sub(fee)
         .ok_or(CurveError::MathOverflow)?;
 
-    // ── Constant-product price calculation ────────────────────────────────────
-    let tokens_out = get_tokens_out(
-        state.virtual_sol_reserve,
-        state.virtual_token_reserve,
-        net_sol,
-    )?;
+    let tokens_out = get_tokens_out(virtual_sol_reserve, virtual_token_reserve, net_sol)?;
 
-    require!(
-        tokens_out >= args.min_tokens_out,
-        CurveError::SlippageExceeded
-    );
-    require!(
-        tokens_out <= ctx.accounts.token_vault.amount,
-        CurveError::InsufficientTokenLiquidity
-    );
+    require!(tokens_out >= args.min_tokens_out, CurveError::SlippageExceeded);
+    require!(tokens_out <= vault_amount, CurveError::InsufficientTokenLiquidity);
 
-    // ── Transfer 1% fee: buyer → treasury ────────────────────────────────────
+    // ── Phase 2: CPIs (no stored mutable borrow during this phase) ───────────
+
+    // Transfer 1% fee: buyer → treasury.
     if fee > 0 {
         system_program::transfer(
             CpiContext::new(
@@ -124,7 +126,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         )?;
     }
 
-    // ── Transfer net SOL: buyer → sol_vault ──────────────────────────────────
+    // Transfer net SOL: buyer → sol_vault.
     system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -136,9 +138,9 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         net_sol,
     )?;
 
-    // ── Transfer tokens: token_vault → buyer ATA (signed by launch_state) ────
-    let mint_key = ctx.accounts.mint.key();
-    let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &[state.bump]];
+    // Transfer tokens: token_vault → buyer ATA (signed by launch_state PDA).
+    let bump_bytes = [launch_bump];
+    let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &bump_bytes];
     let signer_seeds = &[seeds];
 
     token::transfer(
@@ -154,7 +156,9 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         tokens_out,
     )?;
 
-    // ── Update virtual reserves (constant-product invariant maintained) ───────
+    // ── Phase 3: mutate state (single mutable borrow at the end) ─────────────
+    let state = &mut ctx.accounts.launch_state;
+
     state.virtual_sol_reserve = state
         .virtual_sol_reserve
         .checked_add(net_sol)
@@ -163,8 +167,6 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         .virtual_token_reserve
         .checked_sub(tokens_out)
         .ok_or(CurveError::MathOverflow)?;
-
-    // ── Update real-SOL and token counters ────────────────────────────────────
     state.real_sol_collected = state
         .real_sol_collected
         .checked_add(net_sol)
@@ -184,8 +186,8 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         state.real_sol_collected,
     );
 
-    // ── Auto-graduate when threshold is reached ───────────────────────────────
-    if state.real_sol_collected >= state.graduation_threshold {
+    // Auto-graduate when threshold is reached.
+    if state.real_sol_collected >= graduation_threshold {
         let clock = Clock::get()?;
         state.status = LaunchStatus::Graduated;
         state.graduated_at = Some(clock.unix_timestamp);
@@ -193,7 +195,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
             "AUTO-GRADUATED: mint={} realSol={} threshold={}",
             state.mint,
             state.real_sol_collected,
-            state.graduation_threshold,
+            graduation_threshold,
         );
     }
 
