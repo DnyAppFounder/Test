@@ -50,8 +50,10 @@ pub struct InitializeLaunch<'info> {
     pub mint: Account<'info, Mint>,
 
     /// LaunchState PDA — stores all curve parameters and running state.
+    /// init_if_needed avoids the try_from_unchecked expand path that plain `init` triggers.
+    /// Re-initialization is blocked in the handler by checking created_at == 0.
     #[account(
-        init,
+        init_if_needed,
         payer = creator,
         space = LaunchState::SIZE,
         seeds = [LAUNCH_SEED, mint.key().as_ref()],
@@ -60,11 +62,10 @@ pub struct InitializeLaunch<'info> {
     pub launch_state: Account<'info, LaunchState>,
 
     /// SOL vault PDA — holds real SOL collected from net buys.
-    /// Program-owned; only the program can withdraw lamports from it.
     ///
-    /// CHECK: Program-owned PDA that only stores lamports. Safe.
+    /// CHECK: Program-owned PDA. Only stores lamports. Created here, drained only by sell.
     #[account(
-        init,
+        init_if_needed,
         payer = creator,
         space = 0,
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
@@ -75,7 +76,7 @@ pub struct InitializeLaunch<'info> {
     /// Bonding curve token vault — ATA of the launch_state PDA.
     /// Receives 95% of total supply (curve_token_allocation).
     #[account(
-        init,
+        init_if_needed,
         payer = creator,
         associated_token::mint = mint,
         associated_token::authority = launch_state,
@@ -85,7 +86,7 @@ pub struct InitializeLaunch<'info> {
     /// Creator reward vault — program-derived token account at a fixed PDA.
     /// Receives 5% of total supply. Locked until graduation.
     #[account(
-        init,
+        init_if_needed,
         payer = creator,
         seeds = [CREATOR_REWARD_SEED, mint.key().as_ref()],
         bump,
@@ -106,10 +107,16 @@ pub struct InitializeLaunch<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    // Sysvar<'info, Rent> removed: causes try_from_unchecked derive errors on modern toolchains.
 }
 
 pub fn handler(ctx: Context<InitializeLaunch>, args: InitializeLaunchArgs) -> Result<()> {
+    // Guard against re-initialization: created_at is 0 on a zero-initialised account.
+    // A real Unix timestamp is always > 0 so this safely detects existing launches.
+    require!(
+        ctx.accounts.launch_state.created_at == 0,
+        CurveError::AlreadyInitialized
+    );
+
     // ── Validate args ─────────────────────────────────────────────────────────
     require!(args.platform_fee_bps <= 1000, CurveError::InvalidFeeBps);
     require!(

@@ -61,4 +61,7 @@ pub enum CurveError {
 
     #[msg("Creator reward vault has no tokens to claim")]
     NoRewardToClaim,
+
+    #[msg("Launch has already been initialized for this mint")]
+    AlreadyInitialized,
 }
