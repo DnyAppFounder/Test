@@ -23,6 +23,9 @@ export interface LiveToken {
   boostCount?: number;
   pairCreatedAt?: number;
   sparkline?: number[];
+  description?: string;
+  websites?: { label: string; url: string }[];
+  socials?: { type: string; url: string }[];
 }
 
 export type MarketCategory = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
@@ -63,6 +66,8 @@ class LiveMarketService {
       chainId: 'solana',
       boostCount: pair.boosts?.active || 0,
       pairCreatedAt: pair.pairCreatedAt,
+      websites: pair.info?.websites,
+      socials: pair.info?.socials,
     };
   }
 

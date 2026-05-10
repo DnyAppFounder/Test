@@ -37,6 +37,7 @@ import { watchlistService } from '@/services/watchlistService';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { TokenAboutCard } from '@/components/TokenAboutCard';
 
 type BottomTab = 'chat' | 'activity' | 'transactions' | 'holders';
 
@@ -335,6 +336,9 @@ export default function TokenDetailScreen() {
             </>
           )}
         </View>
+
+        {/* About */}
+        <TokenAboutCard token={token} mintAddress={token.address} />
 
         {/* Contract / DEX info */}
         <View style={styles.infoCard}>
