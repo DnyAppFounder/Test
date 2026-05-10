@@ -15,7 +15,7 @@ pub struct ClaimCreatorReward<'info> {
     )]
     pub creator: Signer<'info>,
 
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     /// LaunchState — must be Graduated; enforces creator identity.
     #[account(
@@ -25,7 +25,7 @@ pub struct ClaimCreatorReward<'info> {
         has_one = mint,
         has_one = creator_reward_vault,
     )]
-    pub launch_state: Account<'info, LaunchState>,
+    pub launch_state: Box<Account<'info, LaunchState>>,
 
     /// Creator reward vault — program-owned token account holding the 5%.
     /// Authority is launch_state PDA; transfer is signed with launch_state seeds.
@@ -37,7 +37,7 @@ pub struct ClaimCreatorReward<'info> {
         token::authority = launch_state,
         address = launch_state.creator_reward_vault,
     )]
-    pub creator_reward_vault: Account<'info, TokenAccount>,
+    pub creator_reward_vault: Box<Account<'info, TokenAccount>>,
 
     /// Creator's ATA — receives the 5% creator reward.
     #[account(
@@ -46,7 +46,7 @@ pub struct ClaimCreatorReward<'info> {
         associated_token::mint = mint,
         associated_token::authority = creator,
     )]
-    pub creator_token_account: Account<'info, TokenAccount>,
+    pub creator_token_account: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,

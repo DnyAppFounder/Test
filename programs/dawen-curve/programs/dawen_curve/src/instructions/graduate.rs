@@ -19,7 +19,7 @@ use crate::{LAUNCH_SEED, SOL_VAULT_SEED};
 ///   - collected SOL and remaining tokens preserved for Raydium/Meteora migration
 #[derive(Accounts)]
 pub struct Graduate<'info> {
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
@@ -28,15 +28,15 @@ pub struct Graduate<'info> {
         has_one = mint,
         has_one = sol_vault,
     )]
-    pub launch_state: Account<'info, LaunchState>,
+    pub launch_state: Box<Account<'info, LaunchState>>,
 
-    /// CHECK: Program-owned PDA validated by seeds. Only stores lamports.
+    /// CHECK: Program-derived PDA validated by seeds. Only stores lamports.
     #[account(
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
         bump = launch_state.sol_vault_bump,
         address = launch_state.sol_vault,
     )]
-    pub sol_vault: SystemAccount<'info>,
+    pub sol_vault: UncheckedAccount<'info>,
 }
 
 pub fn handler(ctx: Context<Graduate>) -> Result<()> {

@@ -21,7 +21,7 @@ pub struct Sell<'info> {
     #[account(mut)]
     pub seller: Signer<'info>,
 
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     /// LaunchState — holds virtual reserves and status.
     #[account(
@@ -32,7 +32,7 @@ pub struct Sell<'info> {
         has_one = token_vault,
         has_one = sol_vault,
     )]
-    pub launch_state: Account<'info, LaunchState>,
+    pub launch_state: Box<Account<'info, LaunchState>>,
 
     /// Bonding curve token vault — receives tokens from seller.
     #[account(
@@ -41,18 +41,18 @@ pub struct Sell<'info> {
         token::authority = launch_state,
         address = launch_state.token_vault,
     )]
-    pub token_vault: Account<'info, TokenAccount>,
+    pub token_vault: Box<Account<'info, TokenAccount>>,
 
     /// SOL vault PDA — source of SOL paid to the seller.
     ///
-    /// CHECK: Program-owned PDA that only stores lamports. Safe.
+    /// CHECK: Program-derived PDA validated by seeds. Only stores lamports.
     #[account(
         mut,
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
         bump = launch_state.sol_vault_bump,
         address = launch_state.sol_vault,
     )]
-    pub sol_vault: SystemAccount<'info>,
+    pub sol_vault: UncheckedAccount<'info>,
 
     /// Seller's ATA — source of tokens being sold.
     #[account(
@@ -60,7 +60,7 @@ pub struct Sell<'info> {
         token::mint = mint,
         token::authority = seller,
     )]
-    pub seller_token_account: Account<'info, TokenAccount>,
+    pub seller_token_account: Box<Account<'info, TokenAccount>>,
 
     /// DAWEN platform treasury — receives the 1% sell fee.
     ///

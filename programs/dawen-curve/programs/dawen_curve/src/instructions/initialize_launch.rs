@@ -47,7 +47,7 @@ pub struct InitializeLaunch<'info> {
     pub creator: Signer<'info>,
 
     /// The existing SPL token mint being launched on the bonding curve.
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     /// LaunchState PDA — stores all curve parameters and running state.
     #[account(
@@ -57,7 +57,7 @@ pub struct InitializeLaunch<'info> {
         seeds = [LAUNCH_SEED, mint.key().as_ref()],
         bump,
     )]
-    pub launch_state: Account<'info, LaunchState>,
+    pub launch_state: Box<Account<'info, LaunchState>>,
 
     /// SOL vault PDA — holds real SOL collected from net buys.
     /// Not initialized here; receives SOL via system_program::transfer in buy.
@@ -78,7 +78,7 @@ pub struct InitializeLaunch<'info> {
         associated_token::mint = mint,
         associated_token::authority = launch_state,
     )]
-    pub token_vault: Account<'info, TokenAccount>,
+    pub token_vault: Box<Account<'info, TokenAccount>>,
 
     /// Creator reward vault — program-derived token account at a fixed PDA.
     /// Receives 5% of total supply. Locked until graduation.
@@ -90,7 +90,7 @@ pub struct InitializeLaunch<'info> {
         token::mint = mint,
         token::authority = launch_state,
     )]
-    pub creator_reward_vault: Account<'info, TokenAccount>,
+    pub creator_reward_vault: Box<Account<'info, TokenAccount>>,
 
     /// Creator's token account — source of both allocations.
     /// Must hold at least curve_token_allocation + creator_reward_amount.
@@ -99,7 +99,7 @@ pub struct InitializeLaunch<'info> {
         token::mint = mint,
         token::authority = creator,
     )]
-    pub creator_token_account: Account<'info, TokenAccount>,
+    pub creator_token_account: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
