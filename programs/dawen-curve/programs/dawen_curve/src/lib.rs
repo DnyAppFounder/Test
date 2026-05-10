@@ -50,9 +50,12 @@ use instructions::*;
 
 declare_id!("DCurve1vZEq4cPjhfRDsGBrXJGBnwuQ8LqFp5gNmpBJv");
 
-/// DAWEN platform fee treasury. Buy/sell fees are forwarded here atomically.
-pub const TREASURY: Pubkey =
-    anchor_lang::solana_program::pubkey!("FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X");
+/// DAWEN platform fee treasury — buy/sell fees are forwarded here atomically.
+/// Using declare_id! submodule avoids all pubkey! macro import issues across Anchor versions.
+mod treasury_key {
+    anchor_lang::declare_id!("FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X");
+}
+pub use treasury_key::ID as TREASURY;
 
 /// LaunchState PDA seed.
 pub const LAUNCH_SEED: &[u8] = b"launch";
