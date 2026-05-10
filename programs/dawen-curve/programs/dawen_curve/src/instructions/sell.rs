@@ -9,9 +9,9 @@ use crate::{LAUNCH_SEED, SOL_VAULT_SEED, TREASURY};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct SellArgs {
-    /// Number of tokens (smallest units) to sell back to the curve.
+    /// Number of tokens (raw units) to sell back to the bonding curve.
     pub token_amount: u64,
-    /// Minimum SOL (lamports) the seller will accept after fee deduction.
+    /// Minimum net SOL (lamports) the seller will accept after the 1% fee.
     pub min_sol_out: u64,
 }
 
@@ -23,7 +23,7 @@ pub struct Sell<'info> {
 
     pub mint: Account<'info, Mint>,
 
-    /// LaunchState — holds virtual reserves and running state.
+    /// LaunchState — holds virtual reserves and status.
     #[account(
         mut,
         seeds = [LAUNCH_SEED, mint.key().as_ref()],
@@ -34,7 +34,7 @@ pub struct Sell<'info> {
     )]
     pub launch_state: Account<'info, LaunchState>,
 
-    /// Token vault — receives tokens from the seller.
+    /// Bonding curve token vault — receives tokens from seller.
     #[account(
         mut,
         token::mint = mint,
@@ -45,7 +45,7 @@ pub struct Sell<'info> {
 
     /// SOL vault PDA — source of SOL paid to the seller.
     ///
-    /// CHECK: Program-owned PDA verified by seeds. Only stores lamports.
+    /// CHECK: Program-owned PDA that only stores lamports. Safe.
     #[account(
         mut,
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
@@ -62,9 +62,9 @@ pub struct Sell<'info> {
     )]
     pub seller_token_account: Account<'info, TokenAccount>,
 
-    /// DAWEN platform treasury — receives the platform fee.
+    /// DAWEN platform treasury — receives the 1% sell fee.
     ///
-    /// CHECK: Verified against the hardcoded TREASURY constant.
+    /// CHECK: Verified against hardcoded TREASURY constant.
     #[account(
         mut,
         constraint = treasury.key() == TREASURY @ CurveError::InvalidTreasury,
@@ -87,14 +87,14 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         CurveError::InsufficientTokenLiquidity
     );
 
-    // ── Curve calculation ─────────────────────────────────────────────────────
-    // gross_sol_out is what the curve would pay before platform fee
+    // ── Constant-product price calculation ────────────────────────────────────
     let gross_sol_out = get_sol_out(
         state.virtual_sol_reserve,
         state.virtual_token_reserve,
         args.token_amount,
     )?;
 
+    // ── Fee split: 1% from gross SOL → treasury ───────────────────────────────
     let fee = calc_fee(gross_sol_out, state.platform_fee_bps)?;
     let net_sol_out = gross_sol_out
         .checked_sub(fee)
@@ -104,14 +104,12 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         net_sol_out >= args.min_sol_out,
         CurveError::SlippageExceeded
     );
-
-    // Ensure the SOL vault has enough lamports to cover gross_sol_out
     require!(
         ctx.accounts.sol_vault.lamports() >= gross_sol_out,
         CurveError::InsufficientSolLiquidity
     );
 
-    // ── Transfer tokens: seller → token_vault ────────────────────────────────
+    // ── Transfer tokens: seller ATA → token_vault ────────────────────────────
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -124,9 +122,9 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         args.token_amount,
     )?;
 
-    // ── Transfer platform fee: sol_vault → treasury ───────────────────────────
-    // Direct lamport manipulation is safe here because sol_vault is
-    // program-owned and we have verified the balance above.
+    // ── Transfer 1% fee: sol_vault → treasury ─────────────────────────────────
+    // Direct lamport manipulation is safe: sol_vault is program-owned and
+    // we verified its balance above.
     if fee > 0 {
         **ctx
             .accounts
@@ -153,8 +151,6 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         .try_borrow_mut_lamports()? += net_sol_out;
 
     // ── Update virtual reserves ───────────────────────────────────────────────
-    // On a sell, the virtual SOL reserve decreases and virtual token reserve
-    // increases — the inverse of a buy.
     state.virtual_sol_reserve = state
         .virtual_sol_reserve
         .checked_sub(gross_sol_out)
@@ -165,14 +161,8 @@ pub fn handler(ctx: Context<Sell>, args: SellArgs) -> Result<()> {
         .ok_or(CurveError::MathOverflow)?;
 
     // ── Update counters ───────────────────────────────────────────────────────
-    // realSolCollected decreases when SOL leaves the vault
-    state.real_sol_collected = state
-        .real_sol_collected
-        .saturating_sub(gross_sol_out);
-
-    state.tokens_sold = state
-        .tokens_sold
-        .saturating_sub(args.token_amount);
+    state.real_sol_collected = state.real_sol_collected.saturating_sub(gross_sol_out);
+    state.tokens_sold = state.tokens_sold.saturating_sub(args.token_amount);
 
     msg!(
         "SELL: tokens_in={} gross_sol={} fee={} net_sol={} vSol={} vToken={} realSol={}",

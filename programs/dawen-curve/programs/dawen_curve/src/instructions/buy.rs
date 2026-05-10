@@ -5,17 +5,16 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::errors::CurveError;
 use crate::math::{calc_fee, get_tokens_out};
-use crate::state::LaunchState;
+use crate::state::{LaunchState, LaunchStatus};
 use crate::{LAUNCH_SEED, SOL_VAULT_SEED, TREASURY};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct BuyArgs {
-    /// Gross SOL amount (lamports) the buyer is willing to spend.
-    /// The platform fee is taken from this amount before the curve
-    /// price calculation.
+    /// Gross SOL (lamports) the buyer sends. The 1% DAWEN fee is taken first,
+    /// then net SOL enters the constant-product formula.
     pub sol_amount: u64,
-    /// Minimum tokens the buyer will accept (slippage guard).
-    /// Transaction fails if tokens_out < min_tokens_out.
+    /// Minimum tokens the buyer will accept. Transaction reverts if
+    /// tokens_out < min_tokens_out.
     pub min_tokens_out: u64,
 }
 
@@ -27,7 +26,7 @@ pub struct Buy<'info> {
 
     pub mint: Account<'info, Mint>,
 
-    /// LaunchState — holds virtual reserves and running state.
+    /// LaunchState — holds virtual reserves and status.
     #[account(
         mut,
         seeds = [LAUNCH_SEED, mint.key().as_ref()],
@@ -38,7 +37,7 @@ pub struct Buy<'info> {
     )]
     pub launch_state: Account<'info, LaunchState>,
 
-    /// Token vault (ATA of launch_state PDA) — source of tokens for buyers.
+    /// Bonding curve token vault — source of tokens for buyers.
     #[account(
         mut,
         token::mint = mint,
@@ -49,7 +48,7 @@ pub struct Buy<'info> {
 
     /// SOL vault PDA — receives net SOL from buyers.
     ///
-    /// CHECK: Program-owned PDA verified by seeds. Only stores lamports.
+    /// CHECK: Program-owned PDA that only stores lamports. Safe.
     #[account(
         mut,
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
@@ -58,7 +57,7 @@ pub struct Buy<'info> {
     )]
     pub sol_vault: SystemAccount<'info>,
 
-    /// Buyer's ATA for the launched token — receives purchased tokens.
+    /// Buyer's ATA — receives purchased tokens. Created if it doesn't exist.
     #[account(
         init_if_needed,
         payer = buyer,
@@ -67,9 +66,9 @@ pub struct Buy<'info> {
     )]
     pub buyer_token_account: Account<'info, TokenAccount>,
 
-    /// DAWEN platform treasury — receives the platform fee.
+    /// DAWEN platform treasury — receives the 1% buy fee.
     ///
-    /// CHECK: Verified against the hardcoded TREASURY constant below.
+    /// CHECK: Verified against hardcoded TREASURY constant.
     #[account(
         mut,
         constraint = treasury.key() == TREASURY @ CurveError::InvalidTreasury,
@@ -88,14 +87,14 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
     require!(state.is_active(), CurveError::LaunchNotActive);
     require!(args.sol_amount > 0, CurveError::ZeroAmount);
 
-    // ── Fee split ─────────────────────────────────────────────────────────────
+    // ── Fee split: 1% → treasury, 99% → curve ────────────────────────────────
     let fee = calc_fee(args.sol_amount, state.platform_fee_bps)?;
     let net_sol = args
         .sol_amount
         .checked_sub(fee)
         .ok_or(CurveError::MathOverflow)?;
 
-    // ── Curve calculation ─────────────────────────────────────────────────────
+    // ── Constant-product price calculation ────────────────────────────────────
     let tokens_out = get_tokens_out(
         state.virtual_sol_reserve,
         state.virtual_token_reserve,
@@ -111,7 +110,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         CurveError::InsufficientTokenLiquidity
     );
 
-    // ── Transfer platform fee: buyer → treasury ───────────────────────────────
+    // ── Transfer 1% fee: buyer → treasury ────────────────────────────────────
     if fee > 0 {
         system_program::transfer(
             CpiContext::new(
@@ -137,7 +136,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         net_sol,
     )?;
 
-    // ── Transfer tokens: token_vault → buyer (signed by launch_state PDA) ────
+    // ── Transfer tokens: token_vault → buyer ATA (signed by launch_state) ────
     let mint_key = ctx.accounts.mint.key();
     let seeds: &[&[u8]] = &[LAUNCH_SEED, mint_key.as_ref(), &[state.bump]];
     let signer_seeds = &[seeds];
@@ -155,7 +154,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         tokens_out,
     )?;
 
-    // ── Update virtual reserves ───────────────────────────────────────────────
+    // ── Update virtual reserves (constant-product invariant maintained) ───────
     state.virtual_sol_reserve = state
         .virtual_sol_reserve
         .checked_add(net_sol)
@@ -165,7 +164,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         .checked_sub(tokens_out)
         .ok_or(CurveError::MathOverflow)?;
 
-    // ── Update counters ───────────────────────────────────────────────────────
+    // ── Update real-SOL and token counters ────────────────────────────────────
     state.real_sol_collected = state
         .real_sol_collected
         .checked_add(net_sol)
@@ -176,7 +175,7 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         .ok_or(CurveError::MathOverflow)?;
 
     msg!(
-        "BUY: sol_in={} fee={} tokens_out={} vSol={} vToken={} realSol={}",
+        "BUY: gross_sol={} fee={} tokens_out={} vSol={} vToken={} realSol={}",
         args.sol_amount,
         fee,
         tokens_out,
@@ -185,13 +184,13 @@ pub fn handler(ctx: Context<Buy>, args: BuyArgs) -> Result<()> {
         state.real_sol_collected,
     );
 
-    // ── Auto-graduate if threshold reached ───────────────────────────────────
+    // ── Auto-graduate when threshold is reached ───────────────────────────────
     if state.real_sol_collected >= state.graduation_threshold {
         let clock = Clock::get()?;
-        state.status = crate::state::LaunchStatus::Graduated;
+        state.status = LaunchStatus::Graduated;
         state.graduated_at = Some(clock.unix_timestamp);
         msg!(
-            "GRADUATED: mint={} realSol={} threshold={}",
+            "AUTO-GRADUATED: mint={} realSol={} threshold={}",
             state.mint,
             state.real_sol_collected,
             state.graduation_threshold,

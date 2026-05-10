@@ -1,21 +1,22 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::Mint;
 
 use crate::errors::CurveError;
 use crate::state::{LaunchState, LaunchStatus};
 use crate::{LAUNCH_SEED, SOL_VAULT_SEED};
-use anchor_spl::token::Mint;
 
 /// Permissionless graduation instruction.
 ///
 /// Anyone can call this once realSolCollected >= graduation_threshold.
-/// The `buy` instruction also auto-graduates, so this exists as an explicit
-/// fallback that indexers or the DAWEN backend can trigger.
+/// The buy instruction also auto-graduates, so this is a fallback for
+/// edge cases (e.g., the final buyer's tx is a sell that pushes above threshold
+/// in theory — though sells can't graduate in this design — or for indexer use).
 ///
 /// After graduation:
-///   - status is set to Graduated
-///   - buy/sell are permanently blocked
-///   - collected SOL and remaining tokens remain in their vaults, ready for
-///     a separate migrate_to_raydium / migrate_to_meteora instruction
+///   - status = Graduated
+///   - buy/sell permanently blocked
+///   - creator reward vault unlocked (claimable via claim_creator_reward)
+///   - collected SOL and remaining tokens preserved for Raydium/Meteora migration
 #[derive(Accounts)]
 pub struct Graduate<'info> {
     pub mint: Account<'info, Mint>,
@@ -29,7 +30,7 @@ pub struct Graduate<'info> {
     )]
     pub launch_state: Account<'info, LaunchState>,
 
-    /// CHECK: Program-owned PDA. Validated by seeds constraint.
+    /// CHECK: Program-owned PDA validated by seeds. Only stores lamports.
     #[account(
         seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
         bump = launch_state.sol_vault_bump,
