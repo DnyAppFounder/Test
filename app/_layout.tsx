@@ -64,8 +64,8 @@ export default function RootLayout() {
     <View style={styles.root} onLayout={onLayoutRootView}>
       <ErrorBoundary fallbackLabel="App error — please refresh">
         <LanguageProvider>
-          <SecurityProvider>
           <WalletProvider>
+          <SecurityProvider>
             <ProfileProvider>
               <Stack
                 screenOptions={{
@@ -87,8 +87,8 @@ export default function RootLayout() {
               </Stack>
               <StatusBar style="light" />
             </ProfileProvider>
-          </WalletProvider>
           </SecurityProvider>
+          </WalletProvider>
         </LanguageProvider>
       </ErrorBoundary>
     </View>

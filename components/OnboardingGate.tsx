@@ -19,11 +19,12 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { completeOnboarding, logEvent, onboardingComplete } = useSecurity();
   const { profile } = useProfile();
 
-  // Mark complete once when all steps are done for the first time
+  // Mark complete once when all steps are done — no profile?.id required so it
+  // always fires, even before the Supabase profile finishes loading.
   useEffect(() => {
-    if (isReady && nextStep === null && !onboardingComplete && profile?.id) {
-      completeOnboarding(profile.id);
-      logEvent(profile.id, 'onboarding_completed');
+    if (isReady && nextStep === null && !onboardingComplete) {
+      completeOnboarding(profile?.id);
+      if (profile?.id) logEvent(profile.id, 'onboarding_completed');
     }
   }, [isReady, nextStep, onboardingComplete, profile?.id]);
 
