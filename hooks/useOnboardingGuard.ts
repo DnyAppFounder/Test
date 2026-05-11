@@ -3,20 +3,6 @@ import { OnboardingStep, useSecurity } from '@/contexts/SecurityContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useWallet } from '@/contexts/WalletContext';
 
-const RESERVED_USERNAMES = new Set([
-  'admin', 'support', 'dawen', 'official', 'verification',
-  'verified', 'moderator', 'root', 'system',
-]);
-
-function isValidUsername(name: string | null | undefined): boolean {
-  if (!name) return false;
-  const t = name.trim();
-  if (t.length < 3 || t.length > 20) return false;
-  if (!/^[a-z0-9_]+$/.test(t)) return false;
-  if (RESERVED_USERNAMES.has(t)) return false;
-  return true;
-}
-
 /**
  * Returns the next incomplete onboarding step, or null when done.
  * Order: pin → username → wallet-type step → biometric (optional offer).
@@ -45,8 +31,9 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
     // 1. PIN required for all users
     if (!pinHash) return 'pin';
 
-    // 2. Username required if missing or invalid (never force rename for existing valid usernames)
-    if (!isValidUsername(profile?.username)) return 'username';
+    // 2. Username required only if completely absent — never re-validate existing usernames
+    const existingUsername = profile?.username?.trim();
+    if (!existingUsername || existingUsername.length === 0) return 'username';
 
     // 3. Wallet-type-specific backup step
     const type = walletType ?? activeWallet.type;

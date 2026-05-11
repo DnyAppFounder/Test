@@ -32,6 +32,7 @@ import {
 import { useWallet } from '@/contexts/WalletContext';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { PinUnlockModal } from '@/components/PinUnlockModal';
+import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
 import { spacing, borderRadius, fontSize } from '@/constants/theme';
 import { burnSplToken, PayStatus as BurnStatus } from '@/services/treasuryService';
 import {
@@ -167,6 +168,7 @@ export default function SendScreen() {
   const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
   const { pinHash, walletType } = useSecurity();
   const [pinGateVisible, setPinGateVisible] = useState(false);
+  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
 
   const [assets, setAssets] = useState<WalletAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(true);
@@ -260,10 +262,25 @@ export default function SendScreen() {
   };
 
   const requestSend = () => {
-    // External wallets sign via their own popup — skip app PIN
+    if (!selectedAsset || amountNum <= 0 || !recipient) return;
+    setTxConfirmVisible(true);
+  };
+
+  const handleTxConfirmed = () => {
+    setTxConfirmVisible(false);
     const needsPin = !connectedWallet && !!pinHash;
     if (needsPin) { setPinGateVisible(true); } else { handleSend(); }
   };
+
+  const sendConfirmDetails: TxDetail[] = selectedAsset ? [
+    { label: 'Action', value: `Send ${selectedAsset.symbol}` },
+    { label: 'Amount', value: `${amountNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${selectedAsset.symbol}`, accent: true },
+    { label: 'To', value: `${recipient.slice(0, 6)}...${recipient.slice(-4)}` },
+    { label: 'Network Fee', value: `~${estimatedFee} SOL` },
+    selectedAsset.isNative
+      ? { label: 'Total', value: `${(amountNum + estimatedFee).toFixed(6)} SOL`, total: true }
+      : { label: 'You Pay', value: `${amountNum} ${selectedAsset.symbol} + fee`, total: true },
+  ] : [];
 
   const handleSend = async () => {
     setError(null);
@@ -840,10 +857,17 @@ export default function SendScreen() {
         </TouchableOpacity>
       </Modal>
 
+      <TxConfirmModal
+        visible={txConfirmVisible}
+        title="Confirm Send"
+        details={sendConfirmDetails}
+        onConfirm={handleTxConfirmed}
+        onCancel={() => setTxConfirmVisible(false)}
+      />
       <PinUnlockModal
         visible={pinGateVisible}
-        title="Confirm Send"
-        subtitle="Enter your PIN to authorize this transaction"
+        title="Authorize Send"
+        subtitle="Enter your PIN to sign this transaction"
         onSuccess={() => { setPinGateVisible(false); handleSend(); }}
         onCancel={() => setPinGateVisible(false)}
       />

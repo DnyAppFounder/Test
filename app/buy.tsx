@@ -29,6 +29,9 @@ import {
   X,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
+import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
+import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
 import { jupiterSwapService } from '@/services/jupiter/swapService';
 import { getSolPrice, SolanaPriceService } from '@/services/solana/priceService';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
@@ -174,6 +177,9 @@ function TokenSelectorModal({ visible, onClose, onSelect, tokens, title, showBal
 export default function BuyScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshWallet, nativeBalance, tokens } = useWallet();
+  const { pinHash } = useSecurity();
+  const [pinGateVisible, setPinGateVisible] = useState(false);
+  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
 
   // Input token (what the user pays with)
   const [inputToken, setInputToken] = useState<Token>(SOL_TOKEN);
@@ -381,6 +387,26 @@ export default function BuyScreen() {
     setErrorMsg(null);
     setStatus('idle');
   }, []);
+
+  const buyConfirmDetails: TxDetail[] = quote && outputToken ? [
+    { label: 'Action', value: `Buy ${outputToken.symbol}` },
+    { label: 'You Pay', value: `${parsedAmount} ${inputToken.symbol}`, accent: true },
+    { label: 'You Receive', value: `${quoteOutAmount ? parseFloat(quoteOutAmount).toFixed(4) : '?'} ${outputToken.symbol}`, accent: true },
+    { label: 'Network Fee', value: '~0.0004 SOL' },
+    { label: 'Slippage', value: '0.5%' },
+    { label: 'Total', value: `${parsedAmount} ${inputToken.symbol} + fee`, total: true },
+  ] : [];
+
+  const requestBuy = () => {
+    if (!canBuy) return;
+    setTxConfirmVisible(true);
+  };
+
+  const handleBuyConfirmed = () => {
+    setTxConfirmVisible(false);
+    const needsPin = !connectedWallet && !!pinHash;
+    if (needsPin) { setPinGateVisible(true); } else { handleBuy(); }
+  };
 
   const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
     if (!selectedAccount) throw new Error('No account selected');
@@ -666,7 +692,7 @@ export default function BuyScreen() {
           {/* Confirm button */}
           <TouchableOpacity
             style={[styles.confirmBtn, !canBuy && styles.confirmBtnDisabled]}
-            onPress={handleBuy}
+            onPress={requestBuy}
             disabled={!canBuy}
             activeOpacity={0.9}
           >
@@ -723,6 +749,21 @@ export default function BuyScreen() {
         tokens={outputTokenList}
         title="Select token to buy"
         showBalance={false}
+      />
+
+      <TxConfirmModal
+        visible={txConfirmVisible}
+        title="Confirm Buy"
+        details={buyConfirmDetails}
+        onConfirm={handleBuyConfirmed}
+        onCancel={() => setTxConfirmVisible(false)}
+      />
+      <PinUnlockModal
+        visible={pinGateVisible}
+        title="Authorize Buy"
+        subtitle="Enter your PIN to sign this transaction"
+        onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
+        onCancel={() => setPinGateVisible(false)}
       />
     </SafeAreaView>
   );

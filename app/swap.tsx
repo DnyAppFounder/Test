@@ -21,6 +21,7 @@ import { getSolPrice, SolanaPriceService } from '@/services/solana/priceService'
 import { useWallet } from '@/contexts/WalletContext';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { PinUnlockModal } from '@/components/PinUnlockModal';
+import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
@@ -38,6 +39,7 @@ export default function SwapScreen() {
   const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens, nativeBalance } = useWallet();
   const { pinHash } = useSecurity();
   const [pinGateVisible, setPinGateVisible] = useState(false);
+  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -212,7 +214,23 @@ export default function SwapScreen() {
     return transaction;
   };
 
+  const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
+    { label: 'Action', value: `Swap ${fromToken.symbol} → ${toToken.symbol}` },
+    { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}`, accent: true },
+    { label: 'You Receive', value: `${outputAmount || '?'} ${toToken.symbol}`, accent: true },
+    { label: 'Price Impact', value: `${priceImpact.toFixed(2)}%` },
+    { label: 'Network Fee', value: '~0.000005 SOL' },
+    { label: 'Slippage', value: '0.5%' },
+    { label: 'Total', value: `${fromAmount} ${fromToken.symbol} + fee`, total: true },
+  ] : [];
+
   const requestSwap = () => {
+    if (!canSwap) return;
+    setTxConfirmVisible(true);
+  };
+
+  const handleSwapConfirmed = () => {
+    setTxConfirmVisible(false);
     const needsPin = !connectedWallet && !!pinHash;
     if (needsPin) { setPinGateVisible(true); } else { handleExecuteSwap(); }
   };
@@ -571,6 +589,14 @@ export default function SwapScreen() {
           </View>
         </View>
       </Modal>
+
+      <TxConfirmModal
+        visible={txConfirmVisible}
+        title="Confirm Swap"
+        details={swapConfirmDetails}
+        onConfirm={handleSwapConfirmed}
+        onCancel={() => setTxConfirmVisible(false)}
+      />
 
       <PinUnlockModal
         visible={pinGateVisible}

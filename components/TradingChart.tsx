@@ -21,12 +21,13 @@ import { realtimeChartService, CandleUpdateListener } from '@/services/realtimeC
 type ChartMode = 'candles' | 'line' | 'area' | 'bars' | 'mountain' | 'bonding';
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
-const CHART_HEIGHT       = 460;  // ~real trading chart height on mobile
+const CHART_HEIGHT       = 480;  // extra 20px for time axis row
 const PRICE_AXIS_WIDTH   = 78;   // enough room for price labels
 const VOLUME_HEIGHT      = 90;   // ~20% of CHART_HEIGHT
 const VOLUME_GAP         = 10;
 const PADDING_TOP        = 14;
 const PADDING_BOTTOM     = 6;
+const TIME_AXIS_HEIGHT   = 20;   // reserved at the bottom for time labels
 const MIN_CANDLE_WIDTH   = 6;    // thicker candles for readability
 const MAX_CANDLE_WIDTH   = 18;
 const CANDLE_GAP_RATIO   = 0.28; // gap fraction of candle width
@@ -83,6 +84,20 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatTimeAxis(ts: number, tf: TimeFrame): string {
+  const d = new Date(ts);
+  if (tf === '1D') return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function timeFrameToPeriodMs(tf: TimeFrame): number {
+  const map: Record<TimeFrame, number> = {
+    '1m': 60_000, '5m': 300_000, '15m': 900_000,
+    '1H': 3_600_000, '4H': 14_400_000, '1D': 86_400_000,
+  };
+  return map[tf] ?? 60_000;
+}
+
 export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) {
   const [rawCandles, setRawCandles] = useState<CandleData[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -112,6 +127,10 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   const gestureModeRef      = useRef<'none' | 'crosshair' | 'pan'>('none');
   const panStartOffsetRef   = useRef(0);
   const crosshairTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Live time offset — advances the chart continuously between candle updates
+  const [liveTimeOffset, setLiveTimeOffset] = useState(0);
+  const liveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Background animation ─────────────────────────────────────────────────────
   const bgAnim = useRef(new Animated.Value(0)).current;
@@ -182,6 +201,25 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
     };
   }, [tokenAddress, timeFrame]);
 
+  // ─── Live time offset — keeps chart moving in real time ──────────────────────
+  useEffect(() => {
+    if (liveTimerRef.current) { clearInterval(liveTimerRef.current); liveTimerRef.current = null; }
+    if (!isLive) { setLiveTimeOffset(0); return; }
+
+    const update = () => {
+      const cs = candlesRef.current;
+      if (cs.length === 0) { setLiveTimeOffset(0); return; }
+      const lastCandle = cs[cs.length - 1];
+      const periodMs   = timeFrameToPeriodMs(currentTfRef.current);
+      const elapsed    = (Date.now() - lastCandle.timestamp) % periodMs;
+      setLiveTimeOffset(Math.min(1, elapsed / periodMs) * rawCandleWidthRef.current);
+    };
+
+    update();
+    liveTimerRef.current = setInterval(update, 500);
+    return () => { if (liveTimerRef.current) { clearInterval(liveTimerRef.current); liveTimerRef.current = null; } };
+  }, [isLive]);
+
   // ─── Layout & candle sizing ───────────────────────────────────────────────────
 
   const chartAreaWidth   = containerWidth - PRICE_AXIS_WIDTH;
@@ -196,10 +234,11 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
   const bodyWidth = Math.max(3, rawCandleWidth * (1 - CANDLE_GAP_RATIO));
 
   // Start X of candle[0] in chart coordinates (negative = left of viewport)
+  // liveTimeOffset shifts candles left proportional to elapsed time in current period
   const totalUsed = candles.length * rawCandleWidth;
   const startX    = candles.length <= 1
     ? chartAreaWidth / 2 - rawCandleWidth / 2
-    : Math.max(0, chartAreaWidth - totalUsed) - panOffset;
+    : Math.max(0, chartAreaWidth - totalUsed) - panOffset - (isLive ? liveTimeOffset : 0);
 
   // Visible candle indices for price scale
   const visFirstIdx = Math.max(0, Math.floor(-startX / rawCandleWidth));
@@ -652,6 +691,44 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       );
     });
 
+  // ─── Time axis ───────────────────────────────────────────────────────────────
+
+  const renderTimeAxis = () => {
+    if (candles.length === 0) return null;
+    const labelStep = Math.max(1, Math.round(60 / rawCandleWidth));
+    const baseY = PADDING_TOP + priceChartHeight + VOLUME_GAP + VOLUME_HEIGHT;
+    const sepY  = baseY + 4;
+    const textY = baseY + TIME_AXIS_HEIGHT - 3;
+    const elems: React.ReactElement[] = [];
+
+    // Separator line between volume and time axis
+    elems.push(
+      <Line key="ta-sep"
+        x1={0} y1={sepY} x2={chartAreaWidth} y2={sepY}
+        stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
+    );
+
+    for (let i = 0; i < candles.length; i += labelStep) {
+      const x = xOf(i);
+      if (x < -30 || x > chartAreaWidth + 30) continue;
+      elems.push(
+        <SvgText key={`ta${i}`}
+          x={x} y={textY} fontSize="9"
+          fill="rgba(255,255,255,0.45)"
+          textAnchor="middle" fontWeight="600">
+          {formatTimeAxis(candles[i].timestamp, timeFrame)}
+        </SvgText>
+      );
+      // Small tick mark
+      elems.push(
+        <Line key={`tk${i}`}
+          x1={x} y1={sepY} x2={x} y2={sepY + 3}
+          stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
+      );
+    }
+    return elems;
+  };
+
   // ─── Current price line ───────────────────────────────────────────────────────
 
   const renderCurrentPriceLine = () => {
@@ -679,6 +756,7 @@ export function TradingChart({ tokenAddress, currentPrice }: TradingChartProps) 
       {chartMode === 'bars'     && renderBarsMode()}
       {chartMode === 'bonding'  && renderBonding()}
       {!isBarsMode && renderVolumeBars()}
+      {renderTimeAxis()}
       {renderCrosshairLines()}
     </Svg>
   );
