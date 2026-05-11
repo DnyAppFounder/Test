@@ -6,6 +6,7 @@ export interface WalletAsset {
   id: string;
   blockchain: string;
   address: string;
+  tokenAccountAddress?: string;
   name: string;
   symbol: string;
   decimals: number;
@@ -73,6 +74,7 @@ class WalletAssetLoaderService {
           id: token.mint,
           blockchain: 'solana',
           address: token.mint,
+          tokenAccountAddress: token.tokenAccountAddress || undefined,
           name: token.metadata.name,
           symbol: token.metadata.symbol,
           decimals: token.decimals,
