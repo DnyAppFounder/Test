@@ -155,6 +155,35 @@ export class SolanaConnectionService {
     return json.result;
   }
 
+  async batchRpcCall(requests: Array<{ method: string; params: any[] }>): Promise<any[]> {
+    const url = this.proxyUrl || this.directUrl;
+    const body = requests.map((req, i) => ({
+      jsonrpc: '2.0',
+      id: String(i),
+      method: req.method,
+      params: req.params,
+    }));
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.usingProxy) {
+      const anonKey = getSupabaseAnonKey();
+      if (anonKey) {
+        headers['Authorization'] = `Bearer ${anonKey}`;
+        headers['apikey'] = anonKey;
+      }
+    }
+
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!response.ok) {
+      throw new Error(`Batch RPC HTTP ${response.status}`);
+    }
+    const results = await response.json();
+    if (!Array.isArray(results)) return requests.map(() => null);
+    return results
+      .sort((a: any, b: any) => Number(a.id) - Number(b.id))
+      .map((r: any) => r.result ?? null);
+  }
+
   async isHealthy(): Promise<boolean> {
     try {
       await this.rpcCall('getBlockHeight', []);

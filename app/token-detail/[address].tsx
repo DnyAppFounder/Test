@@ -408,8 +408,25 @@ export default function TokenDetailScreen() {
               userWallet={activeAddress || undefined}
             />
           )}
-          {(activeBottomTab === 'activity' || activeBottomTab === 'transactions') && (
-            <TokenActivityFeed tokenAddress={token.address} />
+          {activeBottomTab === 'activity' && (
+            <TokenActivityFeed
+              tokenAddress={token.address}
+              pairAddress={token.pairAddress}
+              tokenPrice={token.price}
+              tokenDecimals={9}
+              tokenSymbol={token.symbol ?? ''}
+              mode="activity"
+            />
+          )}
+          {activeBottomTab === 'transactions' && (
+            <TokenActivityFeed
+              tokenAddress={token.address}
+              pairAddress={token.pairAddress}
+              tokenPrice={token.price}
+              tokenDecimals={9}
+              tokenSymbol={token.symbol ?? ''}
+              mode="trades"
+            />
           )}
           {activeBottomTab === 'holders' && (
             <View style={styles.holdersWrap}>

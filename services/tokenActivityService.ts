@@ -1,127 +1,115 @@
+import { SolanaConnectionService } from '@/services/solana/connectionService';
+
 export interface TokenTrade {
   id: string;
-  type: 'buy' | 'sell';
+  type: 'buy' | 'sell' | 'transfer' | 'liquidity';
   walletAddress: string;
   amount: number;
   tokenAmount: number;
   priceUsd: number;
   timestamp: number;
-  txSignature?: string;
+  txSignature: string;
+}
+
+interface CacheEntry {
+  data: TokenTrade[];
+  timestamp: number;
 }
 
 class TokenActivityService {
-  private cache = new Map<string, { data: TokenTrade[]; timestamp: number }>();
-  private readonly CACHE_DURATION = 15 * 1000;
+  private cache = new Map<string, CacheEntry>();
+  private readonly CACHE_DURATION = 20 * 1000;
 
-  async getTokenActivity(tokenAddress: string): Promise<TokenTrade[]> {
-    const cached = this.cache.get(tokenAddress);
-
+  async getTokenTrades(
+    tokenMint: string,
+    pairAddress: string | undefined,
+    tokenPrice: number,
+    tokenDecimals: number,
+    limit = 25,
+  ): Promise<TokenTrade[]> {
+    const key = `${tokenMint}:${pairAddress || ''}`;
+    const cached = this.cache.get(key);
     if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
       return cached.data;
     }
 
     try {
-      const response = await fetch(
-        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`
-      );
+      const rpc = SolanaConnectionService.getInstance();
+      const queryAddress = pairAddress || tokenMint;
 
-      if (!response.ok) {
-        return this.generateMockActivity(tokenAddress);
-      }
+      // Step 1: get recent confirmed signatures
+      const sigsResult = await rpc.rpcCall('getSignaturesForAddress', [
+        queryAddress,
+        { limit, commitment: 'confirmed' },
+      ]);
 
-      const data = await response.json();
-      const pairs = data.pairs || [];
+      const sigs: Array<{ signature: string; blockTime: number | null; err: any }> =
+        Array.isArray(sigsResult) ? sigsResult : [];
 
-      if (pairs.length === 0) {
-        return this.generateMockActivity(tokenAddress);
-      }
+      const validSigs = sigs.filter(s => !s.err && s.signature && s.blockTime != null);
+      if (validSigs.length === 0) return [];
 
-      const primaryPair = pairs[0];
-      const txns = primaryPair.txns;
+      // Step 2: batch fetch full transactions
+      const batchReqs = validSigs.map(s => ({
+        method: 'getTransaction',
+        params: [s.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+      }));
 
-      if (!txns || !txns.m5) {
-        return this.generateMockActivity(tokenAddress);
-      }
-
-      const buys = txns.m5.buys || 0;
-      const sells = txns.m5.sells || 0;
-      const price = parseFloat(primaryPair.priceUsd || '0');
+      const txResults = await rpc.batchRpcCall(batchReqs);
 
       const trades: TokenTrade[] = [];
-      const now = Date.now();
 
-      for (let i = 0; i < Math.min(buys, 10); i++) {
-        const timeAgo = Math.random() * 5 * 60 * 1000;
-        const amount = 10 + Math.random() * 500;
-        trades.push({
-          id: `buy-${tokenAddress}-${i}-${now}`,
-          type: 'buy',
-          walletAddress: this.generateRandomWallet(),
-          amount,
-          tokenAmount: amount / price,
-          priceUsd: price,
-          timestamp: now - timeAgo,
-        });
-      }
+      for (let i = 0; i < txResults.length; i++) {
+        const tx = txResults[i];
+        const sig = validSigs[i];
+        if (!tx || !sig) continue;
 
-      for (let i = 0; i < Math.min(sells, 10); i++) {
-        const timeAgo = Math.random() * 5 * 60 * 1000;
-        const amount = 10 + Math.random() * 500;
-        trades.push({
-          id: `sell-${tokenAddress}-${i}-${now}`,
-          type: 'sell',
-          walletAddress: this.generateRandomWallet(),
-          amount,
-          tokenAmount: amount / price,
-          priceUsd: price,
-          timestamp: now - timeAgo,
-        });
+        const blockTime = tx.blockTime ?? sig.blockTime;
+        if (!blockTime) continue;
+
+        const preBalances: any[] = tx.meta?.preTokenBalances ?? [];
+        const postBalances: any[] = tx.meta?.postTokenBalances ?? [];
+
+        // Find token balance changes for our mint
+        const changes = computeTokenChanges(tokenMint, preBalances, postBalances);
+        if (changes.length === 0) continue;
+
+        for (const change of changes) {
+          if (Math.abs(change.delta) < 0.000001) continue;
+
+          const isBuy = change.delta > 0;
+          const isSell = change.delta < 0;
+          const type: TokenTrade['type'] = isBuy ? 'buy' : isSell ? 'sell' : 'transfer';
+          const tokenAmount = Math.abs(change.delta);
+          const usdAmount = tokenAmount * tokenPrice;
+
+          trades.push({
+            id: `${sig.signature}-${change.owner.slice(0, 8)}`,
+            type,
+            walletAddress: change.owner,
+            amount: usdAmount,
+            tokenAmount,
+            priceUsd: tokenPrice,
+            timestamp: blockTime * 1000,
+            txSignature: sig.signature,
+          });
+        }
       }
 
       trades.sort((a, b) => b.timestamp - a.timestamp);
 
-      const recentTrades = trades.slice(0, 50);
-      this.cache.set(tokenAddress, { data: recentTrades, timestamp: Date.now() });
-
-      return recentTrades;
-    } catch (error) {
-      console.error('Error fetching token activity:', error);
-      return this.generateMockActivity(tokenAddress);
+      const result = trades.slice(0, 50);
+      this.cache.set(key, { data: result, timestamp: Date.now() });
+      return result;
+    } catch (e) {
+      console.warn('[TokenActivityService] Error fetching trades:', e);
+      return [];
     }
   }
 
-  private generateMockActivity(tokenAddress: string): TokenTrade[] {
-    const trades: TokenTrade[] = [];
-    const now = Date.now();
-    const basePrice = 0.5 + Math.random() * 10;
-
-    for (let i = 0; i < 20; i++) {
-      const isBuy = Math.random() > 0.5;
-      const timeAgo = Math.random() * 30 * 60 * 1000;
-      const amount = 10 + Math.random() * 1000;
-      const price = basePrice * (0.98 + Math.random() * 0.04);
-
-      trades.push({
-        id: `${isBuy ? 'buy' : 'sell'}-${tokenAddress}-${i}-${now}`,
-        type: isBuy ? 'buy' : 'sell',
-        walletAddress: this.generateRandomWallet(),
-        amount,
-        tokenAmount: amount / price,
-        priceUsd: price,
-        timestamp: now - timeAgo,
-      });
-    }
-
-    return trades.sort((a, b) => b.timestamp - a.timestamp);
-  }
-
-  private generateRandomWallet(): string {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz123456789';
-    let result = '';
-    for (let i = 0; i < 44; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+  invalidate(tokenMint: string, pairAddress?: string) {
+    const key = `${tokenMint}:${pairAddress || ''}`;
+    this.cache.delete(key);
   }
 
   formatWalletAddress(address: string): string {
@@ -129,24 +117,77 @@ class TokenActivityService {
     return `${address.substring(0, 4)}...${address.substring(address.length - 4)}`;
   }
 
-  formatAmount(amount: number): string {
-    if (amount >= 1000000) return `$${(amount / 1000000).toFixed(2)}M`;
-    if (amount >= 1000) return `$${(amount / 1000).toFixed(2)}K`;
-    return `$${amount.toFixed(2)}`;
+  formatUsd(amount: number): string {
+    if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(2)}M`;
+    if (amount >= 1_000) return `$${(amount / 1_000).toFixed(2)}K`;
+    if (amount >= 1) return `$${amount.toFixed(2)}`;
+    return `$${amount.toFixed(4)}`;
+  }
+
+  formatTokenAmount(amount: number): string {
+    if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(2)}B`;
+    if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(2)}M`;
+    if (amount >= 1_000) return `${(amount / 1_000).toFixed(2)}K`;
+    if (amount >= 1) return amount.toFixed(2);
+    return amount.toPrecision(4);
   }
 
   formatTimeAgo(timestamp: number): string {
     const seconds = Math.floor((Date.now() - timestamp) / 1000);
-
     if (seconds < 60) return `${seconds}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
     return `${Math.floor(seconds / 86400)}d`;
   }
+}
 
-  clearCache() {
-    this.cache.clear();
+interface BalanceChange {
+  owner: string;
+  delta: number;
+}
+
+function computeTokenChanges(
+  mint: string,
+  pre: any[],
+  post: any[],
+): BalanceChange[] {
+  const preMap = new Map<number, { owner: string; amount: number }>();
+  for (const b of pre) {
+    if (b.mint === mint) {
+      preMap.set(b.accountIndex, {
+        owner: b.owner ?? '',
+        amount: b.uiTokenAmount?.uiAmount ?? 0,
+      });
+    }
   }
+
+  const postMap = new Map<number, { owner: string; amount: number }>();
+  for (const b of post) {
+    if (b.mint === mint) {
+      postMap.set(b.accountIndex, {
+        owner: b.owner ?? '',
+        amount: b.uiTokenAmount?.uiAmount ?? 0,
+      });
+    }
+  }
+
+  const allIndexes = new Set([...preMap.keys(), ...postMap.keys()]);
+  const changes: BalanceChange[] = [];
+
+  for (const idx of allIndexes) {
+    const before = preMap.get(idx)?.amount ?? 0;
+    const after = postMap.get(idx)?.amount ?? 0;
+    const owner = postMap.get(idx)?.owner || preMap.get(idx)?.owner || '';
+    const delta = after - before;
+    if (Math.abs(delta) > 0.000001 && owner) {
+      changes.push({ owner, delta });
+    }
+  }
+
+  // For each tx, keep only the largest change (the primary trader)
+  if (changes.length <= 1) return changes;
+  changes.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  return [changes[0]];
 }
 
 export const tokenActivityService = new TokenActivityService();

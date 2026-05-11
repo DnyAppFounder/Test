@@ -1,108 +1,160 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
-import { ArrowUpRight, ArrowDownLeft } from 'lucide-react-native';
+import { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  RefreshControl,
+  TouchableOpacity,
+  Linking,
+  Platform,
+} from 'react-native';
+import { ArrowUpRight, ArrowDownLeft, ArrowRightLeft, Droplets, ExternalLink } from 'lucide-react-native';
 import { tokenActivityService, TokenTrade } from '@/services/tokenActivityService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
 interface TokenActivityFeedProps {
   tokenAddress: string;
+  pairAddress?: string;
+  tokenPrice?: number;
+  tokenDecimals?: number;
+  tokenSymbol?: string;
+  mode?: 'activity' | 'trades';
 }
 
-export function TokenActivityFeed({ tokenAddress }: TokenActivityFeedProps) {
+function openSolscan(signature: string) {
+  const url = `https://solscan.io/tx/${signature}`;
+  if (Platform.OS === 'web') {
+    // @ts-ignore
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } else {
+    Linking.openURL(url).catch(() => {});
+  }
+}
+
+const TYPE_CONFIG = {
+  buy: { label: 'BUY', color: colors.success, bg: 'rgba(20,241,149,0.08)', icon: ArrowUpRight, iconBg: colors.successMuted },
+  sell: { label: 'SELL', color: colors.error, bg: 'rgba(255,77,79,0.08)', icon: ArrowDownLeft, iconBg: colors.errorMuted },
+  transfer: { label: 'TRANSFER', color: colors.textMuted, bg: 'rgba(255,255,255,0.04)', icon: ArrowRightLeft, iconBg: 'rgba(255,255,255,0.08)' },
+  liquidity: { label: 'LIQUIDITY', color: '#38BDF8', bg: 'rgba(56,189,248,0.08)', icon: Droplets, iconBg: 'rgba(56,189,248,0.12)' },
+};
+
+export function TokenActivityFeed({
+  tokenAddress,
+  pairAddress,
+  tokenPrice = 0,
+  tokenDecimals = 9,
+  tokenSymbol = '',
+  mode = 'activity',
+}: TokenActivityFeedProps) {
   const [trades, setTrades] = useState<TokenTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadActivity();
-
-    const interval = setInterval(loadActivity, 15000);
-    return () => clearInterval(interval);
-  }, [tokenAddress]);
-
-  const loadActivity = async () => {
+  const loadActivity = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const data = await tokenActivityService.getTokenActivity(tokenAddress);
+      const data = await tokenActivityService.getTokenTrades(
+        tokenAddress,
+        pairAddress,
+        tokenPrice,
+        tokenDecimals,
+      );
       setTrades(data);
-    } catch (error) {
-      console.error('Error loading token activity:', error);
+    } catch (e) {
+      console.warn('[TokenActivityFeed] load error:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [tokenAddress, pairAddress, tokenPrice, tokenDecimals]);
 
-  const onRefresh = async () => {
+  useEffect(() => {
+    loadActivity();
+    const interval = setInterval(() => loadActivity(true), 30_000);
+    return () => clearInterval(interval);
+  }, [loadActivity]);
+
+  const onRefresh = () => {
     setRefreshing(true);
-    await loadActivity();
+    tokenActivityService.invalidate(tokenAddress, pairAddress);
+    loadActivity();
   };
 
-  const renderTrade = ({ item }: { item: TokenTrade }) => {
-    const isBuy = item.type === 'buy';
+  const filteredTrades = mode === 'trades'
+    ? trades.filter(t => t.type === 'buy' || t.type === 'sell')
+    : trades;
+
+  const renderItem = ({ item }: { item: TokenTrade }) => {
+    const cfg = TYPE_CONFIG[item.type] ?? TYPE_CONFIG.buy;
+    const Icon = cfg.icon;
+    const hasSig = !!item.txSignature;
 
     return (
-      <View style={[styles.tradeRow, isBuy ? styles.buyRow : styles.sellRow]}>
-        <View style={[styles.typeIcon, isBuy ? styles.buyIcon : styles.sellIcon]}>
-          {isBuy ? (
-            <ArrowUpRight size={14} color={colors.success} strokeWidth={2.5} />
-          ) : (
-            <ArrowDownLeft size={14} color={colors.error} strokeWidth={2.5} />
+      <View style={[styles.row, { backgroundColor: cfg.bg }]}>
+        <View style={[styles.typeIcon, { backgroundColor: cfg.iconBg }]}>
+          <Icon size={13} color={cfg.color} strokeWidth={2.5} />
+        </View>
+
+        <View style={styles.info}>
+          <View style={styles.rowTop}>
+            <Text style={[styles.typeLabel, { color: cfg.color }]}>{cfg.label}</Text>
+            <Text style={styles.wallet}>{tokenActivityService.formatWalletAddress(item.walletAddress)}</Text>
+          </View>
+          <View style={styles.rowBottom}>
+            <Text style={styles.usdAmount}>{tokenActivityService.formatUsd(item.amount)}</Text>
+            <Text style={styles.dot}>·</Text>
+            <Text style={styles.tokenAmt}>
+              {tokenActivityService.formatTokenAmount(item.tokenAmount)}
+              {tokenSymbol ? ` ${tokenSymbol}` : ''}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.right}>
+          <Text style={styles.time}>{tokenActivityService.formatTimeAgo(item.timestamp)}</Text>
+          {hasSig && (
+            <TouchableOpacity
+              onPress={() => openSolscan(item.txSignature)}
+              activeOpacity={0.7}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <ExternalLink size={11} color={colors.textMuted} strokeWidth={2} />
+            </TouchableOpacity>
           )}
         </View>
-
-        <View style={styles.tradeInfo}>
-          <View style={styles.tradeHeader}>
-            <Text style={[styles.tradeType, isBuy ? styles.buyText : styles.sellText]}>
-              {isBuy ? 'BUY' : 'SELL'}
-            </Text>
-            <Text style={styles.walletText}>
-              {tokenActivityService.formatWalletAddress(item.walletAddress)}
-            </Text>
-          </View>
-
-          <View style={styles.tradeDetails}>
-            <Text style={styles.amountText}>
-              {tokenActivityService.formatAmount(item.amount)}
-            </Text>
-            <Text style={styles.dotSeparator}>•</Text>
-            <Text style={styles.tokenAmountText}>
-              {item.tokenAmount.toFixed(2)} tokens
-            </Text>
-          </View>
-        </View>
-
-        <Text style={styles.timeText}>
-          {tokenActivityService.formatTimeAgo(item.timestamp)}
-        </Text>
       </View>
     );
   };
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.center}>
         <ActivityIndicator size="small" color={colors.primary} />
-        <Text style={styles.loadingText}>Loading activity...</Text>
+        <Text style={styles.loadingText}>Loading {mode === 'trades' ? 'trades' : 'activity'}...</Text>
       </View>
     );
   }
 
+  const title = mode === 'trades' ? 'Recent Trades' : 'Live Activity';
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Live Activity</Text>
+        <Text style={styles.headerTitle}>{title}</Text>
         <View style={styles.liveDot} />
       </View>
-
       <FlatList
-        data={trades}
-        keyExtractor={(item) => item.id}
-        renderItem={renderTrade}
+        data={filteredTrades}
+        keyExtractor={item => item.id}
+        renderItem={renderItem}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={styles.list}
+        scrollEnabled={false}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No recent activity</Text>
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>No recent {mode === 'trades' ? 'trades' : 'activity'}</Text>
           </View>
         }
         refreshControl={
@@ -124,10 +176,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
   },
-  title: {
-    fontSize: fontSize.lg,
+  headerTitle: {
+    fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.textPrimary,
   },
@@ -137,8 +189,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.success,
   },
-  loadingContainer: {
-    flex: 1,
+  center: {
     justifyContent: 'center',
     alignItems: 'center',
     gap: spacing.sm,
@@ -148,24 +199,18 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textMuted,
   },
-  listContent: {
+  list: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.lg,
   },
-  tradeRow: {
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: borderRadius.sm,
     marginTop: spacing.sm,
-  },
-  buyRow: {
-    backgroundColor: 'rgba(20, 241, 149, 0.08)',
-  },
-  sellRow: {
-    backgroundColor: 'rgba(255, 77, 79, 0.08)',
   },
   typeIcon: {
     width: 28,
@@ -173,62 +218,57 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
   },
-  buyIcon: {
-    backgroundColor: colors.successMuted,
-  },
-  sellIcon: {
-    backgroundColor: colors.errorMuted,
-  },
-  tradeInfo: {
+  info: {
     flex: 1,
+    gap: 2,
   },
-  tradeHeader: {
+  rowTop: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginBottom: 2,
   },
-  tradeType: {
-    fontSize: fontSize.xs,
+  typeLabel: {
+    fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  buyText: {
-    color: colors.success,
-  },
-  sellText: {
-    color: colors.error,
-  },
-  walletText: {
+  wallet: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     fontWeight: '500',
+    fontFamily: 'SpaceMono-Regular',
   },
-  tradeDetails: {
+  rowBottom: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
   },
-  amountText: {
+  usdAmount: {
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  dotSeparator: {
+  dot: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
   },
-  tokenAmountText: {
+  tokenAmt: {
     fontSize: fontSize.xs,
     color: colors.textSecondary,
   },
-  timeText: {
+  right: {
+    alignItems: 'flex-end',
+    gap: 4,
+    flexShrink: 0,
+  },
+  time: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
     fontWeight: '600',
   },
-  emptyState: {
+  empty: {
     paddingVertical: spacing.xxl,
     alignItems: 'center',
   },
