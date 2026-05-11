@@ -48,7 +48,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("6QmJfmLRS5njWbmBDHnHWgSYyzPuWcxqVQKD78EkDMeg");
+declare_id!("HJfJJunBLeF4MRAQ4ZXEB29dYsyRbojgD95GNTCDPh1q");
 
 /// DAWEN platform fee treasury — buy/sell fees are forwarded here atomically.
 /// Using declare_id! submodule avoids all pubkey! macro import issues across Anchor versions.

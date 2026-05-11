@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-dawen_curve = "6QmJfmLRS5njWbmBDHnHWgSYyzPuWcxqVQKD78EkDMeg"
+dawen_curve = "HJf31unBLeF4MRAQ4ZXEB29dYsyRbojgD95GNTCDPh1q"
 
 [programs.mainnet]
-dawen_curve = "6QmJfmLRS5njWbmBDHnHWgSYyzPuWcxqVQKD78EkDMeg"
+dawen_curve = "HJfJJunBLeF4MRAQ4ZXEB29dYsyRbojgD95GNTCDPh1q"
 
 [registry]
 url = "https://api.apr.dev"
