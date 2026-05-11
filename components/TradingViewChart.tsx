@@ -10,6 +10,7 @@ import {
   Animated,
   ScrollView,
   PanResponder,
+  Platform,
   GestureResponderEvent,
 } from 'react-native';
 import Svg, {
@@ -83,11 +84,9 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
   { key: 'bonding',     icon: TrendingUp,       label: 'Bonding' },
 ];
 
-// Layout constants
-const CHART_H = 220;
-const VOL_H   = 40;
-const TIME_H  = 18;
-const PAD     = { top: 16, right: 58, bottom: 4, left: 4 };
+// TIME_H is device-independent; CHART_H / VOL_H / PAD are computed inside the
+// component from isMobile so all chart types scale consistently on mobile.
+const TIME_H = 18;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function fmtPrice(p: number): string {
@@ -128,6 +127,12 @@ export function TradingViewChart({
   const { width: screenWidth } = useWindowDimensions();
   const chartWidth = Math.min(screenWidth - 32, 600);
 
+  // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
+  const isMobile = screenWidth < 768;
+  const CHART_H  = isMobile ? 460 : 220;
+  const VOL_H    = isMobile ? 90  : 40;
+  const PAD      = { top: 16, right: isMobile ? 72 : 58, bottom: 4, left: 4 };
+
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
     name: symbol, symbol, price: currentPrice ?? 0, priceChange24h: 0, pairAddress,
   } : undefined);
@@ -160,7 +165,8 @@ export function TradingViewChart({
   const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const svgContainerRef = useRef<View>(null);
   const svgOffsetRef  = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const candlesRef    = useRef<CandleData[]>([]);
+  const candlesRef        = useRef<CandleData[]>([]);
+  const displayCandlesRef = useRef<CandleData[]>([]);
   const pairAddrRef   = useRef<string | null>(pairAddress ?? null);
 
   useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
@@ -374,22 +380,29 @@ export function TradingViewChart({
   }, [tokenMint, applyLivePrice]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
+  // Limit visible candles on mobile so each candle/bar is wide enough to read
+  const maxVisible     = isMobile ? 40 : Infinity;
+  const displayCandles = candles.length > maxVisible
+    ? candles.slice(-maxVisible) : candles;
+  // Sync ref so the crosshair handler always sees the current visible set
+  displayCandlesRef.current = displayCandles;
+
   const plotW = chartWidth - PAD.left - PAD.right;
   const plotH = CHART_H - PAD.top - PAD.bottom;
-  const n     = candles.length;
+  const n     = displayCandles.length;
 
-  const highs  = n > 0 ? candles.map(c => c.high)   : [0];
-  const lows   = n > 0 ? candles.map(c => c.low)    : [0];
+  const highs  = n > 0 ? displayCandles.map(c => c.high)   : [0];
+  const lows   = n > 0 ? displayCandles.map(c => c.low)    : [0];
   const maxP   = Math.max(...highs);
   const minP   = Math.min(...lows);
   const priceRange = (maxP - minP) || maxP * 0.01 || 1;
-  const maxVol = n > 0 ? Math.max(...candles.map(c => c.volume)) || 1 : 1;
-  const barW   = Math.max(1.5, (plotW / Math.max(n, 1)) * 0.55);
-  const candleW = Math.max(2,  (plotW / Math.max(n, 1)) * 0.6);
+  const maxVol = n > 0 ? Math.max(...displayCandles.map(c => c.volume)) || 1 : 1;
+  const barW    = Math.max(isMobile ? 3   : 1.5, (plotW / Math.max(n, 1)) * 0.55);
+  const candleW = Math.max(isMobile ? 6   : 2,   (plotW / Math.max(n, 1)) * (isMobile ? 0.72 : 0.6));
 
   function xOf(i: number) { return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1)); }
   function yOf(price: number) { return PAD.top + plotH - ((price - minP) / priceRange) * plotH; }
-  function volBarH(vol: number) { return Math.max(2, (vol / maxVol) * (VOL_H - 6)); }
+  function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
   function bondingX(i: number) {
     if (n <= 1) return PAD.left + plotW / 2;
     return PAD.left + Math.sqrt(i / (n - 1)) * plotW;
@@ -421,7 +434,7 @@ export function TradingViewChart({
   };
 
   const updateCrosshairAt = (localX: number, _localY: number) => {
-    const cands = candlesRef.current;
+    const cands = displayCandlesRef.current;
     if (!cands.length) return;
     const nn = cands.length;
     const step = plotW / nn;
@@ -595,7 +608,7 @@ export function TradingViewChart({
     return (
       <View style={styles.container}>
         {header}
-        <View style={styles.loadingWrap}>
+        <View style={[styles.loadingWrap, { height: CHART_H }]}>
           <ActivityIndicator size="small" color={colors.primary} />
           <Text style={styles.loadingSubText}>Loading chart…</Text>
         </View>
@@ -607,7 +620,7 @@ export function TradingViewChart({
     return (
       <View style={styles.container}>
         {header}
-        <View style={styles.unavailableWrap}>
+        <View style={[styles.unavailableWrap, { height: CHART_H }]}>
           {displayPriceVal > 0 ? (
             <>
               <Text style={styles.priceFallback}>${fmtPrice(displayPriceVal)}</Text>
@@ -622,18 +635,18 @@ export function TradingViewChart({
   }
 
   // ── build paths ───────────────────────────────────────────────────────────
-  const linePts = candles
+  const linePts = displayCandles
     .map((c, i) => `${i === 0 ? 'M' : 'L'}${xFn(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
     .join(' ');
   const bottomY = (PAD.top + plotH).toFixed(1);
   const areaPath = `${linePts} L${xFn(n-1).toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
 
-  const bondingPath = candles.map((c, i) => {
+  const bondingPath = displayCandles.map((c, i) => {
     const x  = bondingX(i).toFixed(1);
     const y  = yOf(c.close).toFixed(1);
     if (i === 0) return `M${x},${y}`;
     const px = bondingX(i - 1);
-    const py = yOf(candles[i - 1].close);
+    const py = yOf(displayCandles[i - 1].close);
     const cx = ((px + parseFloat(x)) / 2).toFixed(1);
     return `C${cx},${py.toFixed(1)} ${cx},${y} ${x},${y}`;
   }).join(' ');
@@ -660,7 +673,7 @@ export function TradingViewChart({
   const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
 
   // Last candle point for animated dot
-  const lastCandle = candles[n - 1];
+  const lastCandle = displayCandles[n - 1];
   const lastX      = xOf(n - 1);
   const lastY      = yOf(lastCandle.close);
 
@@ -739,7 +752,10 @@ export function TradingViewChart({
                 stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
               <SvgText
                 x={chartWidth - PAD.right + 4} y={y + 3.5}
-                fontSize={8.5} fill="rgba(255,255,255,0.3)" textAnchor="start">
+                fontSize={isMobile ? 11 : 8.5}
+                fill={isMobile ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'}
+                fontWeight={isMobile ? '600' : '400'}
+                textAnchor="start">
                 {fmtPrice(price)}
               </SvgText>
             </G>
@@ -777,12 +793,12 @@ export function TradingViewChart({
             <>
               {/* stepped fill */}
               <Path
-                d={candles.map((c, i) => {
+                d={displayCandles.map((c, i) => {
                   const x  = xOf(i).toFixed(1);
                   const y  = yOf(c.close).toFixed(1);
                   if (i === 0) return `M${x},${y}`;
                   const prevX = xOf(i - 1).toFixed(1);
-                  return `L${x},${yOf(candles[i - 1].close).toFixed(1)} L${x},${y}`;
+                  return `L${x},${yOf(displayCandles[i - 1].close).toFixed(1)} L${x},${y}`;
                 }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
                 fill="url(#mountainGrad)" />
               <Path d={linePts} stroke="#10b981" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
@@ -801,7 +817,7 @@ export function TradingViewChart({
                 const isLast = i === n - 1;
                 return (
                   <Circle key={`bd${i}`}
-                    cx={bondingX(i)} cy={yOf(candles[i].close)}
+                    cx={bondingX(i)} cy={yOf(displayCandles[i].close)}
                     r={isLast ? 5 : 3}
                     fill={isLast ? '#A78BFA' : 'rgba(167,139,250,0.5)'}
                     stroke={isLast ? '#fff' : 'none'} strokeWidth={isLast ? 1 : 0} />
@@ -811,14 +827,14 @@ export function TradingViewChart({
           )}
 
           {/* ── BAR ───────────────────────────────────────────────────────── */}
-          {mode === 'bar' && candles.map((c, i) => {
+          {mode === 'bar' && displayCandles.map((c, i) => {
             const up   = c.close >= c.open;
             const col  = up ? '#10b981' : '#ef4444';
             const cx   = xOf(i);
-            const bw   = Math.max(2, (plotW / n) * 0.5);
+            const bw   = Math.max(isMobile ? 4 : 2, (plotW / n) * 0.5);
             return (
               <G key={`bar${i}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={1} opacity={0.7} />
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.7} />
                 <Line x1={cx - bw / 2} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={1.5} />
                 <Line x1={cx}          y1={yOf(c.close)} x2={cx + bw / 2} y2={yOf(c.close)} stroke={col} strokeWidth={1.5} />
               </G>
@@ -826,7 +842,7 @@ export function TradingViewChart({
           })}
 
           {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
-          {mode === 'candlestick' && candles.map((c, i) => {
+          {mode === 'candlestick' && displayCandles.map((c, i) => {
             const up       = c.close >= c.open;
             const col      = up ? '#10b981' : '#ef4444';
             const bodyTop  = yOf(Math.max(c.open, c.close));
@@ -835,7 +851,7 @@ export function TradingViewChart({
             const cx       = xOf(i);
             return (
               <G key={`cs${i}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={1} opacity={0.8} />
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.8} />
                 <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
                   fill={col} opacity={0.9} rx={1} />
               </G>
@@ -854,7 +870,7 @@ export function TradingViewChart({
             fill={isUp ? '#059669' : '#dc2626'} rx={3} />
           <SvgText
             x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
-            fontSize={7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+            fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
             {fmtPrice(displayPriceVal)}
           </SvgText>
 
@@ -865,7 +881,7 @@ export function TradingViewChart({
           )}
 
           {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
-          {candles.map((c, i) => {
+          {displayCandles.map((c, i) => {
             const h     = volBarH(c.volume);
             const vx    = xOf(i);
             const isUp  = c.close >= c.open;
@@ -902,7 +918,7 @@ export function TradingViewChart({
                 fontSize={9}
                 fill="rgba(255,255,255,0.35)"
                 textAnchor="middle">
-                {fmtTime(candles[i].timestamp, timeframe)}
+                {fmtTime(displayCandles[i].timestamp, timeframe)}
               </SvgText>
             );
           })}
@@ -930,7 +946,7 @@ export function TradingViewChart({
                 fill="#8B5CF6" rx={3} />
               <SvgText
                 x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={crosshair.y + 4.5}
-                fontSize={7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+                fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
                 {fmtPrice(crosshair.price)}
               </SvgText>
             </G>
