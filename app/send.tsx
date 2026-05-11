@@ -497,7 +497,7 @@ export default function SendScreen() {
     }
   };
 
-  const canSend = !!recipient && isValidAddress(recipient) && amountNum > 0 && amountNum <= currentBalance && step === 'idle' || step === 'error';
+  const canSend = !!recipient && isValidAddress(recipient) && amountNum > 0 && amountNum <= currentBalance && (step === 'idle' || step === 'error');
   const isBusy = step === 'preparing' || step === 'signing' || step === 'sending';
 
   const stepLabel = step === 'preparing' ? 'Preparing transaction...'
