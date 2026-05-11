@@ -106,6 +106,33 @@ pub struct InitializeLaunch<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// ─── CPI helper ───────────────────────────────────────────────────────────────
+//
+// Kept in its own #[inline(never)] frame so the CpiContext<Transfer>
+// temporaries (~3 × AccountInfo ≈ 240 bytes each) do not accumulate inside
+// `handler`'s frame.
+#[inline(never)]
+fn token_transfer<'info>(
+    token_program: AccountInfo<'info>,
+    from: AccountInfo<'info>,
+    to: AccountInfo<'info>,
+    authority: AccountInfo<'info>,
+    amount: u64,
+) -> Result<()> {
+    token::transfer(
+        CpiContext::new(token_program, Transfer { from, to, authority }),
+        amount,
+    )
+}
+
+// ─── Instruction handler ─────────────────────────────────────────────────────
+//
+// #[inline(never)] is required: Anchor's generated dispatch inlines both
+// try_accounts and handler into a single SBF function. Without this attribute
+// the combined frame (account deserialization temps + CpiContext locals)
+// exceeds the 4096-byte SBF stack limit. With it, try_accounts and handler
+// each get independent frames well within the limit.
+#[inline(never)]
 pub fn handler(ctx: Context<InitializeLaunch>, args: InitializeLaunchArgs) -> Result<()> {
     // Guard against re-initialization: created_at is 0 on a zero-initialised account.
     // A real Unix timestamp is always > 0 so this safely detects existing launches.
@@ -144,62 +171,59 @@ pub fn handler(ctx: Context<InitializeLaunch>, args: InitializeLaunchArgs) -> Re
         CurveError::ReserveBelowAllocation
     );
 
+    // ── Capture keys and bumps before the mutable borrow of launch_state ──────
+    let creator_key         = ctx.accounts.creator.key();
+    let mint_key            = ctx.accounts.mint.key();
+    let token_vault_key     = ctx.accounts.token_vault.key();
+    let sol_vault_key       = ctx.accounts.sol_vault.key();
+    let creator_reward_key  = ctx.accounts.creator_reward_vault.key();
+    let launch_bump         = ctx.bumps.launch_state;
+    let sol_vault_bump      = ctx.bumps.sol_vault;
+    let creator_reward_bump = ctx.bumps.creator_reward_vault;
+
     // ── Transfer 95% → bonding curve token vault ──────────────────────────────
-    token::transfer(
-        CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.creator_token_account.to_account_info(),
-                to: ctx.accounts.token_vault.to_account_info(),
-                authority: ctx.accounts.creator.to_account_info(),
-            },
-        ),
+    token_transfer(
+        ctx.accounts.token_program.to_account_info(),
+        ctx.accounts.creator_token_account.to_account_info(),
+        ctx.accounts.token_vault.to_account_info(),
+        ctx.accounts.creator.to_account_info(),
         args.curve_token_allocation,
     )?;
 
     // ── Transfer 5% → creator reward vault ───────────────────────────────────
-    token::transfer(
-        CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.creator_token_account.to_account_info(),
-                to: ctx.accounts.creator_reward_vault.to_account_info(),
-                authority: ctx.accounts.creator.to_account_info(),
-            },
-        ),
+    token_transfer(
+        ctx.accounts.token_program.to_account_info(),
+        ctx.accounts.creator_token_account.to_account_info(),
+        ctx.accounts.creator_reward_vault.to_account_info(),
+        ctx.accounts.creator.to_account_info(),
         args.creator_reward_amount,
     )?;
-
-    // ── Capture bumps before LaunchState mutable borrow ──────────────────────
-    let launch_bump = ctx.bumps.launch_state;
-    let sol_vault_bump = ctx.bumps.sol_vault;
-    let creator_reward_bump = ctx.bumps.creator_reward_vault;
 
     // ── Initialize LaunchState ────────────────────────────────────────────────
     let state = &mut ctx.accounts.launch_state;
     let clock = Clock::get()?;
 
-    state.bump = launch_bump;
-    state.sol_vault_bump = sol_vault_bump;
-    state.creator_reward_bump = creator_reward_bump;
-    state.creator = ctx.accounts.creator.key();
-    state.mint = ctx.accounts.mint.key();
-    state.token_vault = ctx.accounts.token_vault.key();
-    state.sol_vault = ctx.accounts.sol_vault.key();
-    state.creator_reward_vault = ctx.accounts.creator_reward_vault.key();
-    state.virtual_sol_reserve = args.virtual_sol_reserve;
+    state.bump                  = launch_bump;
+    state.sol_vault_bump        = sol_vault_bump;
+    state.creator_reward_bump   = creator_reward_bump;
+    state.creator               = creator_key;
+    state.mint                  = mint_key;
+    state.token_vault           = token_vault_key;
+    state.sol_vault             = sol_vault_key;
+    state.creator_reward_vault  = creator_reward_key;
+    state.virtual_sol_reserve   = args.virtual_sol_reserve;
     state.virtual_token_reserve = args.virtual_token_reserve;
-    state.real_sol_collected = 0;
-    state.tokens_sold = 0;
-    state.total_supply = args.total_supply;
-    state.curve_token_allocation = args.curve_token_allocation;
-    state.creator_reward_amount = args.creator_reward_amount;
-    state.graduation_threshold = args.graduation_threshold;
-    state.platform_fee_bps = args.platform_fee_bps;
-    state.status = LaunchStatus::Active;
-    state.creator_reward_claimed = false;
-    state.created_at = clock.unix_timestamp;
-    state.graduated_at = None;
+    state.real_sol_collected    = 0;
+    state.tokens_sold           = 0;
+    state.total_supply          = args.total_supply;
+    state.curve_token_allocation  = args.curve_token_allocation;
+    state.creator_reward_amount   = args.creator_reward_amount;
+    state.graduation_threshold    = args.graduation_threshold;
+    state.platform_fee_bps        = args.platform_fee_bps;
+    state.status                  = LaunchStatus::Active;
+    state.creator_reward_claimed  = false;
+    state.created_at              = clock.unix_timestamp;
+    state.graduated_at            = None;
 
     msg!(
         "DAWEN launch initialized: mint={} vSol={} vToken={} curveAlloc={} creatorReward={} threshold={}",
