@@ -30,7 +30,18 @@ import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 
-const priceService = new SolanaPriceService(); // uses global cache
+// Fallback logos for well-known tokens in case Jupiter list is unavailable
+const KNOWN_LOGOS: Record<string, string> = {
+  'So11111111111111111111111111111111111111112': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png',
+  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN': 'https://static.jup.ag/jup/icon.png',
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I',
+  '4k3Dyjzvzp8eMrzpTGE6RkFGSNJoSz8e6oWz8S8HtFr': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMrzpTGE6RkFGSNJoSz8e6oWz8S8HtFr/logo.png',
+  'orcaEKTdK7LKz57vaAYr6AC93NStx7QLt3pPDzBEFP': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr6AC93NStx7QLt3pPDzBEFP/logo.png',
+};
+
+const priceService = new SolanaPriceService();
 
 type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'error';
 
@@ -46,7 +57,8 @@ export default function SwapScreen() {
   const [toToken, setToToken] = useState<JupiterToken | null>(null);
   const [fromAmount, setFromAmount] = useState('');
   const [quote, setQuote] = useState<JupiterQuote | null>(null);
-  const [tokens, setTokens] = useState<JupiterToken[]>([]);
+  // Full Jupiter token list (loaded once)
+  const [jupiterTokens, setJupiterTokens] = useState<JupiterToken[]>([]);
   const [selectingToken, setSelectingToken] = useState<'from' | 'to' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [status, setStatus] = useState<SwapStatus>('idle');
@@ -56,17 +68,27 @@ export default function SwapScreen() {
 
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
-
   const SOL_FEE_BUFFER = 0.002;
 
-  const fromTokenBalance = fromToken
-    ? fromToken.address === SOL_MINT
-      ? nativeBalance
-      : (() => {
-          const t = walletTokens.find(wt => wt.contract_address === fromToken.address);
-          return t ? parseFloat(t.balance || '0') / Math.pow(10, fromToken.decimals) : 0;
-        })()
-    : 0;
+  // O(1) lookup map: mint → JupiterToken (for logo/decimals enrichment)
+  const jupiterIndex = useMemo(() => {
+    const m = new Map<string, JupiterToken>();
+    for (const t of jupiterTokens) m.set(t.address, t);
+    return m;
+  }, [jupiterTokens]);
+
+  // Resolve best logo for a mint: Jupiter list → known fallback → undefined
+  const resolveLogoURI = (mint: string, walletLogo?: string | null): string | undefined => {
+    const jLogo = jupiterIndex.get(mint)?.logoURI;
+    return jLogo || walletLogo || KNOWN_LOGOS[mint];
+  };
+
+  const fromTokenBalance = useMemo(() => {
+    if (!fromToken) return 0;
+    if (fromToken.address === SOL_MINT) return nativeBalance;
+    const t = walletTokens.find(wt => wt.contract_address === fromToken.address);
+    return t ? parseFloat(t.balance || '0') / Math.pow(10, fromToken.decimals) : 0;
+  }, [fromToken, walletTokens, nativeBalance]);
 
   const maxSpendable = fromToken?.address === SOL_MINT
     ? Math.max(0, nativeBalance - SOL_FEE_BUFFER)
@@ -75,9 +97,44 @@ export default function SwapScreen() {
   const shortAddr = activeWallet
     ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
     : null;
-  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Phantom';
+  const walletLabel = activeWallet?.type === 'connected' ? activeWallet.name : 'Internal';
 
-  useEffect(() => { loadTokens(); }, []);
+  // Load full Jupiter token list once on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const all = await jupiterTokenListService.getAllTokens();
+        if (cancelled) return;
+        setJupiterTokens(all);
+
+        // Set default tokens only if not already chosen
+        setFromToken(prev => {
+          if (prev) return prev;
+          return all.find(t => t.address === SOL_MINT) ?? {
+            address: SOL_MINT, chainId: 101, decimals: 9,
+            name: 'Solana', symbol: 'SOL',
+            logoURI: KNOWN_LOGOS[SOL_MINT],
+            tags: ['verified'],
+          };
+        });
+        setToToken(prev => {
+          if (prev) return prev;
+          return all.find(t => t.address === DAWEN_MINT) ?? {
+            address: DAWEN_MINT, chainId: 101, decimals: 6,
+            name: 'Dawen Testnet', symbol: 'DTEST',
+            logoURI: undefined, tags: ['community'],
+          };
+        });
+      } catch (e) {
+        console.error('[Swap] Token list load failed:', e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!fromToken) { setFromTokenPrice(0); return; }
@@ -88,38 +145,10 @@ export default function SwapScreen() {
     }
   }, [fromToken?.address]);
 
-  const loadTokens = async () => {
-    setLoading(true);
-    try {
-      const allTokens = await jupiterTokenListService.getVerifiedTokens();
-      setTokens(allTokens);
-
-      const sol = allTokens.find(t => t.address === SOL_MINT) ?? {
-        address: SOL_MINT, chainId: 101, decimals: 9,
-        name: 'Solana', symbol: 'SOL',
-        logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-      };
-      setFromToken(sol);
-
-      const dawen = allTokens.find(t => t.address === DAWEN_MINT) ?? {
-        address: DAWEN_MINT, chainId: 101, decimals: 6,
-        name: 'Dawen Testnet', symbol: 'DTEST', logoURI: undefined,
-        tags: ['community'],
-      };
-      setToToken(dawen);
-    } catch (e) {
-      console.error('Token list load failed:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
     const amount = parseFloat(fromAmount);
     if (!fromToken || !toToken || !fromAmount || isNaN(amount) || amount <= 0) {
-      setQuote(null);
-      setErrorMsg(null);
-      setStatus('idle');
+      setQuote(null); setErrorMsg(null); setStatus('idle');
       return;
     }
     if (amount > fromTokenBalance) {
@@ -130,7 +159,7 @@ export default function SwapScreen() {
     }
     const timer = setTimeout(() => fetchQuote(amount), 500);
     return () => clearTimeout(timer);
-  }, [fromAmount, fromToken, toToken, fromTokenBalance]);
+  }, [fromAmount, fromToken?.address, toToken?.address, fromTokenBalance]);
 
   const fetchQuote = async (amount: number) => {
     if (!fromToken || !toToken) return;
@@ -144,30 +173,23 @@ export default function SwapScreen() {
         setStatus('error');
         return;
       }
-      console.log('[Swap] Quote request — from:', fromToken.symbol, 'to:', toToken.symbol, 'amount:', amountInSmallest, 'inputMint:', fromToken.address, 'outputMint:', toToken.address);
       const q = await jupiterSwapService.getQuote(fromToken.address, toToken.address, amountInSmallest, 50);
       if (q) {
-        setQuote(q);
-        setStatus('idle');
-        setErrorMsg(null);
+        setQuote(q); setStatus('idle'); setErrorMsg(null);
       } else {
         setQuote(null);
-        const isDawen = toToken.address === DAWEN_MINT || fromToken.address === DAWEN_MINT;
-        setErrorMsg(isDawen
-          ? 'No route available for this token yet. Try SOL → USDC or another liquid pair.'
-          : 'No route available. Insufficient liquidity for this pair.');
+        setErrorMsg('No route available for this pair.');
         setStatus('error');
       }
     } catch (e: any) {
       setQuote(null);
-      const msg = e?.message || '';
-      console.error('[Swap] Quote failed — from:', fromToken.symbol, 'to:', toToken.symbol, 'error:', msg);
+      const msg: string = e?.message || '';
       if (msg.includes('Insufficient') || msg.includes('balance')) {
         setErrorMsg('Insufficient balance for this swap.');
       } else if (msg.includes('400') || msg.includes('No route') || msg.includes('route')) {
         setErrorMsg('No route available. This pair may lack liquidity on Jupiter.');
-      } else if (msg.includes('Jupiter unavailable') || msg.includes('502') || msg.includes('503')) {
-        setErrorMsg('Jupiter is currently unavailable. Please try again in a moment.');
+      } else if (msg.includes('502') || msg.includes('503') || msg.includes('Jupiter unavailable')) {
+        setErrorMsg('Jupiter is currently unavailable. Please try again.');
       } else if (msg.includes('network') || msg.includes('fetch') || msg.includes('Failed to fetch')) {
         setErrorMsg('Network error. Check your connection and try again.');
       } else {
@@ -188,8 +210,13 @@ export default function SwapScreen() {
   };
 
   const handleSelectToken = (token: JupiterToken) => {
-    if (selectingToken === 'from') setFromToken(token);
-    else if (selectingToken === 'to') setToToken(token);
+    // Enrich logo with Jupiter/known-logo data before storing
+    const enriched: JupiterToken = {
+      ...token,
+      logoURI: resolveLogoURI(token.address, token.logoURI),
+    };
+    if (selectingToken === 'from') setFromToken(enriched);
+    else if (selectingToken === 'to') setToToken(enriched);
     setSelectingToken(null);
     setSearchQuery('');
     setQuote(null);
@@ -217,6 +244,16 @@ export default function SwapScreen() {
     return transaction;
   };
 
+  // Derived values — must be declared BEFORE swapConfirmDetails to avoid TDZ
+  const outputAmount = quote && toToken
+    ? jupiterSwapService.formatAmount(parseInt(quote.outAmount), toToken.decimals)
+    : '';
+  const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
+  const isProcessing = status === 'signing' || status === 'sending';
+  const parsedAmount = parseFloat(fromAmount);
+  const isInsufficientBalance = !!(fromToken && fromAmount && !isNaN(parsedAmount) && parsedAmount > fromTokenBalance);
+  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
+
   const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
     { label: 'Action', value: `Swap ${fromToken.symbol} → ${toToken.symbol}` },
     { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}`, accent: true },
@@ -241,13 +278,8 @@ export default function SwapScreen() {
   const handleExecuteSwap = async () => {
     if (!quote || !activeAddress || !fromToken || !toToken) return;
     const amount = parseFloat(fromAmount);
-    if (isNaN(amount) || amount <= 0) {
-      setErrorMsg('Enter a valid amount');
-      setStatus('error');
-      return;
-    }
-    setErrorMsg(null);
-    setTxSignature(null);
+    if (isNaN(amount) || amount <= 0) { setErrorMsg('Enter a valid amount'); setStatus('error'); return; }
+    setErrorMsg(null); setTxSignature(null);
     try {
       setStatus('signing');
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
@@ -264,67 +296,82 @@ export default function SwapScreen() {
       setTxSignature(signature);
       setStatus('success');
       if (refreshWallet) await refreshWallet();
-      setTimeout(() => {
-        setFromAmount('');
-        setQuote(null);
-        setStatus('idle');
-        setTxSignature(null);
-      }, 4000);
+      setTimeout(() => { setFromAmount(''); setQuote(null); setStatus('idle'); setTxSignature(null); }, 4000);
     } catch (err: any) {
-      console.error('[Swap] error:', err);
-      let msg = err?.message || 'Transaction failed';
-      if (msg.includes('User rejected') || msg.includes('rejected')) {
-        msg = 'Transaction rejected in wallet';
-      } else if (msg.includes('insufficient') || msg.includes('balance')) {
-        msg = 'Insufficient balance for this swap';
-      } else if (msg.includes('slippage')) {
-        msg = 'Price moved beyond slippage. Try again or increase slippage.';
-      }
-      setErrorMsg(msg);
-      setStatus('error');
+      let msg: string = err?.message || 'Transaction failed';
+      if (msg.includes('User rejected') || msg.includes('rejected')) msg = 'Transaction rejected in wallet';
+      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance for this swap';
+      else if (msg.includes('slippage')) msg = 'Price moved beyond slippage. Try again or increase slippage.';
+      setErrorMsg(msg); setStatus('error');
     }
   };
 
-  // Merge wallet-owned tokens with the Jupiter verified list so users can
-  // swap any token they hold, even if it is not on the Jupiter verified list.
-  const allSwappableTokens = useMemo<JupiterToken[]>(() => {
+  // "From" list: wallet-owned tokens only (you can only spend what you hold).
+  // SOL is always first; all others are enriched with Jupiter logos.
+  const fromTokenList = useMemo<JupiterToken[]>(() => {
+    const list: JupiterToken[] = [];
     const seen = new Set<string>();
-    const merged: JupiterToken[] = [];
+
+    // SOL always first
+    const solEntry = jupiterIndex.get(SOL_MINT) ?? {
+      address: SOL_MINT, chainId: 101, decimals: 9,
+      name: 'Solana', symbol: 'SOL',
+      logoURI: KNOWN_LOGOS[SOL_MINT], tags: ['verified'],
+    };
+    list.push(solEntry);
+    seen.add(SOL_MINT);
+
+    // SPL tokens held in wallet
     for (const wt of walletTokens) {
       const addr = wt.contract_address;
       if (!addr || seen.has(addr)) continue;
       seen.add(addr);
-      merged.push({
+      const jt = jupiterIndex.get(addr);
+      list.push({
         address: addr,
         chainId: 101,
-        decimals: wt.decimals,
-        name: wt.name,
-        symbol: wt.symbol,
-        logoURI: wt.logo_url || undefined,
+        decimals: jt?.decimals ?? wt.decimals,
+        name: jt?.name ?? wt.name ?? addr.slice(0, 8),
+        symbol: jt?.symbol ?? wt.symbol ?? '???',
+        logoURI: jt?.logoURI ?? KNOWN_LOGOS[addr] ?? wt.logo_url ?? undefined,
+        tags: jt?.tags,
       });
     }
-    for (const t of tokens) {
+    return list;
+  }, [jupiterIndex, walletTokens]);
+
+  // "To" list: wallet tokens first, then full Jupiter list (any output token)
+  const toTokenList = useMemo<JupiterToken[]>(() => {
+    const seen = new Set<string>();
+    const list: JupiterToken[] = [];
+    for (const t of fromTokenList) {
+      seen.add(t.address);
+      list.push(t);
+    }
+    for (const t of jupiterTokens) {
       if (seen.has(t.address)) continue;
       seen.add(t.address);
-      merged.push(t);
+      list.push({
+        ...t,
+        logoURI: t.logoURI ?? KNOWN_LOGOS[t.address],
+      });
     }
-    return merged;
-  }, [tokens, walletTokens]);
+    return list;
+  }, [fromTokenList, jupiterTokens]);
 
-  const filteredTokens = allSwappableTokens.filter(t =>
-    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.symbol.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Active list depends on which selector is open
+  const activeList = selectingToken === 'from' ? fromTokenList : toTokenList;
 
-  const outputAmount = quote && toToken
-    ? jupiterSwapService.formatAmount(parseInt(quote.outAmount), toToken.decimals)
-    : '';
-
-  const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
-  const isProcessing = status === 'signing' || status === 'sending';
-  const parsedAmount = parseFloat(fromAmount);
-  const isInsufficientBalance = fromToken && fromAmount && !isNaN(parsedAmount) && parsedAmount > fromTokenBalance;
-  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
+  // Search by name, symbol, or full/partial mint address
+  const filteredTokens = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return activeList;
+    return activeList.filter(t =>
+      (t.name ?? '').toLowerCase().includes(q) ||
+      (t.symbol ?? '').toLowerCase().includes(q) ||
+      t.address.toLowerCase().includes(q)
+    );
+  }, [activeList, searchQuery]);
 
   const fromAmountUsd = fromToken && fromAmount && fromTokenPrice > 0
     ? `≈ $${(parseFloat(fromAmount) * fromTokenPrice).toFixed(2)}`
@@ -589,7 +636,7 @@ export default function SwapScreen() {
             </View>
             <TextInput
               style={styles.modalSearch}
-              placeholder="Search by name or symbol"
+              placeholder="Search by name, symbol, or address"
               placeholderTextColor={colors.textMuted}
               value={searchQuery}
               onChangeText={setSearchQuery}
