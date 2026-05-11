@@ -31,6 +31,7 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
     importBackupConfirmed,
     externalWarningAccepted,
     biometricOffered,
+    onboardingComplete,
   } = useSecurity();
   const { profile, loading: profileLoading } = useProfile();
   const { activeWallet, isInitialized } = useWallet();
@@ -39,6 +40,7 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
 
   const nextStep = useMemo<OnboardingStep>(() => {
     if (!isReady || !activeWallet) return null;
+    if (onboardingComplete) return null;
 
     // 1. PIN required for all users
     if (!pinHash) return 'pin';
@@ -62,6 +64,7 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
     isReady,
     activeWallet,
     pinHash,
+    onboardingComplete,
     profile?.username,
     walletType,
     seedBackupConfirmed,

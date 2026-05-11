@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
-import { Key, CircleCheck as CheckCircle, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import { Key, CircleCheck as CheckCircle, TriangleAlert as AlertTriangle, Copy, X } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Clipboard from 'expo-clipboard';
 import { colors, spacing, fontSize } from '@/constants/theme';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { useSecurity } from '@/contexts/SecurityContext';
@@ -22,10 +23,15 @@ export function SeedBackupModal({ visible }: Props) {
     }
     return picks.sort((a, b) => a - b);
   });
+
+  // Shuffled word pool, stabilised when entering verify step
+  const [shuffledWords, setShuffledWords] = useState<string[]>([]);
+  // selected is an array of indices into words[] (not shuffledWords)
   const [selected, setSelected] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [understood, setUnderstood] = useState(false);
   const [backedUp, setBackedUp] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -34,19 +40,45 @@ export function SeedBackupModal({ visible }: Props) {
       .catch(() => {});
   }, [visible]);
 
+  const handleCopyAll = async () => {
+    if (words.length === 0) return;
+    await Clipboard.setStringAsync(words.join(' '));
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 3000);
+  };
+
+  const goToVerify = () => {
+    const shuffled = [...words].sort(() => Math.random() - 0.5);
+    setShuffledWords(shuffled);
+    setSelected([]);
+    setError('');
+    setStep('verify');
+  };
+
   const confirm = async () => {
-    if (selected.length !== 3) { setError('Select the 3 highlighted words in order.'); return; }
+    if (selected.length !== 3) { setError('Select all 3 required words in order.'); return; }
     const ok = verifyIdx.every((idx, i) => selected[i] === idx);
-    if (!ok) { setError('Incorrect order. Review your seed phrase.'); setSelected([]); return; }
+    if (!ok) { setError('Incorrect. Review your seed phrase and try again.'); setSelected([]); return; }
     await confirmSeedBackup(profile?.id);
     if (profile?.id) logEvent(profile.id, 'seed_backup_confirmed');
   };
 
-  const toggle = (idx: number) => {
+  const selectWord = (wordStr: string) => {
     setError('');
-    if (selected.includes(idx)) { setSelected(s => s.filter(i => i !== idx)); }
-    else if (selected.length < 3) { setSelected(s => [...s, idx]); }
+    const idx = words.indexOf(wordStr);
+    if (idx === -1) return;
+    if (selected.includes(idx)) return; // already selected
+    if (selected.length >= 3) return;
+    setSelected(s => [...s, idx]);
   };
+
+  const removeSelected = (position: number) => {
+    setSelected(s => s.filter((_, i) => i !== position));
+    setError('');
+  };
+
+  const nextRequiredPos = verifyIdx[selected.length]; // 0-based index of next required word
+  const nextRequiredNum = nextRequiredPos !== undefined ? nextRequiredPos + 1 : null;
 
   return (
     <Modal visible={visible} animationType="fade" transparent presentationStyle="overFullScreen">
@@ -106,16 +138,25 @@ export function SeedBackupModal({ visible }: Props) {
                   </LinearGradient>
                 </View>
                 <Text style={s.title}>Your Seed Phrase</Text>
-                <Text style={s.sub}>Write all 12 words in order on paper. Highlighted words will be verified next.</Text>
+                <Text style={s.sub}>Write all 12 words in order on paper before continuing.</Text>
                 <View style={s.grid}>
                   {words.map((w, i) => (
-                    <View key={i} style={[s.chip, verifyIdx.includes(i) && s.chipHl]}>
+                    <View key={i} style={s.chip}>
                       <Text style={s.chipNum}>{i + 1}</Text>
                       <Text style={s.chipTxt}>{w}</Text>
                     </View>
                   ))}
                 </View>
-                <TouchableOpacity style={s.btn} onPress={() => setStep('verify')} activeOpacity={0.85}>
+
+                {/* Copy All button */}
+                <TouchableOpacity style={s.copyRow} onPress={handleCopyAll} activeOpacity={0.8}>
+                  <Copy size={14} color={copyFeedback ? '#10b981' : colors.primary} strokeWidth={2} />
+                  <Text style={[s.copyTxt, copyFeedback && s.copyTxtDone]}>
+                    {copyFeedback ? 'Copied! Store it safely.' : 'Copy All'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={s.btn} onPress={goToVerify} activeOpacity={0.85}>
                   <LinearGradient colors={['#8B5CF6','#6D28D9']} start={{x:0,y:0}} end={{x:1,y:0}} style={s.btnGrad}>
                     <Text style={s.btnTxt}>I've Written It Down</Text>
                   </LinearGradient>
@@ -126,27 +167,65 @@ export function SeedBackupModal({ visible }: Props) {
             {step === 'verify' && (
               <>
                 <Text style={s.title}>Verify Your Backup</Text>
-                <Text style={s.sub}>Tap words {verifyIdx.map(i => `#${i+1}`).join(', ')} from your phrase, in order.</Text>
-                <View style={s.grid}>
-                  {words.map((w, i) => {
-                    const isTarget = verifyIdx.includes(i);
-                    const isSel = selected.includes(i);
+                <Text style={s.sub}>
+                  Select words{' '}
+                  {verifyIdx.map(i => `#${i + 1}`).join(', ')}{' '}
+                  from your phrase in order.
+                </Text>
+
+                {/* Progress slots */}
+                <View style={s.slotRow}>
+                  {verifyIdx.map((targetIdx, pos) => {
+                    const filledWordIdx = selected[pos];
+                    const isFilled = filledWordIdx !== undefined;
                     return (
                       <TouchableOpacity
-                        key={i}
-                        style={[s.chip, isTarget && s.chipTarget, isSel && s.chipSel, !isTarget && s.chipBlur]}
-                        onPress={() => isTarget && toggle(i)}
-                        disabled={!isTarget}
-                        activeOpacity={0.7}
+                        key={pos}
+                        style={[s.slot, isFilled && s.slotFilled]}
+                        onPress={() => isFilled && removeSelected(pos)}
+                        activeOpacity={isFilled ? 0.7 : 1}
                       >
-                        <Text style={s.chipNum}>{i + 1}</Text>
-                        <Text style={[s.chipTxt, !isTarget && s.chipTxtBlur]}>{isTarget ? w : '•••'}</Text>
-                        {isSel && <CheckCircle size={11} color="#10b981" style={{ marginLeft: 2 }} />}
+                        <Text style={s.slotNum}>#{targetIdx + 1}</Text>
+                        {isFilled ? (
+                          <View style={s.slotWordRow}>
+                            <Text style={s.slotWord}>{words[filledWordIdx]}</Text>
+                            <X size={10} color="rgba(255,255,255,0.5)" />
+                          </View>
+                        ) : (
+                          <Text style={s.slotEmpty}>
+                            {pos === selected.length ? '↑ tap below' : '—'}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     );
                   })}
                 </View>
+
+                {nextRequiredNum !== null && (
+                  <Text style={s.hint}>Now select word <Text style={{ color: colors.primary }}>#{nextRequiredNum}</Text></Text>
+                )}
+
+                {/* Shuffled word pool */}
+                <View style={s.pool}>
+                  {shuffledWords.map((w, i) => {
+                    const wordIdx = words.indexOf(w);
+                    const isUsed = selected.includes(wordIdx);
+                    return (
+                      <TouchableOpacity
+                        key={i}
+                        style={[s.poolChip, isUsed && s.poolChipUsed]}
+                        onPress={() => !isUsed && selectWord(w)}
+                        disabled={isUsed}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[s.poolChipTxt, isUsed && s.poolChipTxtUsed]}>{w}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
                 {error ? <Text style={s.err}>{error}</Text> : null}
+
                 <TouchableOpacity
                   style={[s.btn, selected.length < 3 && s.btnOff]}
                   onPress={confirm}
@@ -156,6 +235,10 @@ export function SeedBackupModal({ visible }: Props) {
                   <LinearGradient colors={['#8B5CF6','#6D28D9']} start={{x:0,y:0}} end={{x:1,y:0}} style={s.btnGrad}>
                     <Text style={s.btnTxt}>Confirm Backup</Text>
                   </LinearGradient>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={() => { setStep('words'); setSelected([]); setError(''); }} activeOpacity={0.7} style={{ marginTop: 12 }}>
+                  <Text style={s.backLink}>Review seed phrase again</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -180,16 +263,31 @@ const s = StyleSheet.create({
   cb: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: 'rgba(139,92,246,0.5)', justifyContent: 'center', alignItems: 'center', flexShrink: 0, marginTop: 1 },
   cbOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   cbLabel: { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 20, flex: 1 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'center', marginBottom: spacing.lg, width: '100%' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'center', marginBottom: spacing.md, width: '100%' },
   chip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', minWidth: 84 },
-  chipHl: { borderColor: 'rgba(139,92,246,0.55)', backgroundColor: 'rgba(139,92,246,0.09)' },
-  chipTarget: { borderColor: 'rgba(139,92,246,0.5)', backgroundColor: 'rgba(139,92,246,0.08)' },
-  chipSel: { borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)' },
-  chipBlur: { opacity: 0.35 },
   chipNum: { fontSize: 10, color: colors.textMuted, marginRight: 4, minWidth: 14 },
   chipTxt: { fontSize: 13, color: colors.white, fontWeight: '600' },
-  chipTxtBlur: { color: colors.textMuted },
+  // Copy All
+  copyRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: spacing.lg, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 10, backgroundColor: 'rgba(139,92,246,0.08)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
+  copyTxt: { fontSize: fontSize.sm, color: colors.primary, fontWeight: '600' },
+  copyTxtDone: { color: '#10b981' },
+  // Verify slots
+  slotRow: { flexDirection: 'row', gap: 8, marginBottom: 12, width: '100%' },
+  slot: { flex: 1, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)', backgroundColor: 'rgba(139,92,246,0.05)', padding: 8, alignItems: 'center', minHeight: 56 },
+  slotFilled: { borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)' },
+  slotNum: { fontSize: 10, color: colors.textMuted, marginBottom: 4 },
+  slotWordRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  slotWord: { fontSize: 12, color: '#10b981', fontWeight: '700' },
+  slotEmpty: { fontSize: 11, color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' },
+  hint: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: spacing.md, textAlign: 'center' },
+  // Word pool
+  pool: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginBottom: spacing.lg, width: '100%' },
+  poolChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.07)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
+  poolChipUsed: { opacity: 0.3, backgroundColor: 'transparent' },
+  poolChipTxt: { fontSize: 13, color: colors.white, fontWeight: '600' },
+  poolChipTxtUsed: { color: colors.textMuted },
   err: { color: '#ef4444', fontSize: fontSize.xs, textAlign: 'center', marginBottom: spacing.sm },
+  backLink: { fontSize: fontSize.sm, color: colors.textMuted, textDecorationLine: 'underline' },
   btn: { width: '100%', borderRadius: 14, overflow: 'hidden', marginTop: spacing.sm },
   btnOff: { opacity: 0.45 },
   btnGrad: { paddingVertical: 16, alignItems: 'center', borderRadius: 14 },

@@ -276,7 +276,6 @@ export default function SendScreen() {
     setStep('preparing');
     try {
       const solanaService = SolanaConnectionService.getInstance();
-      const connection = solanaService.getConnection();
       const fromPubkey = new PublicKey(activeAddress);
       const toPubkey = new PublicKey(recipient.trim());
       let transaction: Transaction;
@@ -301,13 +300,15 @@ export default function SendScreen() {
         // 1 — Detect token program (SPL Token vs Token-2022) from mint owner
         let tokenPid = SPL_TOKEN_PID;
         try {
-          const mintInfo = await connection.getAccountInfo(mintPubkey);
-          if (mintInfo?.owner.equals(TOKEN_2022_PID)) {
+          const mintInfoResult = await solanaService.rpcCall('getAccountInfo', [
+            mintPubkey.toBase58(),
+            { encoding: 'base64', commitment: 'confirmed' },
+          ]);
+          if (mintInfoResult?.value?.owner === TOKEN_2022_PID.toBase58()) {
             tokenPid = TOKEN_2022_PID;
-            console.log('[Send] Detected Token-2022 for mint:', selectedAsset.address);
           }
         } catch {
-          console.warn('[Send] Could not detect token program; defaulting to SPL Token.');
+          // default to SPL Token
         }
         const isToken2022 = tokenPid.equals(TOKEN_2022_PID);
 
@@ -322,16 +323,22 @@ export default function SendScreen() {
         );
 
         // 3 — Validate sender has a token account
-        const fromATAInfo = await connection.getAccountInfo(fromATA);
-        if (!fromATAInfo) {
+        const fromATAResult = await solanaService.rpcCall('getAccountInfo', [
+          fromATA.toBase58(),
+          { encoding: 'base64', commitment: 'confirmed' },
+        ]);
+        if (!fromATAResult?.value) {
           throw new Error('Token account not found. You do not hold this token in your wallet.');
         }
 
         transaction = new Transaction();
 
         // 4 — Create recipient ATA if it does not exist yet
-        const toATAInfo = await connection.getAccountInfo(toATA);
-        if (!toATAInfo) {
+        const toATAResult = await solanaService.rpcCall('getAccountInfo', [
+          toATA.toBase58(),
+          { encoding: 'base64', commitment: 'confirmed' },
+        ]);
+        if (!toATAResult?.value) {
           transaction.add(new TransactionInstruction({
             programId: ASSO_TOKEN_PID,
             keys: [

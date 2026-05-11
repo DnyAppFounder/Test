@@ -140,16 +140,17 @@ export default function TabLayout() {
   const { t } = useLanguage();
   const { unreadNotifCount, unreadMessageCount } = useProfile();
   const insets = useSafeAreaInsets();
-  const tabBarHeight = 64 + insets.bottom;
-  const tabBarPaddingBottom = 8 + insets.bottom;
+  const tabBarHeight = 72 + insets.bottom;
+  const tabBarPaddingBottom = 12 + insets.bottom;
 
   return (
     <OnboardingGate>
     <Tabs
+      sceneContainerStyle={{ paddingBottom: tabBarHeight }}
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: 'rgba(13,6,24,0.95)',
+          backgroundColor: 'rgba(13,6,24,0.97)',
           borderTopColor: 'rgba(139,92,246,0.2)',
           borderTopWidth: 1,
           height: tabBarHeight,
@@ -161,6 +162,8 @@ export default function TabLayout() {
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',
+          lineHeight: 14,
+          marginTop: 2,
         },
       }}
     >

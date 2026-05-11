@@ -16,16 +16,16 @@ import { BiometricModal } from '@/components/onboarding/BiometricModal';
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { nextStep, isReady } = useOnboardingGuard();
-  const { completeOnboarding, logEvent } = useSecurity();
+  const { completeOnboarding, logEvent, onboardingComplete } = useSecurity();
   const { profile } = useProfile();
 
-  // Mark complete and log event when all steps are done
+  // Mark complete once when all steps are done for the first time
   useEffect(() => {
-    if (isReady && nextStep === null && profile?.id) {
+    if (isReady && nextStep === null && !onboardingComplete && profile?.id) {
       completeOnboarding(profile.id);
       logEvent(profile.id, 'onboarding_completed');
     }
-  }, [isReady, nextStep, profile?.id]);
+  }, [isReady, nextStep, onboardingComplete, profile?.id]);
 
   return (
     <>
