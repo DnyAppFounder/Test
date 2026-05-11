@@ -26,6 +26,7 @@ import { Language, languageNames } from '@/constants/i18n';
 import { SocialService, UserProfile, NotificationSettings } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
 import { getSolPrice } from '@/services/solana/priceService';
@@ -76,6 +77,7 @@ export default function SettingsScreen() {
   const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
   const [premiumDone, setPremiumDone] = useState(false);
   const [solUsdPrice, setSolUsdPrice] = useState(0);
+  const [premiumPinGateVisible, setPremiumPinGateVisible] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +128,12 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleConfirmPremium = async () => {
+  const requestPremium = () => {
+    const isInternal = activeWallet?.type !== 'connected';
+    if (isInternal && pinHash) { setPremiumPinGateVisible(true); } else { executePremium(); }
+  };
+
+  const executePremium = async () => {
     if (!profile || !activeAddress) return;
     const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
     // Fetch live SOL price at moment of payment — never use 0
@@ -1235,7 +1242,7 @@ export default function SettingsScreen() {
 
                 <TouchableOpacity
                   style={{ backgroundColor: '#f59e0b', borderRadius: 14, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
-                  onPress={handleConfirmPremium}
+                  onPress={requestPremium}
                   activeOpacity={0.88}
                 >
                   <Shield size={18} color="#fff" />
@@ -1249,6 +1256,13 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+      <PinUnlockModal
+        visible={premiumPinGateVisible}
+        title="Authorize Payment"
+        subtitle="Enter your PIN to confirm Premium Certification"
+        onSuccess={() => { setPremiumPinGateVisible(false); executePremium(); }}
+        onCancel={() => setPremiumPinGateVisible(false)}
+      />
     </View>
   );
 }

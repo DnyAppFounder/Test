@@ -18,6 +18,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Rocket, Zap, Clock, Users, TrendingUp, CircleCheck as CheckCircle2, Circle as XCircle, ExternalLink, RefreshCw, DollarSign, Flame, TriangleAlert as AlertTriangle, Lock, CircleCheck as CheckIcon, ShieldCheck, ShieldAlert, Shield, TrendingDown, Droplets } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
+import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
 import { launchpadService, LaunchpadToken } from '@/services/launchpadService';
 import {
   presaleService,
@@ -66,10 +68,12 @@ function BuyModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const { pinHash } = useSecurity();
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txSig, setTxSig] = useState<string | null>(null);
+  const [pinGateVisible, setPinGateVisible] = useState(false);
 
   const tokenEstimate = presale.launch_price > 0 && amount
     ? parseFloat(amount) / presale.launch_price
@@ -125,92 +129,120 @@ function BuyModal({
 
   const handleClose = () => { setAmount(''); setError(null); setTxSig(null); onClose(); };
 
+  const requestBuy = () => {
+    const sol = parseFloat(amount);
+    if (isNaN(sol) || sol <= 0) { setError('Enter a valid amount'); return; }
+    if (sol < presale.min_buy) { setError(`Minimum buy: ${presale.min_buy} SOL`); return; }
+    if (sol > presale.max_buy) { setError(`Maximum buy: ${presale.max_buy} SOL`); return; }
+    if (sol > nativeBalance - 0.001) { setError('Insufficient SOL balance'); return; }
+    const isInternal = activeWallet?.type !== 'connected';
+    if (isInternal && pinHash) { setPinGateVisible(true); } else { handleBuy(); }
+  };
+
   if (txSig) {
     return (
-      <Modal visible={visible} animationType="fade" transparent>
-        <View style={bs.overlay}>
-          <View style={bs.sheet}>
-            <View style={bs.successIcon}>
-              <CheckIcon size={40} color={colors.success} />
-            </View>
-            <Text style={bs.successTitle}>Purchase Confirmed!</Text>
-            <Text style={bs.successSub}>
-              {fmtTokens(tokenEstimate)} {token.symbol} reserved
-            </Text>
-            {Platform.OS === 'web' && (
-              <TouchableOpacity style={bs.explorerBtn} onPress={() => (window as any).open(`https://solscan.io/tx/${txSig}`, '_blank')}>
-                <ExternalLink size={14} color={colors.primary} />
-                <Text style={bs.explorerBtnText}>View on Solscan</Text>
+      <>
+        <Modal visible={visible} animationType="fade" transparent>
+          <View style={bs.overlay}>
+            <View style={bs.sheet}>
+              <View style={bs.successIcon}>
+                <CheckIcon size={40} color={colors.success} />
+              </View>
+              <Text style={bs.successTitle}>Purchase Confirmed!</Text>
+              <Text style={bs.successSub}>
+                {fmtTokens(tokenEstimate)} {token.symbol} reserved
+              </Text>
+              {Platform.OS === 'web' && (
+                <TouchableOpacity style={bs.explorerBtn} onPress={() => (window as any).open(`https://solscan.io/tx/${txSig}`, '_blank')}>
+                  <ExternalLink size={14} color={colors.primary} />
+                  <Text style={bs.explorerBtnText}>View on Solscan</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={bs.doneBtn} onPress={() => { onSuccess(); handleClose(); }}>
+                <Text style={bs.doneBtnText}>Done</Text>
               </TouchableOpacity>
-            )}
-            <TouchableOpacity style={bs.doneBtn} onPress={() => { onSuccess(); handleClose(); }}>
-              <Text style={bs.doneBtnText}>Done</Text>
-            </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+        <PinUnlockModal
+          visible={pinGateVisible}
+          title="Authorize Purchase"
+          subtitle="Enter your PIN to confirm this transaction"
+          onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
+          onCancel={() => setPinGateVisible(false)}
+        />
+      </>
     );
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={bs.overlay}>
-        <View style={bs.sheet}>
-          <View style={bs.sheetHeader}>
-            <Text style={bs.sheetTitle}>Buy {token.symbol}</Text>
-            <TouchableOpacity onPress={handleClose}>
-              <XCircle size={22} color={colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={bs.balRow}>
-            <Text style={bs.balLabel}>Your balance</Text>
-            <Text style={bs.balValue}>{nativeBalance.toFixed(4)} SOL</Text>
-          </View>
-
-          <Text style={bs.inputLabel}>Amount (SOL)</Text>
-          <View style={bs.inputRow}>
-            <TextInput
-              style={bs.input}
-              placeholder={`Min ${presale.min_buy} — Max ${presale.max_buy}`}
-              placeholderTextColor={colors.textMuted}
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="decimal-pad"
-            />
-            <TouchableOpacity style={bs.maxBtn} onPress={() => setAmount(String(Math.min(presale.max_buy, nativeBalance - 0.001)))}>
-              <Text style={bs.maxBtnText}>MAX</Text>
-            </TouchableOpacity>
-          </View>
-
-          {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && (
-            <View style={bs.estimateCard}>
-              <Text style={bs.estimateLabel}>You receive approximately</Text>
-              <Text style={bs.estimateValue}>{fmtTokens(tokenEstimate)} {token.symbol}</Text>
+    <>
+      <Modal visible={visible} animationType="slide" transparent>
+        <View style={bs.overlay}>
+          <View style={bs.sheet}>
+            <View style={bs.sheetHeader}>
+              <Text style={bs.sheetTitle}>Buy {token.symbol}</Text>
+              <TouchableOpacity onPress={handleClose}>
+                <XCircle size={22} color={colors.textMuted} />
+              </TouchableOpacity>
             </View>
-          )}
 
-          {error ? <Text style={bs.errorText}>{error}</Text> : null}
+            <View style={bs.balRow}>
+              <Text style={bs.balLabel}>Your balance</Text>
+              <Text style={bs.balValue}>{nativeBalance.toFixed(4)} SOL</Text>
+            </View>
 
-          <View style={bs.limitsRow}>
-            <Text style={bs.limitItem}>Min: {presale.min_buy} SOL</Text>
-            <Text style={bs.limitItem}>Max: {presale.max_buy} SOL</Text>
+            <Text style={bs.inputLabel}>Amount (SOL)</Text>
+            <View style={bs.inputRow}>
+              <TextInput
+                style={bs.input}
+                placeholder={`Min ${presale.min_buy} — Max ${presale.max_buy}`}
+                placeholderTextColor={colors.textMuted}
+                value={amount}
+                onChangeText={setAmount}
+                keyboardType="decimal-pad"
+              />
+              <TouchableOpacity style={bs.maxBtn} onPress={() => setAmount(String(Math.min(presale.max_buy, nativeBalance - 0.001)))}>
+                <Text style={bs.maxBtnText}>MAX</Text>
+              </TouchableOpacity>
+            </View>
+
+            {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && (
+              <View style={bs.estimateCard}>
+                <Text style={bs.estimateLabel}>You receive approximately</Text>
+                <Text style={bs.estimateValue}>{fmtTokens(tokenEstimate)} {token.symbol}</Text>
+              </View>
+            )}
+
+            {error ? <Text style={bs.errorText}>{error}</Text> : null}
+
+            <View style={bs.limitsRow}>
+              <Text style={bs.limitItem}>Min: {presale.min_buy} SOL</Text>
+              <Text style={bs.limitItem}>Max: {presale.max_buy} SOL</Text>
+            </View>
+
+            <TouchableOpacity style={bs.buyBtn} onPress={requestBuy} disabled={loading}>
+              {loading
+                ? <ActivityIndicator color="#fff" size="small" />
+                : (
+                  <>
+                    <Zap size={16} color="#fff" />
+                    <Text style={bs.buyBtnText}>Buy {token.symbol}</Text>
+                  </>
+                )
+              }
+            </TouchableOpacity>
           </View>
-
-          <TouchableOpacity style={bs.buyBtn} onPress={handleBuy} disabled={loading}>
-            {loading
-              ? <ActivityIndicator color="#fff" size="small" />
-              : (
-                <>
-                  <Zap size={16} color="#fff" />
-                  <Text style={bs.buyBtnText}>Buy {token.symbol}</Text>
-                </>
-              )
-            }
-          </TouchableOpacity>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+      <PinUnlockModal
+        visible={pinGateVisible}
+        title="Authorize Purchase"
+        subtitle="Enter your PIN to confirm this transaction"
+        onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
+        onCancel={() => setPinGateVisible(false)}
+      />
+    </>
   );
 }
 

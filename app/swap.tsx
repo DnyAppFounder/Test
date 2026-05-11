@@ -11,7 +11,7 @@ import {
   Platform,
   SafeAreaView,
 } from 'react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { ArrowLeft, ArrowDownUp, CircleAlert as AlertCircle, ChevronDown, Smartphone, Shield, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -62,7 +62,10 @@ export default function SwapScreen() {
   const fromTokenBalance = fromToken
     ? fromToken.address === SOL_MINT
       ? nativeBalance
-      : parseFloat(walletTokens.find(t => t.contract_address === fromToken.address)?.balance || '0')
+      : (() => {
+          const t = walletTokens.find(wt => wt.contract_address === fromToken.address);
+          return t ? parseFloat(t.balance || '0') / Math.pow(10, fromToken.decimals) : 0;
+        })()
     : 0;
 
   const maxSpendable = fromToken?.address === SOL_MINT
@@ -282,7 +285,33 @@ export default function SwapScreen() {
     }
   };
 
-  const filteredTokens = tokens.filter(t =>
+  // Merge wallet-owned tokens with the Jupiter verified list so users can
+  // swap any token they hold, even if it is not on the Jupiter verified list.
+  const allSwappableTokens = useMemo<JupiterToken[]>(() => {
+    const seen = new Set<string>();
+    const merged: JupiterToken[] = [];
+    for (const wt of walletTokens) {
+      const addr = wt.contract_address;
+      if (!addr || seen.has(addr)) continue;
+      seen.add(addr);
+      merged.push({
+        address: addr,
+        chainId: 101,
+        decimals: wt.decimals,
+        name: wt.name,
+        symbol: wt.symbol,
+        logoURI: wt.logo_url || undefined,
+      });
+    }
+    for (const t of tokens) {
+      if (seen.has(t.address)) continue;
+      seen.add(t.address);
+      merged.push(t);
+    }
+    return merged;
+  }, [tokens, walletTokens]);
+
+  const filteredTokens = allSwappableTokens.filter(t =>
     t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.symbol.toLowerCase().includes(searchQuery.toLowerCase())
   );

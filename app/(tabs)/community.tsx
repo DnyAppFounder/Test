@@ -20,6 +20,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
+import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { getSolPrice } from '@/services/solana/priceService';
 import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
@@ -33,8 +35,9 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 
 export default function CommunityScreen() {
   const router = useRouter();
-  const { activeAddress, connectedWallet, selectedAccount } = useWallet();
+  const { activeAddress, activeWallet, connectedWallet, selectedAccount } = useWallet();
   const { profile, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
+  const { pinHash } = useSecurity();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +54,7 @@ export default function CommunityScreen() {
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>('1h');
   const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DTEST'>('SOL');
   const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
+  const [promotePinGateVisible, setPromotePinGateVisible] = useState(false);
   const DTEST_MINT = DTEST_MINT_ADDR;
 
   const [showCommentsModal, setShowCommentsModal] = useState(false);
@@ -400,7 +404,12 @@ export default function CommunityScreen() {
     setSelectedTierKey(tierKey);
   };
 
-  const handleConfirmPromotion = async () => {
+  const requestPromotion = () => {
+    const isInternal = activeWallet?.type !== 'connected';
+    if (isInternal && pinHash) { setPromotePinGateVisible(true); } else { executePromotion(); }
+  };
+
+  const executePromotion = async () => {
     if (!selectedTierKey || !selectedPostId || !profile || !activeAddress) return;
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
     if (!tier) return;
@@ -1546,7 +1555,7 @@ export default function CommunityScreen() {
                   </View>
 
                   {/* Confirm button */}
-                  <TouchableOpacity style={styles.pmConfirmBtn} onPress={handleConfirmPromotion} activeOpacity={0.88}>
+                  <TouchableOpacity style={styles.pmConfirmBtn} onPress={requestPromotion} activeOpacity={0.88}>
                     <Zap size={18} color="#fff" fill="#fff" />
                     <Text style={styles.pmConfirmBtnText}>CONFIRM PROMOTION</Text>
                   </TouchableOpacity>
@@ -1587,6 +1596,14 @@ export default function CommunityScreen() {
           </View>
         </View>
       </Modal>
+
+      <PinUnlockModal
+        visible={promotePinGateVisible}
+        title="Authorize Promotion"
+        subtitle="Enter your PIN to confirm payment"
+        onSuccess={() => { setPromotePinGateVisible(false); executePromotion(); }}
+        onCancel={() => setPromotePinGateVisible(false)}
+      />
 
       {/* Followers / Following List Modal */}
       <Modal visible={followListType !== null} animationType="slide" transparent>
