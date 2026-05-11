@@ -33,6 +33,7 @@ import { useWallet } from '@/contexts/WalletContext';
 import { spacing, borderRadius, fontSize } from '@/constants/theme';
 import { burnSplToken, PayStatus as BurnStatus } from '@/services/treasuryService';
 import {
+  Keypair,
   PublicKey,
   SystemProgram,
   Transaction,
@@ -251,48 +252,96 @@ export default function SendScreen() {
           SystemProgram.transfer({ fromPubkey, toPubkey, lamports })
         );
       } else {
-        const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-        const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8');
-        const mintPubkey = new PublicKey(selectedAsset.address);
-        const tokenAmount = BigInt(Math.floor(amountNum * Math.pow(10, selectedAsset.decimals)));
+        // ── SPL Token / Token-2022 transfer ─────────────────────────────────
+        const SPL_TOKEN_PID  = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+        const TOKEN_2022_PID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+        const ASSO_TOKEN_PID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8');
+        const SYS_PID        = new PublicKey('11111111111111111111111111111111');
 
-        const [fromATA] = await PublicKey.findProgramAddressSync(
-          [fromPubkey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
-          ASSOCIATED_TOKEN_PROGRAM_ID
+        const mintPubkey = new PublicKey(selectedAsset.address);
+        const decimals   = selectedAsset.decimals;
+        const rawAmount  = BigInt(Math.floor(amountNum * Math.pow(10, decimals)));
+
+        // 1 — Detect token program (SPL Token vs Token-2022) from mint owner
+        let tokenPid = SPL_TOKEN_PID;
+        try {
+          const mintInfo = await connection.getAccountInfo(mintPubkey);
+          if (mintInfo?.owner.equals(TOKEN_2022_PID)) {
+            tokenPid = TOKEN_2022_PID;
+            console.log('[Send] Detected Token-2022 for mint:', selectedAsset.address);
+          }
+        } catch {
+          console.warn('[Send] Could not detect token program; defaulting to SPL Token.');
+        }
+        const isToken2022 = tokenPid.equals(TOKEN_2022_PID);
+
+        // 2 — Derive sender and recipient ATAs (seeds include token program ID)
+        const [fromATA] = PublicKey.findProgramAddressSync(
+          [fromPubkey.toBuffer(), tokenPid.toBuffer(), mintPubkey.toBuffer()],
+          ASSO_TOKEN_PID
         );
-        const [toATA] = await PublicKey.findProgramAddressSync(
-          [toPubkey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
-          ASSOCIATED_TOKEN_PROGRAM_ID
+        const [toATA] = PublicKey.findProgramAddressSync(
+          [toPubkey.toBuffer(), tokenPid.toBuffer(), mintPubkey.toBuffer()],
+          ASSO_TOKEN_PID
         );
+
+        // 3 — Validate sender has a token account
+        const fromATAInfo = await connection.getAccountInfo(fromATA);
+        if (!fromATAInfo) {
+          throw new Error('Token account not found. You do not hold this token in your wallet.');
+        }
 
         transaction = new Transaction();
+
+        // 4 — Create recipient ATA if it does not exist yet
         const toATAInfo = await connection.getAccountInfo(toATA);
         if (!toATAInfo) {
           transaction.add(new TransactionInstruction({
-            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+            programId: ASSO_TOKEN_PID,
             keys: [
-              { pubkey: fromPubkey, isSigner: true, isWritable: true },
-              { pubkey: toATA, isSigner: false, isWritable: true },
-              { pubkey: toPubkey, isSigner: false, isWritable: false },
-              { pubkey: mintPubkey, isSigner: false, isWritable: false },
-              { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
-              { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+              { pubkey: fromPubkey, isSigner: true,  isWritable: true  }, // payer
+              { pubkey: toATA,      isSigner: false, isWritable: true  }, // new ATA
+              { pubkey: toPubkey,   isSigner: false, isWritable: false }, // ATA owner
+              { pubkey: mintPubkey, isSigner: false, isWritable: false }, // mint
+              { pubkey: SYS_PID,    isSigner: false, isWritable: false }, // system program
+              { pubkey: tokenPid,   isSigner: false, isWritable: false }, // token program
             ],
-            data: Buffer.alloc(0),
+            data: Buffer.alloc(0), // discriminator 0 = Create
           }));
         }
-        const data = Buffer.alloc(9);
-        data.writeUInt8(3, 0);
-        data.writeBigUInt64LE(tokenAmount, 1);
-        transaction.add(new TransactionInstruction({
-          programId: TOKEN_PROGRAM_ID,
-          keys: [
-            { pubkey: fromATA, isSigner: false, isWritable: true },
-            { pubkey: toATA, isSigner: false, isWritable: true },
-            { pubkey: fromPubkey, isSigner: true, isWritable: false },
-          ],
-          data,
-        }));
+
+        // 5 — Add transfer instruction
+        if (isToken2022) {
+          // Token-2022: use TransferChecked (discriminator 12) — required for extensions
+          const txData = Buffer.alloc(10);
+          txData.writeUInt8(12, 0);
+          txData.writeBigUInt64LE(rawAmount, 1);
+          txData.writeUInt8(decimals, 9);
+          transaction.add(new TransactionInstruction({
+            programId: tokenPid,
+            keys: [
+              { pubkey: fromATA,    isSigner: false, isWritable: true  }, // source
+              { pubkey: mintPubkey, isSigner: false, isWritable: false }, // mint (required by TransferChecked)
+              { pubkey: toATA,      isSigner: false, isWritable: true  }, // destination
+              { pubkey: fromPubkey, isSigner: true,  isWritable: false }, // authority
+            ],
+            data: txData,
+          }));
+        } else {
+          // SPL Token: Transfer (discriminator 3)
+          const txData = Buffer.alloc(9);
+          txData.writeUInt8(3, 0);
+          txData.writeBigUInt64LE(rawAmount, 1);
+          transaction.add(new TransactionInstruction({
+            programId: tokenPid,
+            keys: [
+              { pubkey: fromATA,    isSigner: false, isWritable: true  }, // source
+              { pubkey: toATA,      isSigner: false, isWritable: true  }, // destination
+              { pubkey: fromPubkey, isSigner: true,  isWritable: false }, // authority
+            ],
+            data: txData,
+          }));
+        }
       }
 
       // Use retry helper — falls back to direct rpcCall if Connection fetch fails
@@ -316,7 +365,9 @@ export default function SendScreen() {
       } else if (selectedAccount) {
         const walletManager = SecureWalletManager.getInstance();
         const mnemonic = await walletManager.getMnemonicUnlocked();
-        const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
+        const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
+        // Wrap into a @solana/web3.js Keypair (secretKey = 64-byte seed+pubkey from nacl)
+        const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
         transaction.sign(keypair);
         setStep('sending');
         const rawTx = transaction.serialize();
@@ -332,19 +383,27 @@ export default function SendScreen() {
       setStep('success');
       if (refreshWallet) await refreshWallet();
     } catch (err: any) {
-      let msg = err?.message || 'Transaction failed';
+      let msg = (err?.message || 'Transaction failed').trim();
       if (msg.includes('rejected') || msg.includes('User rejected')) {
         msg = 'Transaction rejected in wallet';
-      } else if (msg.includes('insufficient') || msg.includes('balance')) {
-        msg = 'Insufficient balance';
+      } else if (msg.includes('insufficient') || msg.includes('Insufficient')) {
+        msg = 'Insufficient balance for this transaction';
+      } else if (msg.includes('Token account not found') || msg.includes('do not hold')) {
+        msg = err.message; // keep the specific message
+      } else if (msg.includes('token account') || msg.includes('TokenAccount')) {
+        msg = 'Token account missing — the recipient may not have this token';
+      } else if (msg.includes('Confirmation timeout') || msg.includes('was not confirmed')) {
+        msg = 'Confirmation timeout. Check Solana Explorer for the transaction status.';
       } else if (
         msg.includes('Load failed') ||
-        msg.includes('network') ||
+        msg.includes('Failed to fetch') ||
         msg.includes('RPC') ||
-        msg.includes('fetch') ||
-        msg.includes('connect')
+        msg.includes('connect') ||
+        msg.includes('network')
       ) {
         msg = 'RPC connection failed. Please retry.';
+      } else if (msg.includes('custom program error') || msg.includes('0x')) {
+        msg = `Transaction failed: ${msg}`;
       }
       setError(msg);
       setStep('error');
