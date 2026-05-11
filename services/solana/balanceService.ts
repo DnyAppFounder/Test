@@ -3,6 +3,7 @@ import { SolanaConnectionService } from './connectionService';
 
 export interface TokenBalance {
   mint: string;
+  tokenAccountAddress: string;
   balance: number;
   decimals: number;
   uiAmount: number;
@@ -49,6 +50,7 @@ function parseTokenAccounts(accounts: any[]): TokenBalance[] {
         : (typeof tokenAmount.uiAmount === 'number' ? tokenAmount.uiAmount : 0);
 
       const mint: string = parsedInfo.mint;
+      const tokenAccountAddress: string = account.pubkey ?? '';
 
       // Skip zero balance
       if (rawAmount <= 0 || uiAmount <= 0) continue;
@@ -57,7 +59,7 @@ function parseTokenAccounts(accounts: any[]): TokenBalance[] {
       // Skip NFTs: decimals === 0 AND exactly 1 token
       if (decimals === 0 && uiAmount === 1) continue;
 
-      tokens.push({ mint, balance: rawAmount, decimals, uiAmount });
+      tokens.push({ mint, tokenAccountAddress, balance: rawAmount, decimals, uiAmount });
     } catch {
       // skip malformed account entries
     }

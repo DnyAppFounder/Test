@@ -213,7 +213,7 @@ export default function SendScreen() {
   const solUsdPrice = selectedAsset?.isNative && selectedAsset.uiBalance > 0
     ? (selectedAsset.value / selectedAsset.uiBalance)
     : selectedAsset?.price ?? 0;
-  const amountNum = parseFloat(amount) || 0;
+  const amountNum = parseFloat(amount.replace(/,/g, '')) || 0;
   const amountUsd = amountNum * solUsdPrice;
   const estimatedFee = 0.000025;
   const feeUsd = estimatedFee * (assets.find(a => a.isNative)?.price ?? solUsdPrice);
@@ -314,43 +314,70 @@ export default function SendScreen() {
         const decimals   = selectedAsset.decimals;
         const rawAmount  = BigInt(Math.floor(amountNum * Math.pow(10, decimals)));
 
-        // 1 — Detect token program (SPL Token vs Token-2022) from mint owner
+        // 1 — Resolve sender token account using mint as source of truth.
+        //     Priority: known address from asset discovery → fresh getTokenAccountsByOwner lookup.
+        let fromTokenAccountPubkey: PublicKey | null = null;
         let tokenPid = SPL_TOKEN_PID;
-        try {
-          const mintInfoResult = await solanaService.rpcCall('getAccountInfo', [
-            mintPubkey.toBase58(),
-            { encoding: 'base64', commitment: 'confirmed' },
-          ]);
-          if (mintInfoResult?.value?.owner === TOKEN_2022_PID.toBase58()) {
-            tokenPid = TOKEN_2022_PID;
+
+        if (selectedAsset.tokenAccountAddress) {
+          try {
+            const candidatePubkey = new PublicKey(selectedAsset.tokenAccountAddress);
+            // Determine token program from the account owner field
+            const acctInfo = await solanaService.rpcCall('getAccountInfo', [
+              selectedAsset.tokenAccountAddress,
+              { encoding: 'base64', commitment: 'confirmed' },
+            ]);
+            if (acctInfo?.value) {
+              fromTokenAccountPubkey = candidatePubkey;
+              if (acctInfo.value.owner === TOKEN_2022_PID.toBase58()) {
+                tokenPid = TOKEN_2022_PID;
+              }
+            }
+          } catch {
+            // fall through to fresh lookup
           }
-        } catch {
-          // default to SPL Token
         }
+
+        // Fresh lookup via getTokenAccountsByOwner for this specific mint (both programs)
+        if (!fromTokenAccountPubkey) {
+          for (const pid of [SPL_TOKEN_PID, TOKEN_2022_PID]) {
+            try {
+              const result = await solanaService.rpcCall('getTokenAccountsByOwner', [
+                fromPubkey.toBase58(),
+                { mint: mintPubkey.toBase58() },
+                { encoding: 'jsonParsed', commitment: 'confirmed' },
+              ]);
+              const accounts: any[] = result?.value ?? [];
+              if (accounts.length > 0) {
+                fromTokenAccountPubkey = new PublicKey(accounts[0].pubkey);
+                tokenPid = pid;
+                break;
+              }
+            } catch {}
+          }
+        }
+
+        if (!fromTokenAccountPubkey) {
+          console.error('[Send] Sender token account not found', {
+            wallet: activeAddress,
+            mint: selectedAsset.address,
+            symbol: selectedAsset.symbol,
+            knownTokenAccountAddress: selectedAsset.tokenAccountAddress,
+          });
+          throw new Error(`Token account not found for ${selectedAsset.symbol}. Ensure the token is in your wallet.`);
+        }
+
         const isToken2022 = tokenPid.equals(TOKEN_2022_PID);
 
-        // 2 — Derive sender and recipient ATAs (seeds include token program ID)
-        const [fromATA] = PublicKey.findProgramAddressSync(
-          [fromPubkey.toBuffer(), tokenPid.toBuffer(), mintPubkey.toBuffer()],
-          ASSO_TOKEN_PID
-        );
+        // 2 — Derive recipient ATA using the resolved token program
         const [toATA] = PublicKey.findProgramAddressSync(
           [toPubkey.toBuffer(), tokenPid.toBuffer(), mintPubkey.toBuffer()],
           ASSO_TOKEN_PID
         );
 
-        // 3 — Validate sender has a token account
-        const fromATAResult = await solanaService.rpcCall('getAccountInfo', [
-          fromATA.toBase58(),
-          { encoding: 'base64', commitment: 'confirmed' },
-        ]);
-        if (!fromATAResult?.value) {
-          throw new Error('Token account not found. You do not hold this token in your wallet.');
-        }
-
         transaction = new Transaction();
 
-        // 4 — Create recipient ATA if it does not exist yet
+        // 3 — Create recipient ATA if it does not exist yet
         const toATAResult = await solanaService.rpcCall('getAccountInfo', [
           toATA.toBase58(),
           { encoding: 'base64', commitment: 'confirmed' },
@@ -359,18 +386,18 @@ export default function SendScreen() {
           transaction.add(new TransactionInstruction({
             programId: ASSO_TOKEN_PID,
             keys: [
-              { pubkey: fromPubkey, isSigner: true,  isWritable: true  }, // payer
-              { pubkey: toATA,      isSigner: false, isWritable: true  }, // new ATA
-              { pubkey: toPubkey,   isSigner: false, isWritable: false }, // ATA owner
-              { pubkey: mintPubkey, isSigner: false, isWritable: false }, // mint
-              { pubkey: SYS_PID,    isSigner: false, isWritable: false }, // system program
-              { pubkey: tokenPid,   isSigner: false, isWritable: false }, // token program
+              { pubkey: fromPubkey,             isSigner: true,  isWritable: true  }, // payer
+              { pubkey: toATA,                  isSigner: false, isWritable: true  }, // new ATA
+              { pubkey: toPubkey,               isSigner: false, isWritable: false }, // ATA owner
+              { pubkey: mintPubkey,             isSigner: false, isWritable: false }, // mint
+              { pubkey: SYS_PID,                isSigner: false, isWritable: false }, // system program
+              { pubkey: tokenPid,               isSigner: false, isWritable: false }, // token program
             ],
             data: Buffer.alloc(0), // discriminator 0 = Create
           }));
         }
 
-        // 5 — Add transfer instruction
+        // 4 — Add transfer instruction
         if (isToken2022) {
           // Token-2022: use TransferChecked (discriminator 12) — required for extensions
           const txData = Buffer.alloc(10);
@@ -380,10 +407,10 @@ export default function SendScreen() {
           transaction.add(new TransactionInstruction({
             programId: tokenPid,
             keys: [
-              { pubkey: fromATA,    isSigner: false, isWritable: true  }, // source
-              { pubkey: mintPubkey, isSigner: false, isWritable: false }, // mint (required by TransferChecked)
-              { pubkey: toATA,      isSigner: false, isWritable: true  }, // destination
-              { pubkey: fromPubkey, isSigner: true,  isWritable: false }, // authority
+              { pubkey: fromTokenAccountPubkey, isSigner: false, isWritable: true  }, // source
+              { pubkey: mintPubkey,             isSigner: false, isWritable: false }, // mint (required by TransferChecked)
+              { pubkey: toATA,                  isSigner: false, isWritable: true  }, // destination
+              { pubkey: fromPubkey,             isSigner: true,  isWritable: false }, // authority
             ],
             data: txData,
           }));
@@ -395,9 +422,9 @@ export default function SendScreen() {
           transaction.add(new TransactionInstruction({
             programId: tokenPid,
             keys: [
-              { pubkey: fromATA,    isSigner: false, isWritable: true  }, // source
-              { pubkey: toATA,      isSigner: false, isWritable: true  }, // destination
-              { pubkey: fromPubkey, isSigner: true,  isWritable: false }, // authority
+              { pubkey: fromTokenAccountPubkey, isSigner: false, isWritable: true  }, // source
+              { pubkey: toATA,                  isSigner: false, isWritable: true  }, // destination
+              { pubkey: fromPubkey,             isSigner: true,  isWritable: false }, // authority
             ],
             data: txData,
           }));
