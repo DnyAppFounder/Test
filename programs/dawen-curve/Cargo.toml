@@ -4,9 +4,6 @@ members = [
 ]
 resolver = "2"
 
-[workspace.dependencies]
-proc-macro2 = { version = "1", features = ["span-locations"] }
-
 [profile.release]
 opt-level = 3
 overflow-checks = true
