@@ -30,6 +30,8 @@ import {
   X,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
+import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
 import { spacing, borderRadius, fontSize } from '@/constants/theme';
 import { burnSplToken, PayStatus as BurnStatus } from '@/services/treasuryService';
 import {
@@ -163,6 +165,8 @@ const BG = '#0D0618';
 export default function SendScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
+  const { pinHash, walletType } = useSecurity();
+  const [pinGateVisible, setPinGateVisible] = useState(false);
 
   const [assets, setAssets] = useState<WalletAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(true);
@@ -253,6 +257,12 @@ export default function SendScreen() {
       setBurnAmount('');
       if (refreshWallet) await refreshWallet();
     }
+  };
+
+  const requestSend = () => {
+    // External wallets sign via their own popup — skip app PIN
+    const needsPin = !connectedWallet && !!pinHash;
+    if (needsPin) { setPinGateVisible(true); } else { handleSend(); }
   };
 
   const handleSend = async () => {
@@ -759,7 +769,7 @@ export default function SendScreen() {
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.sendBtn, (!canSend || isBusy) && styles.sendBtnDisabled]}
-            onPress={handleSend}
+            onPress={requestSend}
             disabled={!canSend || isBusy}
             activeOpacity={0.85}
           >
@@ -822,6 +832,14 @@ export default function SendScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <PinUnlockModal
+        visible={pinGateVisible}
+        title="Confirm Send"
+        subtitle="Enter your PIN to authorize this transaction"
+        onSuccess={() => { setPinGateVisible(false); handleSend(); }}
+        onCancel={() => setPinGateVisible(false)}
+      />
     </View>
   );
 }

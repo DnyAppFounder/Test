@@ -19,6 +19,8 @@ import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService
 import { mergedTokenListService as jupiterTokenListService, JupiterToken } from '@/services/tokenListService';
 import { getSolPrice, SolanaPriceService } from '@/services/solana/priceService';
 import { useWallet } from '@/contexts/WalletContext';
+import { useSecurity } from '@/contexts/SecurityContext';
+import { PinUnlockModal } from '@/components/PinUnlockModal';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
@@ -34,6 +36,8 @@ type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'erro
 export default function SwapScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens, nativeBalance } = useWallet();
+  const { pinHash } = useSecurity();
+  const [pinGateVisible, setPinGateVisible] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -206,6 +210,11 @@ export default function SwapScreen() {
       secretKey: keypair.secretKey,
     }]);
     return transaction;
+  };
+
+  const requestSwap = () => {
+    const needsPin = !connectedWallet && !!pinHash;
+    if (needsPin) { setPinGateVisible(true); } else { handleExecuteSwap(); }
   };
 
   const handleExecuteSwap = async () => {
@@ -505,7 +514,7 @@ export default function SwapScreen() {
             styles.confirmBtn,
             (!canSwap || !!isInsufficientBalance) && styles.confirmBtnDisabled,
           ]}
-          onPress={handleExecuteSwap}
+          onPress={requestSwap}
           disabled={!canSwap || !!isInsufficientBalance}
           activeOpacity={0.85}
         >
@@ -562,6 +571,14 @@ export default function SwapScreen() {
           </View>
         </View>
       </Modal>
+
+      <PinUnlockModal
+        visible={pinGateVisible}
+        title="Confirm Swap"
+        subtitle="Enter your PIN to authorize this swap"
+        onSuccess={() => { setPinGateVisible(false); handleExecuteSwap(); }}
+        onCancel={() => setPinGateVisible(false)}
+      />
     </SafeAreaView>
   );
 }

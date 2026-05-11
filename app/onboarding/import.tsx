@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -139,6 +140,7 @@ export default function ImportWallet() {
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={async () => {
+              await AsyncStorage.setItem('security:wallet_type', 'imported');
               await forceReloadAccounts();
               router.replace('/(tabs)');
             }}

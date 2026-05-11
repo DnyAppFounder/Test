@@ -8,6 +8,7 @@ import { WalletProvider } from '@/contexts/WalletContext';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { ProfileProvider } from '@/contexts/ProfileContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { SecurityProvider } from '@/contexts/SecurityContext';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
@@ -63,6 +64,7 @@ export default function RootLayout() {
     <View style={styles.root} onLayout={onLayoutRootView}>
       <ErrorBoundary fallbackLabel="App error — please refresh">
         <LanguageProvider>
+          <SecurityProvider>
           <WalletProvider>
             <ProfileProvider>
               <Stack
@@ -86,6 +88,7 @@ export default function RootLayout() {
               <StatusBar style="light" />
             </ProfileProvider>
           </WalletProvider>
+          </SecurityProvider>
         </LanguageProvider>
       </ErrorBoundary>
     </View>

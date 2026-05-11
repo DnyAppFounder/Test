@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Wallet, Globe, Rocket, Compass, Settings } from 'lucide-react-native';
+import { OnboardingGate } from '@/components/OnboardingGate';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useEffect, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -143,6 +144,7 @@ export default function TabLayout() {
   const tabBarPaddingBottom = 8 + insets.bottom;
 
   return (
+    <OnboardingGate>
     <Tabs
       screenOptions={{
         headerShown: false,
@@ -215,5 +217,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </OnboardingGate>
   );
 }

@@ -266,6 +266,7 @@ export default function OnboardingWelcome() {
         onClose={() => setShowConnectModal(false)}
         onConnected={async () => {
           setShowConnectModal(false);
+          await AsyncStorage.setItem('security:wallet_type', 'external');
           await markOnboardingComplete();
           console.log('[Onboarding] External wallet connected — navigating to /(tabs)');
           router.replace('/(tabs)');
