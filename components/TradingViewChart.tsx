@@ -156,7 +156,6 @@ export function TradingViewChart({
 
   // Animated values
   const dotPulse = useRef(new Animated.Value(1)).current;
-  const priceLineFlash = useRef(new Animated.Value(0)).current;
   const bgAnim = useRef(new Animated.Value(0)).current;
 
   // Historical scroll state
@@ -236,20 +235,6 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Flash price line on update
-  const flashPriceLine = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(priceLineFlash, { toValue: 1, duration: 100, useNativeDriver: false }),
-      Animated.timing(priceLineFlash, { toValue: 0, duration: 600, useNativeDriver: false }),
-    ]).start();
-  }, [priceLineFlash]);
-
-  // Periodic flash every 3s to keep the chart looking alive even with no trades
-  useEffect(() => {
-    const t = setInterval(() => { flashPriceLine(); }, 3000);
-    return () => clearInterval(t);
-  }, [flashPriceLine]);
-
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
     if (!tokenMint) { setLoading(false); return; }
     if (!silent) setLoading(true);
@@ -289,7 +274,6 @@ export function TradingViewChart({
     if (prev === price) return;
     livePriceRef.current = price;
     setLivePrice(price);
-    flashPriceLine();
     setCandles(cs => {
       if (!cs.length) return cs;
       const last = cs[cs.length - 1];
@@ -303,7 +287,7 @@ export function TradingViewChart({
       };
       return updated;
     });
-  }, [flashPriceLine]);
+  }, []);
 
   const connectWebSocket = useCallback((pairAddr: string) => {
     if (typeof WebSocket === 'undefined') return;

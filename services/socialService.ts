@@ -435,6 +435,7 @@ export class SocialService {
       allowQuotes?: boolean;
       language?: string;
       quotePostId?: string;
+      promoteTier?: string;
     }
   ): Promise<Post | null> {
     let mediaUrl: string | null = options?.mediaUrl || null;
@@ -453,6 +454,18 @@ export class SocialService {
     } else if (options?.imageUri && !options.mediaUrl) {
       const uploaded = await this.uploadPostMedia(authorId, options.imageUri);
       if (uploaded) { mediaUrl = uploaded; mediaUrls = [uploaded]; }
+    }
+
+    // Compute promotion fields if a tier is requested
+    const promoteTier = options?.promoteTier;
+    const promoteTierConfig = promoteTier ? PROMOTE_TIERS.find(t => t.key === promoteTier) : null;
+    let isPromoted = false;
+    let promotedUntil: string | null = null;
+    if (promoteTierConfig) {
+      const until = new Date();
+      until.setHours(until.getHours() + promoteTierConfig.hours);
+      isPromoted = true;
+      promotedUntil = until.toISOString();
     }
 
     const { data } = await supabase
@@ -478,6 +491,9 @@ export class SocialService {
         allow_quotes: options?.allowQuotes ?? true,
         language: options?.language ?? 'en',
         quote_post_id: options?.quotePostId ?? null,
+        is_promoted: isPromoted,
+        promoted_until: promotedUntil,
+        promoted_tier: promoteTier ?? null,
       })
       .select()
       .maybeSingle();
