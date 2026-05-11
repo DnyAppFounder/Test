@@ -2,6 +2,7 @@ import { Tabs } from 'expo-router';
 import { Wallet, Globe, Rocket, Compass, Settings } from 'lucide-react-native';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useEffect, useRef } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '@/constants/theme';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -137,17 +138,20 @@ const badgeStyles = StyleSheet.create({
 export default function TabLayout() {
   const { t } = useLanguage();
   const { unreadNotifCount, unreadMessageCount } = useProfile();
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = 64 + insets.bottom;
+  const tabBarPaddingBottom = 8 + insets.bottom;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: 'rgba(13,6,24,0.92)',
+          backgroundColor: 'rgba(13,6,24,0.95)',
           borderTopColor: 'rgba(139,92,246,0.2)',
           borderTopWidth: 1,
-          height: 64,
-          paddingBottom: 8,
+          height: tabBarHeight,
+          paddingBottom: tabBarPaddingBottom,
           paddingTop: 8,
         },
         tabBarActiveTintColor: colors.primary,

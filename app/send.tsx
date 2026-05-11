@@ -105,6 +105,32 @@ async function getLatestBlockhashWithRetry(
   throw new Error('RPC connection failed. Please retry.');
 }
 
+// Polls for transaction confirmation — avoids WebSocket dependency.
+async function pollConfirmation(
+  service: SolanaConnectionService,
+  signature: string,
+  timeoutMs = 60000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const result = await service.rpcCall('getSignatureStatuses', [
+        [signature],
+        { searchTransactionHistory: true },
+      ]);
+      const status = result?.value?.[0];
+      if (status) {
+        if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+        if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return;
+      }
+    } catch (e: any) {
+      if (e.message?.includes('Transaction failed')) throw e;
+    }
+  }
+  throw new Error('Confirmation timeout — check Solana Explorer for status.');
+}
+
 // Sends a signed transaction via Connection, retrying via direct rpcCall on failure.
 async function sendRawTransactionWithRetry(
   service: SolanaConnectionService,
@@ -361,7 +387,7 @@ export default function SendScreen() {
         setStep('sending');
         const rawTx = (signed as Transaction).serialize();
         signature = await sendRawTransactionWithRetry(solanaService, rawTx);
-        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+        await pollConfirmation(solanaService, signature);
       } else if (selectedAccount) {
         const walletManager = SecureWalletManager.getInstance();
         const mnemonic = await walletManager.getMnemonicUnlocked();
@@ -372,7 +398,7 @@ export default function SendScreen() {
         setStep('sending');
         const rawTx = transaction.serialize();
         signature = await sendRawTransactionWithRetry(solanaService, rawTx);
-        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+        await pollConfirmation(solanaService, signature);
       } else {
         throw new Error('No wallet available');
       }
