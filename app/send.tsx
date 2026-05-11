@@ -165,7 +165,7 @@ const BG = '#0D0618';
 
 export default function SendScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, refreshPortfolio } = useWallet();
   const { pinHash, walletType } = useSecurity();
   const [pinGateVisible, setPinGateVisible] = useState(false);
   const [txConfirmVisible, setTxConfirmVisible] = useState(false);
@@ -257,7 +257,7 @@ export default function SendScreen() {
     } else {
       setBurnSig(result.signature ?? null);
       setBurnAmount('');
-      if (refreshWallet) await refreshWallet();
+      if (refreshPortfolio) await refreshPortfolio();
     }
   };
 
@@ -468,7 +468,7 @@ export default function SendScreen() {
       setRecentRecipients(await loadRecentRecipients());
       setTxSignature(signature);
       setStep('success');
-      if (refreshWallet) await refreshWallet();
+      if (refreshPortfolio) await refreshPortfolio();
     } catch (err: any) {
       let msg = (err?.message || 'Transaction failed').trim();
       if (msg.includes('rejected') || msg.includes('User rejected')) {

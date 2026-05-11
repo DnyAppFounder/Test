@@ -57,7 +57,7 @@ const qaGifText: any = { fontSize: 10, fontWeight: '900', color: '#10b981' };
 export default function CreatePostScreen() {
   const router = useRouter();
   const { profile, refreshProfile } = useProfile();
-  const { activeAddress, connectedWallet, selectedAccount, refreshWallet } = useWallet();
+  const { activeAddress, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
 
   const isPremium = profile ? VerificationService.isPremiumActive(profile as any) : false;
   const CHAR_LIMIT = isPremium ? 1000 : 230;
@@ -142,7 +142,7 @@ export default function CreatePostScreen() {
         .eq('id', profile.id);
 
       await refreshProfile();
-      await refreshWallet();
+      await refreshPortfolio();
       setPromoteStep('done');
     } catch (err: any) {
       setPromoteStep('confirm');

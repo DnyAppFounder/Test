@@ -39,7 +39,7 @@ type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' |
 export default function SettingsScreen() {
   const router = useRouter();
   const { t, language, setLanguage } = useLanguage();
-  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, activeAddress, setActiveWallet, connectedWallet, disconnectExternalWallet, fullLogout } = useWallet();
+  const { accounts, selectedAccount, setSelectedAccount, forceReloadAccounts, allWallets, activeWallet, activeAddress, setActiveWallet, connectedWallet, disconnectExternalWallet, fullLogout, refreshPortfolio } = useWallet();
   const { profile, updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const { pinHash, changePin } = useSecurity();
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
@@ -167,6 +167,7 @@ export default function SettingsScreen() {
       await VerificationService.activatePremium(profile.id, premiumTierKey, result.signature ?? undefined);
       await refreshProfile();
     } catch {}
+    refreshPortfolio().catch(() => {});
     setPremiumDone(true);
   };
 

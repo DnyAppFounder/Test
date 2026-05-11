@@ -47,7 +47,7 @@ type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'erro
 
 export default function SwapScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshWallet, tokens: walletTokens, nativeBalance } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshPortfolio, tokens: walletTokens, nativeBalance } = useWallet();
   const { pinHash } = useSecurity();
   const [pinGateVisible, setPinGateVisible] = useState(false);
   const [txConfirmVisible, setTxConfirmVisible] = useState(false);
@@ -295,7 +295,7 @@ export default function SwapScreen() {
       const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
       setTxSignature(signature);
       setStatus('success');
-      if (refreshWallet) await refreshWallet();
+      if (refreshPortfolio) await refreshPortfolio();
       setTimeout(() => { setFromAmount(''); setQuote(null); setStatus('idle'); setTxSignature(null); }, 4000);
     } catch (err: any) {
       let msg: string = err?.message || 'Transaction failed';

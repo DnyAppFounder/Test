@@ -297,7 +297,7 @@ function BuyModal({
 export default function PresaleDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { activeAddress, activeWallet, nativeBalance } = useWallet();
+  const { activeAddress, activeWallet, nativeBalance, refreshPortfolio } = useWallet();
 
   const [presale, setPresale] = useState<Presale | null>(null);
   const [token, setToken] = useState<LaunchpadToken | null>(null);
@@ -420,7 +420,7 @@ export default function PresaleDetailScreen() {
     const res = await presaleService.finalizePresale(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Finalize failed');
-    else load();
+    else { load(); refreshPortfolio().catch(() => {}); }
   };
 
   const handleClaim = async () => {
@@ -432,7 +432,7 @@ export default function PresaleDetailScreen() {
     const res = await presaleService.claimTokens(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Claim failed');
-    else load();
+    else { load(); refreshPortfolio().catch(() => {}); }
   };
 
   const handleRefund = async () => {
@@ -444,7 +444,7 @@ export default function PresaleDetailScreen() {
     const res = await presaleService.refundContribution(presale.id, activeAddress, signAndSend);
     setActionLoading(false);
     if (!res.success) setActionError(res.error ?? 'Refund failed');
-    else load();
+    else { load(); refreshPortfolio().catch(() => {}); }
   };
 
   if (loading) {
@@ -887,7 +887,7 @@ export default function PresaleDetailScreen() {
           activeWallet={activeWallet}
           nativeBalance={nativeBalance}
           onClose={() => setShowBuy(false)}
-          onSuccess={load}
+          onSuccess={() => { load(); refreshPortfolio().catch(() => {}); }}
         />
       )}
     </SafeAreaView>

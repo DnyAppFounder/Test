@@ -176,7 +176,7 @@ function TokenSelectorModal({ visible, onClose, onSelect, tokens, title, showBal
 
 export default function BuyScreen() {
   const router = useRouter();
-  const { selectedAccount, connectedWallet, activeAddress, refreshWallet, nativeBalance, tokens } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, refreshPortfolio, nativeBalance, tokens } = useWallet();
   const { pinHash } = useSecurity();
   const [pinGateVisible, setPinGateVisible] = useState(false);
   const [txConfirmVisible, setTxConfirmVisible] = useState(false);
@@ -448,7 +448,7 @@ export default function BuyScreen() {
       const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
       setTxSignature(signature);
       setStatus('success');
-      if (refreshWallet) await refreshWallet();
+      if (refreshPortfolio) await refreshPortfolio();
     } catch (err: any) {
       let msg = err?.message || 'Transaction failed';
       if (msg.includes('rejected') || msg.includes('User rejected')) msg = 'Transaction rejected in wallet';

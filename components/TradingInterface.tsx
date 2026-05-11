@@ -44,7 +44,7 @@ export function TradingInterface({
   tokenBalance = 0,
   onTradeComplete,
 }: TradingInterfaceProps) {
-  const { selectedAccount, connectedWallet, activeAddress, activeWallet, tokens, refreshWallet } = useWallet();
+  const { selectedAccount, connectedWallet, activeAddress, activeWallet, tokens, refreshPortfolio } = useWallet();
   const [mode, setMode] = useState<TradeMode>('buy');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState<JupiterQuote | null>(null);
@@ -126,7 +126,7 @@ export function TradingInterface({
 
       setTxSignature(signature);
       setStatus('success');
-      if (refreshWallet) await refreshWallet();
+      if (refreshPortfolio) await refreshPortfolio();
       if (onTradeComplete) onTradeComplete();
 
       setTimeout(() => {

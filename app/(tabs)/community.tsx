@@ -35,7 +35,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 
 export default function CommunityScreen() {
   const router = useRouter();
-  const { activeAddress, activeWallet, connectedWallet, selectedAccount } = useWallet();
+  const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
   const { profile, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
   const { pinHash } = useSecurity();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
@@ -448,6 +448,7 @@ export default function CommunityScreen() {
         p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
       ));
     } catch {}
+    refreshPortfolio().catch(() => {});
     setPromoteStep('done');
   };
 
