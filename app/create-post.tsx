@@ -27,11 +27,13 @@ import {
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
+import { useWallet } from '@/contexts/WalletContext';
 import { VerificationService } from '@/services/verificationService';
 import { SocialService, PROMOTE_TIERS } from '@/services/socialService';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { SolanaPriceService } from '@/services/solana/priceService';
-import { TransactionManager } from '@/lib/wallet/TransactionManager';
+import { payToTreasury, TREASURY_WALLET, PayStatus } from '@/services/treasuryService';
+import { supabase } from '@/lib/supabase';
 
 type WhoCanReply = 'everyone' | 'followers' | 'mentioned';
 type Visibility = 'public' | 'followers';
@@ -54,7 +56,8 @@ const qaGifText: any = { fontSize: 10, fontWeight: '900', color: '#10b981' };
 
 export default function CreatePostScreen() {
   const router = useRouter();
-  const { profile } = useProfile();
+  const { profile, refreshProfile } = useProfile();
+  const { activeAddress, connectedWallet, selectedAccount, refreshWallet } = useWallet();
 
   const isPremium = profile ? VerificationService.isPremiumActive(profile as any) : false;
   const CHAR_LIMIT = isPremium ? 1000 : 230;
@@ -83,7 +86,7 @@ export default function CreatePostScreen() {
   const [promoteStep, setPromoteStep] = useState<'select' | 'confirm' | 'processing' | 'done'>('select');
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
   const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
-  const DAWEN_TREASURY = 'DawEn7h3sMhW5RjNfUeDmPT5yVFiRgXwemRZy2f8DrUq';
+  const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
 
   useEffect(() => {
     const svc = new SolanaPriceService();
@@ -94,25 +97,58 @@ export default function CreatePostScreen() {
 
   const selectedTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey) ?? null;
 
+  const pendingCredit = (profile as any)?.pending_promote_tier as string | null | undefined;
+
   const handleConfirmPromotion = async () => {
     if (!selectedTierKey || !profile) return;
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
     if (!tier) return;
+
+    // If already paid for this exact tier, skip payment
+    if (pendingCredit === selectedTierKey) {
+      setPromoteStep('done');
+      return;
+    }
+
+    if (!activeAddress) {
+      Alert.alert('No Wallet', 'Connect or unlock your wallet first.');
+      return;
+    }
+
     const solAmount = usdToSol(tier.usdPrice);
+    if (solAmount <= 0) {
+      Alert.alert('Price Error', 'Unable to fetch SOL price. Please try again.');
+      return;
+    }
+
     setPromoteStep('processing');
+    setPromotePayStatus('idle');
+
     try {
-      const txManager = TransactionManager.getInstance();
-      const result = await txManager.sendTransaction({
-        blockchain: 'solana',
-        to: DAWEN_TREASURY,
-        amount: solAmount > 0 ? solAmount.toFixed(6) : '0.001',
-        accountIndex: 0,
+      const result = await payToTreasury({
+        fromAddress: activeAddress,
+        amountSol: solAmount,
+        connectedWalletId: connectedWallet?.id ?? null,
+        internalAccountIndex: selectedAccount?.accountIndex ?? 0,
+        onStatus: setPromotePayStatus,
       });
+
       if (!result.success) throw new Error(result.error || 'Transaction failed');
+
+      // Save pending credit to DB
+      await supabase
+        .from('user_profiles')
+        .update({ pending_promote_tier: selectedTierKey })
+        .eq('id', profile.id);
+
+      await refreshProfile();
+      await refreshWallet();
       setPromoteStep('done');
     } catch (err: any) {
       setPromoteStep('confirm');
-      Alert.alert('Payment Failed', err?.message || 'Could not complete SOL payment. Make sure your wallet is unlocked and has sufficient balance.');
+      setPromotePayStatus('idle');
+      const msg = err?.message || 'Could not complete payment.';
+      Alert.alert('Payment Failed', msg);
     }
   };
 
@@ -237,6 +273,7 @@ export default function CreatePostScreen() {
       const effectiveReply = mentionedReply ? 'mentioned' : whoCanReply;
       const primaryToken = attachedTokens[0] ?? null;
       const secondToken = attachedTokens[1] ?? null;
+      const promoteTier = pendingCredit ?? undefined;
 
       await SocialService.createPost(profile.id, content.trim(), {
         mediaUris: mediaUris.length > 0 ? mediaUris : undefined,
@@ -254,7 +291,17 @@ export default function CreatePostScreen() {
         whoCanReply: effectiveReply,
         allowQuotes,
         language: 'en',
+        promoteTier,
       });
+
+      // Consume promotion credit after post is submitted
+      if (pendingCredit) {
+        await supabase
+          .from('user_profiles')
+          .update({ pending_promote_tier: null })
+          .eq('id', profile.id);
+        await refreshProfile();
+      }
 
       router.back();
     } catch (e) {
@@ -794,16 +841,27 @@ export default function CreatePostScreen() {
                   </View>
                 </View>
               </View>
-              <View style={styles.promNotice}>
-                <CircleAlert size={14} color={colors.warning} strokeWidth={2} />
-                <Text style={styles.promNoticeText}>
-                  Real SOL transaction. Wallet must be unlocked with sufficient balance.
-                </Text>
-              </View>
+              {pendingCredit === selectedTierKey ? (
+                <View style={[styles.promNotice, { backgroundColor: 'rgba(16,185,129,0.08)' }]}>
+                  <Check size={14} color="#10b981" strokeWidth={2} />
+                  <Text style={[styles.promNoticeText, { color: '#10b981' }]}>
+                    You already paid for this tier. Submit your post to apply the credit.
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.promNotice}>
+                  <CircleAlert size={14} color={colors.warning} strokeWidth={2} />
+                  <Text style={styles.promNoticeText}>
+                    Real SOL transaction. Wallet must be unlocked with sufficient balance.
+                  </Text>
+                </View>
+              )}
               <TouchableOpacity style={styles.promConfirmBtn} onPress={handleConfirmPromotion} activeOpacity={0.85}>
                 <Zap size={16} color={colors.white} strokeWidth={2} />
                 <Text style={styles.promConfirmBtnText}>
-                  Pay {solUsdPrice > 0 ? `${usdToSol(selectedTier.usdPrice).toFixed(4)} SOL` : `$${selectedTier.usdPrice}`} & Promote
+                  {pendingCredit === selectedTierKey
+                    ? 'Use Existing Credit'
+                    : `Pay ${solUsdPrice > 0 ? `${usdToSol(selectedTier.usdPrice).toFixed(4)} SOL` : `$${selectedTier.usdPrice}`} & Promote`}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity style={{ alignItems: 'center', marginTop: 12 }} onPress={() => setPromoteStep('select')} activeOpacity={0.7}>
@@ -815,7 +873,11 @@ export default function CreatePostScreen() {
           {promoteStep === 'processing' && (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 }}>
               <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.textPrimary }}>Processing...</Text>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.textPrimary }}>
+                {promotePayStatus === 'signing' ? 'Waiting for signature...' :
+                 promotePayStatus === 'sending' ? 'Broadcasting transaction...' :
+                 promotePayStatus === 'confirmed' ? 'Confirmed!' : 'Processing...'}
+              </Text>
               <Text style={{ fontSize: 14, color: colors.textMuted }}>Sending SOL to DAWEN treasury</Text>
             </View>
           )}
@@ -825,12 +887,12 @@ export default function CreatePostScreen() {
               <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#10b98122', justifyContent: 'center', alignItems: 'center' }}>
                 <Check size={32} color="#10b981" strokeWidth={2.5} />
               </View>
-              <Text style={{ fontSize: 22, fontWeight: '800', color: colors.textPrimary }}>Payment Sent!</Text>
+              <Text style={{ fontSize: 22, fontWeight: '800', color: colors.textPrimary }}>Promotion Ready!</Text>
               <Text style={{ fontSize: 15, color: colors.textMuted, textAlign: 'center' }}>
-                Your post will be promoted after you submit it.
+                Payment confirmed on-chain. Tap "Post" to publish and apply your boost.
               </Text>
               <TouchableOpacity style={styles.promConfirmBtn} onPress={() => setShowPromoteModal(false)} activeOpacity={0.85}>
-                <Text style={styles.promConfirmBtnText}>Done</Text>
+                <Text style={styles.promConfirmBtnText}>Got it — Write Post</Text>
               </TouchableOpacity>
             </View>
           )}

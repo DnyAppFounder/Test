@@ -529,9 +529,8 @@ export function TradingViewChart({
       const localY = e.clientY - rect.top;
       updateCrosshairAt(localX, localY);
     },
-    onMouseLeave: () => {
-      // keep crosshair visible after leaving
-    },
+    onMouseLeave: () => {},
+    onContextMenu: (e: any) => e.preventDefault(),
   } : {};
 
   const dismissCrosshair = () => setCrosshair(null);
@@ -784,7 +783,15 @@ export function TradingViewChart({
 
       <View
         ref={svgContainerRef}
-        style={styles.svgWrap}
+        style={[
+          styles.svgWrap,
+          Platform.OS === 'web' && ({
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            MozUserSelect: 'none',
+            touchAction: 'none',
+          } as any),
+        ]}
         {...panResponder.panHandlers}
         {...(webMouseHandlers as any)}
         onLayout={() => {

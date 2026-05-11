@@ -4,6 +4,7 @@ import {
   Transaction,
   LAMPORTS_PER_SOL,
   TransactionInstruction,
+  Keypair,
 } from '@solana/web3.js';
 import { SolanaConnectionService } from './solana/connectionService';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -184,7 +185,8 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
     } else {
       const walletManager = SecureWalletManager.getInstance();
       const mnemonic = await walletManager.getMnemonicUnlocked();
-      const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
+      const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
+      const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
       tx.sign(keypair);
       onStatus?.('sending');
       signature = await sendRaw(rpc, tx);
@@ -265,7 +267,8 @@ export async function burnSplToken(params: {
     } else {
       const walletManager = SecureWalletManager.getInstance();
       const mnemonic = await walletManager.getMnemonicUnlocked();
-      const keypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
+      const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, internalAccountIndex);
+      const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
       tx.sign(keypair);
       onStatus?.('sending');
       signature = await sendRaw(rpc, tx);
