@@ -2,20 +2,20 @@
 anchor_version = "0.31.1"
 
 [features]
-seeds = false
+resolution = true
 skip-lint = false
 
 [programs.localnet]
-dawen_curve = "DCurve1vZEq4cPjhfRDsGBrXJGBnwuQ8LqFp5gNmpBJv"
+dawen_curve = "JDLkWPUns2bvNKz9mxxYMyAXs1joGpUkY5oSsSELeEP"
 
 [programs.mainnet]
-dawen_curve = "DCurve1vZEq4cPjhfRDsGBrXJGBnwuQ8LqFp5gNmpBJv"
+dawen_curve = "JDLkwPUns2bVnKz9mxxYVMyAXs1joGpUkY5oSsSELeEP"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Mainnet"
+cluster = "mainnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
