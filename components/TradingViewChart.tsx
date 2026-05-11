@@ -84,9 +84,8 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
   { key: 'bonding',     icon: TrendingUp,       label: 'Bonding' },
 ];
 
-// TIME_H is device-independent; CHART_H / VOL_H / PAD are computed inside the
-// component from isMobile so all chart types scale consistently on mobile.
 const TIME_H = 18;
+const BG_TILE_W = 56; // width of one repeating background tile (px)
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function fmtPrice(p: number): string {
@@ -129,8 +128,8 @@ export function TradingViewChart({
 
   // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
-  const CHART_H  = isMobile ? 460 : 220;
-  const VOL_H    = isMobile ? 90  : 40;
+  const CHART_H  = isMobile ? 300 : 220;
+  const VOL_H    = isMobile ? 70  : 40;
   const PAD      = { top: 16, right: isMobile ? 72 : 58, bottom: 4, left: 4 };
 
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
@@ -158,6 +157,14 @@ export function TradingViewChart({
   // Animated values
   const dotPulse = useRef(new Animated.Value(1)).current;
   const priceLineFlash = useRef(new Animated.Value(0)).current;
+  const bgAnim = useRef(new Animated.Value(0)).current;
+
+  // Historical scroll state
+  const [panOffsetCandles, setPanOffsetCandles] = useState(0);
+  const panOffsetRef       = useRef(0);
+  const plotWRef           = useRef(0);
+  const panStartOffsetRef  = useRef(0);
+  const isPanScrollRef     = useRef(false);
 
   const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef         = useRef<WebSocket | null>(null);
@@ -204,6 +211,20 @@ export function TradingViewChart({
     })();
     return () => { cancelled = true; };
   }, [tokenMint, pairAddress]);
+
+  // Moving background grid animation
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(bgAnim, {
+        toValue: -BG_TILE_W,
+        duration: 4000,
+        useNativeDriver: true,
+        isInteraction: false,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
 
   // Pulse live dot
   useEffect(() => {
@@ -326,6 +347,8 @@ export function TradingViewChart({
   useEffect(() => {
     setLivePrice(null);
     setCrosshair(null);
+    setPanOffsetCandles(0);
+    panOffsetRef.current = 0;
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
@@ -380,14 +403,18 @@ export function TradingViewChart({
   }, [tokenMint, applyLivePrice]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
-  // Limit visible candles on mobile so each candle/bar is wide enough to read
-  const maxVisible     = isMobile ? 40 : Infinity;
-  const displayCandles = candles.length > maxVisible
-    ? candles.slice(-maxVisible) : candles;
+  const maxVisible = isMobile ? 40 : 80;
+  const totalCount = candles.length;
+  // panOffsetCandles=0 → show last maxVisible; increasing offset scrolls back in time
+  const clampedOffset   = Math.max(0, Math.min(panOffsetCandles, Math.max(0, totalCount - maxVisible)));
+  const endIdx          = Math.max(0, totalCount - clampedOffset);
+  const startIdx        = Math.max(0, endIdx - maxVisible);
+  const displayCandles  = candles.slice(startIdx, endIdx || totalCount);
   // Sync ref so the crosshair handler always sees the current visible set
   displayCandlesRef.current = displayCandles;
 
   const plotW = chartWidth - PAD.left - PAD.right;
+  plotWRef.current = plotW;
   const plotH = CHART_H - PAD.top - PAD.bottom;
   const n     = displayCandles.length;
 
@@ -411,42 +438,74 @@ export function TradingViewChart({
 
   const totalH = CHART_H + VOL_H + TIME_H;
 
-  // ── crosshair pan responder ───────────────────────────────────────────────
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => handleTouchMove(e),
-      onPanResponderMove: (e) => handleTouchMove(e),
-      onPanResponderRelease: () => {
-        // Keep crosshair until next touch
-      },
-    })
-  ).current;
-
-  const handleTouchMove = (e: GestureResponderEvent) => {
-    svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
-      svgOffsetRef.current = { x: px, y: py };
-    });
-    const touchX = e.nativeEvent.pageX - svgOffsetRef.current.x;
-    const touchY = e.nativeEvent.pageY - svgOffsetRef.current.y;
-    updateCrosshairAt(touchX, touchY);
-  };
-
+  // ── crosshair + historical-scroll pan responder ─────────────────────────
   const updateCrosshairAt = (localX: number, _localY: number) => {
     const cands = displayCandlesRef.current;
     if (!cands.length) return;
     const nn = cands.length;
-    const step = plotW / nn;
+    const pw = plotWRef.current;
+    const step = pw / nn;
     const rawIdx = Math.round((localX - PAD.left) / step - 0.5);
     const idx = Math.max(0, Math.min(nn - 1, rawIdx));
     const c = cands[idx];
-    const cx = xOf(idx);
-    const cy = yOf(c.close);
+    const cx = PAD.left + (idx + 0.5) * step;
+    const cy = PAD.top + (CHART_H - PAD.top - PAD.bottom) - ((c.close - Math.min(...cands.map(x => x.low))) / (((Math.max(...cands.map(x => x.high)) - Math.min(...cands.map(x => x.low))) || 1))) * (CHART_H - PAD.top - PAD.bottom);
     const firstClose = cands[0].close;
     const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
     setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
   };
+
+  const applyTouchToCrosshair = (pageX: number, pageY: number) => {
+    svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
+      svgOffsetRef.current = { x: px, y: py };
+      updateCrosshairAt(pageX - px, pageY - py);
+    });
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  () => true,
+      onPanResponderGrant: (e) => {
+        panStartOffsetRef.current = panOffsetRef.current;
+        isPanScrollRef.current = false;
+        // Show crosshair immediately on touch
+        applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+      },
+      onPanResponderMove: (e, gestureState) => {
+        const adx = Math.abs(gestureState.dx);
+        const ady = Math.abs(gestureState.dy);
+
+        if (!isPanScrollRef.current && adx > 10 && adx > ady * 1.5) {
+          isPanScrollRef.current = true;
+          setCrosshair(null);
+        }
+
+        if (isPanScrollRef.current) {
+          const pw = plotWRef.current;
+          const n  = displayCandlesRef.current.length || 1;
+          const candlePx = pw / n;
+          // dragging left = going forward in time (decrease offset)
+          // dragging right = going back in time (increase offset)
+          const deltaCandles = Math.round(-gestureState.dx / candlePx);
+          const newOffset = Math.max(
+            0,
+            Math.min(
+              Math.max(0, candlesRef.current.length - 1),
+              panStartOffsetRef.current + deltaCandles
+            )
+          );
+          panOffsetRef.current = newOffset;
+          setPanOffsetCandles(newOffset);
+        } else {
+          applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+        }
+      },
+      onPanResponderRelease: () => {
+        isPanScrollRef.current = false;
+      },
+    })
+  ).current;
 
   // Web mouse event handlers for crosshair
   const webMouseHandlers = Platform.OS === 'web' ? {
@@ -702,6 +761,21 @@ export function TradingViewChart({
         </View>
       )}
 
+      {/* Return to Live button — shown when scrolled back in history */}
+      {panOffsetCandles > 0 && (
+        <TouchableOpacity
+          style={styles.returnLiveBtn}
+          onPress={() => {
+            panOffsetRef.current = 0;
+            setPanOffsetCandles(0);
+            setCrosshair(null);
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.returnLiveText}>▶ Return to Live</Text>
+        </TouchableOpacity>
+      )}
+
       <View
         ref={svgContainerRef}
         style={styles.svgWrap}
@@ -713,6 +787,35 @@ export function TradingViewChart({
           });
         }}
       >
+        {/* ── Animated moving background grid ──────────────────────────── */}
+        <View style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]} pointerEvents="none">
+          <Animated.View
+            style={{ transform: [{ translateX: bgAnim }], width: chartWidth + BG_TILE_W * 2 }}
+            pointerEvents="none"
+          >
+            <Svg width={chartWidth + BG_TILE_W * 2} height={totalH}>
+              {/* Moving vertical grid lines */}
+              {Array.from({ length: Math.ceil((chartWidth + BG_TILE_W * 2) / BG_TILE_W) + 1 }, (_, i) => (
+                <Line key={`bv${i}`}
+                  x1={i * BG_TILE_W} y1={0} x2={i * BG_TILE_W} y2={totalH}
+                  stroke="rgba(139,92,246,0.06)" strokeWidth={1} />
+              ))}
+              {/* Subtle accent lines every 3rd */}
+              {Array.from({ length: Math.ceil((chartWidth + BG_TILE_W * 2) / (BG_TILE_W * 3)) + 1 }, (_, i) => (
+                <Line key={`ba${i}`}
+                  x1={i * BG_TILE_W * 3} y1={0} x2={i * BG_TILE_W * 3} y2={totalH}
+                  stroke="rgba(139,92,246,0.12)" strokeWidth={1} />
+              ))}
+              {/* Horizontal scanlines */}
+              {Array.from({ length: Math.ceil(totalH / 14) }, (_, i) => (
+                <Line key={`bh${i}`}
+                  x1={0} y1={i * 14} x2={chartWidth + BG_TILE_W * 2} y2={i * 14}
+                  stroke="rgba(139,92,246,0.025)" strokeWidth={1} />
+              ))}
+            </Svg>
+          </Animated.View>
+        </View>
+
         <Svg width={chartWidth} height={totalH}>
           <Defs>
             <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -1084,7 +1187,7 @@ const styles = StyleSheet.create({
   crosshairClose: { padding: 4 },
   crosshairCloseText: { fontSize: 11, color: colors.textMuted },
   // Chart SVG wrapper
-  svgWrap: { paddingTop: spacing.sm, paddingBottom: 2, position: 'relative' },
+  svgWrap: { paddingTop: spacing.sm, paddingBottom: 2, position: 'relative', overflow: 'hidden' },
   // Loading / unavailable
   loadingWrap:     { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
   loadingSubText:  { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
@@ -1095,5 +1198,21 @@ const styles = StyleSheet.create({
   livePulse: {
     position: 'absolute', width: 20, height: 20, borderRadius: 10,
     pointerEvents: 'none',
+  },
+  returnLiveBtn: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.4)',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    marginVertical: 4,
+  },
+  returnLiveText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#10b981',
+    letterSpacing: 0.3,
   },
 });
