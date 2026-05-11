@@ -71,6 +71,62 @@ function shortenAddr(addr: string) {
   return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 }
 
+// ─── RPC helpers ─────────────────────────────────────────────────────────────
+
+// Fetches the latest blockhash via Connection, then retries once via direct
+// rpcCall if the first attempt fails (works around custom-fetch issues in
+// @solana/web3.js on React Native / Expo web).
+async function getLatestBlockhashWithRetry(
+  service: SolanaConnectionService
+): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+  const connection = service.getConnection();
+
+  // Attempt 1 — via Connection object
+  try {
+    return await connection.getLatestBlockhash('confirmed');
+  } catch {
+    // fall through to retry
+  }
+
+  // Attempt 2 — direct JSON-RPC call (always sends proper auth headers)
+  try {
+    const result = await service.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    if (result?.value?.blockhash) {
+      return {
+        blockhash:            result.value.blockhash,
+        lastValidBlockHeight: result.value.lastValidBlockHeight ?? 0,
+      };
+    }
+  } catch {
+    // fall through to error
+  }
+
+  throw new Error('RPC connection failed. Please retry.');
+}
+
+// Sends a signed transaction via Connection, retrying via direct rpcCall on failure.
+async function sendRawTransactionWithRetry(
+  service: SolanaConnectionService,
+  rawTx: Uint8Array
+): Promise<string> {
+  const connection = service.getConnection();
+
+  try {
+    return await connection.sendRawTransaction(rawTx, { skipPreflight: false });
+  } catch {
+    // fall through to retry
+  }
+
+  // Retry via direct JSON-RPC call with base64 encoding
+  const encoded = Buffer.from(rawTx).toString('base64');
+  const sig = await service.rpcCall('sendTransaction', [
+    encoded,
+    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
+  ]);
+  if (typeof sig === 'string') return sig;
+  throw new Error('Transaction send failed. Please retry.');
+}
+
 const PURPLE = '#8B5CF6';
 const PURPLE_DIM = 'rgba(139,92,246,0.18)';
 const GLASS = 'rgba(255,255,255,0.05)';
@@ -182,14 +238,14 @@ export default function SendScreen() {
 
     setStep('preparing');
     try {
-      const connection = SolanaConnectionService.getInstance().getConnection();
+      const solanaService = SolanaConnectionService.getInstance();
+      const connection = solanaService.getConnection();
       const fromPubkey = new PublicKey(activeAddress);
       const toPubkey = new PublicKey(recipient.trim());
       let transaction: Transaction;
 
-      setStep('preparing');
-
       if (selectedAsset.isNative) {
+        // Native SOL transfer — direct SystemProgram.transfer, never via Jupiter/swap
         const lamports = Math.floor(amountNum * LAMPORTS_PER_SOL);
         transaction = new Transaction().add(
           SystemProgram.transfer({ fromPubkey, toPubkey, lamports })
@@ -239,7 +295,10 @@ export default function SendScreen() {
         }));
       }
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      // Use retry helper — falls back to direct rpcCall if Connection fetch fails
+      const { blockhash, lastValidBlockHeight } =
+        await getLatestBlockhashWithRetry(solanaService);
+
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = fromPubkey;
 
@@ -252,7 +311,7 @@ export default function SendScreen() {
         const signed = await provider.signTransaction(transaction);
         setStep('sending');
         const rawTx = (signed as Transaction).serialize();
-        signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
+        signature = await sendRawTransactionWithRetry(solanaService, rawTx);
         await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
       } else if (selectedAccount) {
         const walletManager = SecureWalletManager.getInstance();
@@ -261,7 +320,7 @@ export default function SendScreen() {
         transaction.sign(keypair);
         setStep('sending');
         const rawTx = transaction.serialize();
-        signature = await connection.sendRawTransaction(rawTx, { skipPreflight: false });
+        signature = await sendRawTransactionWithRetry(solanaService, rawTx);
         await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
       } else {
         throw new Error('No wallet available');
@@ -274,8 +333,19 @@ export default function SendScreen() {
       if (refreshWallet) await refreshWallet();
     } catch (err: any) {
       let msg = err?.message || 'Transaction failed';
-      if (msg.includes('rejected') || msg.includes('User rejected')) msg = 'Transaction rejected in wallet';
-      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance';
+      if (msg.includes('rejected') || msg.includes('User rejected')) {
+        msg = 'Transaction rejected in wallet';
+      } else if (msg.includes('insufficient') || msg.includes('balance')) {
+        msg = 'Insufficient balance';
+      } else if (
+        msg.includes('Load failed') ||
+        msg.includes('network') ||
+        msg.includes('RPC') ||
+        msg.includes('fetch') ||
+        msg.includes('connect')
+      ) {
+        msg = 'RPC connection failed. Please retry.';
+      }
       setError(msg);
       setStep('error');
     }

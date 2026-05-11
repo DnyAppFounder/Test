@@ -244,6 +244,12 @@ export function TradingViewChart({
     ]).start();
   }, [priceLineFlash]);
 
+  // Periodic flash every 3s to keep the chart looking alive even with no trades
+  useEffect(() => {
+    const t = setInterval(() => { flashPriceLine(); }, 3000);
+    return () => clearInterval(t);
+  }, [flashPriceLine]);
+
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
     if (!tokenMint) { setLoading(false); return; }
     if (!silent) setLoading(true);
@@ -392,9 +398,9 @@ export function TradingViewChart({
       } catch {}
     };
 
-    // First poll after 2s, then every 10s
-    const firstPoll = setTimeout(fetchPrice, 2000);
-    pollTimerRef.current = setInterval(fetchPrice, 10_000);
+    // First poll after 1.5s, then every 5s for a livelier chart
+    const firstPoll = setTimeout(fetchPrice, 1500);
+    pollTimerRef.current = setInterval(fetchPrice, 5_000);
 
     return () => {
       clearTimeout(firstPoll);
@@ -485,9 +491,9 @@ export function TradingViewChart({
           const pw = plotWRef.current;
           const n  = displayCandlesRef.current.length || 1;
           const candlePx = pw / n;
-          // dragging left = going forward in time (decrease offset)
-          // dragging right = going back in time (increase offset)
-          const deltaCandles = Math.round(-gestureState.dx / candlePx);
+          // drag right (dx > 0) = scroll back in time = increase offset
+          // drag left  (dx < 0) = scroll forward in time = decrease offset
+          const deltaCandles = Math.round(gestureState.dx / candlePx);
           const newOffset = Math.max(
             0,
             Math.min(
@@ -1056,8 +1062,8 @@ export function TradingViewChart({
           )}
         </Svg>
 
-        {/* Animated live pulse ring overlay */}
-        {wsConnected && !crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+        {/* Animated live pulse ring overlay — always visible for live modes */}
+        {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
           <Animated.View
             style={[
               styles.livePulse,
