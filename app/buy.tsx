@@ -24,14 +24,11 @@ import {
   ArrowRight,
   Shield,
   ChevronRight,
-  CircleCheck as CheckCircle,
   Search,
   X,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
-import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
-import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { jupiterSwapService } from '@/services/jupiter/swapService';
 import { getSolPrice, SolanaPriceService } from '@/services/solana/priceService';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
@@ -57,7 +54,7 @@ const SOL_TOKEN: Token = {
   coingecko_id: null,
 };
 
-type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'signing' | 'sending' | 'success' | 'error';
+type BuyStatus = 'idle' | 'quoting' | 'quote_ready' | 'error';
 
 const priceService = new SolanaPriceService();
 const PRESETS = ['0.1', '0.5', '1', '2', '5'];
@@ -177,9 +174,7 @@ function TokenSelectorModal({ visible, onClose, onSelect, tokens, title, showBal
 export default function BuyScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshPortfolio, nativeBalance, tokens } = useWallet();
-  const { pinHash } = useSecurity();
-  const [pinGateVisible, setPinGateVisible] = useState(false);
-  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   // Input token (what the user pays with)
   const [inputToken, setInputToken] = useState<Token>(SOL_TOKEN);
@@ -190,7 +185,6 @@ export default function BuyScreen() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [status, setStatus] = useState<BuyStatus>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [txSignature, setTxSignature] = useState<string | null>(null);
   const [quote, setQuote] = useState<any>(null);
   const [quoteOutAmount, setQuoteOutAmount] = useState<string | null>(null);
 
@@ -397,17 +391,6 @@ export default function BuyScreen() {
     { label: 'Total', value: `${parsedAmount} ${inputToken.symbol} + fee`, total: true },
   ] : [];
 
-  const requestBuy = () => {
-    if (!canBuy) return;
-    setTxConfirmVisible(true);
-  };
-
-  const handleBuyConfirmed = () => {
-    setTxConfirmVisible(false);
-    const needsPin = !connectedWallet && !!pinHash;
-    if (needsPin) { setPinGateVisible(true); } else { handleBuy(); }
-  };
-
   const signWithInternalWallet = async (serializedTx: string): Promise<VersionedTransaction> => {
     if (!selectedAccount) throw new Error('No account selected');
     const walletManager = SecureWalletManager.getInstance();
@@ -419,49 +402,23 @@ export default function BuyScreen() {
     return tx;
   };
 
-  const handleBuy = async () => {
-    if (!hasWallet || !hasValidAmount || !quote || !outputToken || isProcessing) return;
+  const executeBuyTx = async (): Promise<string> => {
+    if (!hasWallet || !hasValidAmount || !quote || !outputToken) throw new Error('Missing transaction parameters');
+    if (parsedAmount > inputBalance) throw new Error(`Insufficient ${inputToken.symbol} balance`);
 
-    if (parsedAmount > inputBalance) {
-      setErrorMsg(`Insufficient ${inputToken.symbol} balance`);
-      setStatus('error');
-      return;
+    const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress!, true);
+    let signedTx: VersionedTransaction;
+    if (connectedWallet) {
+      const txBuf = Buffer.from(swapResult.swapTransaction, 'base64');
+      const tx = VersionedTransaction.deserialize(txBuf);
+      signedTx = await ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, tx);
+    } else {
+      signedTx = await signWithInternalWallet(swapResult.swapTransaction);
     }
-
-    setErrorMsg(null);
-    setTxSignature(null);
-
-    try {
-      setStatus('signing');
-      const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress!, true);
-
-      let signedTx: VersionedTransaction;
-      if (connectedWallet) {
-        const txBuf = Buffer.from(swapResult.swapTransaction, 'base64');
-        const tx = VersionedTransaction.deserialize(txBuf);
-        signedTx = await ExternalWalletAdapter.signVersionedTransaction(connectedWallet.id, tx);
-      } else {
-        signedTx = await signWithInternalWallet(swapResult.swapTransaction);
-      }
-
-      setStatus('sending');
-      const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
-      setTxSignature(signature);
-      setStatus('success');
-      if (refreshPortfolio) await refreshPortfolio();
-    } catch (err: any) {
-      let msg = err?.message || 'Transaction failed';
-      if (msg.includes('rejected') || msg.includes('User rejected')) msg = 'Transaction rejected in wallet';
-      else if (msg.includes('insufficient') || msg.includes('balance') || msg.includes('0x1')) msg = `Insufficient ${inputToken.symbol} balance`;
-      else if (msg.includes('slippage')) msg = 'Price moved too much. Try again or increase slippage.';
-      else if (msg.includes('no route') || msg.includes('No route')) msg = `No route available for ${outputToken?.symbol}`;
-      setErrorMsg(msg);
-      setStatus('error');
-    }
+    return jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
   };
 
-  const isProcessing = status === 'signing' || status === 'sending';
-  const canBuy = hasWallet && hasValidAmount && hasTokens && status === 'quote_ready' && !isProcessing;
+  const canBuy = hasWallet && hasValidAmount && hasTokens && status === 'quote_ready';
 
   const rateText = quote && quoteOutAmount && parsedAmount > 0
     ? `1 ${inputToken.symbol} ≈ ${(parseFloat(quoteOutAmount) / parsedAmount).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${outputToken?.symbol}`
@@ -474,30 +431,6 @@ export default function BuyScreen() {
     : '';
 
   const outputName = outputToken?.symbol ?? 'Token';
-
-  // ─── Success screen ───
-  if (status === 'success') {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.doneContainer}>
-          <View style={styles.doneIcon}>
-            <CheckCircle size={48} color={colors.success} />
-          </View>
-          <Text style={styles.doneTitle}>Buy Successful!</Text>
-          <Text style={styles.doneSubtitle}>
-            Received {quoteOutAmount ? parseFloat(quoteOutAmount).toLocaleString('en-US', { maximumFractionDigits: 4 }) : '?'} {outputName}{'\n'}
-            Paid {inputAmount} {inputToken.symbol}
-          </Text>
-          {txSignature && (
-            <Text style={styles.txHash} numberOfLines={1} ellipsizeMode="middle">{txSignature}</Text>
-          )}
-          <TouchableOpacity style={styles.doneBtn} onPress={() => router.back()}>
-            <Text style={styles.doneBtnText}>Return to Wallet</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -692,18 +625,11 @@ export default function BuyScreen() {
           {/* Confirm button */}
           <TouchableOpacity
             style={[styles.confirmBtn, !canBuy && styles.confirmBtnDisabled]}
-            onPress={requestBuy}
+            onPress={() => setConfirmVisible(true)}
             disabled={!canBuy}
             activeOpacity={0.9}
           >
-            {isProcessing ? (
-              <>
-                <ActivityIndicator color={colors.white} size="small" />
-                <Text style={[styles.confirmBtnText, { marginLeft: 8 }]}>
-                  {status === 'signing' ? 'WAITING FOR SIGNATURE...' : 'SENDING...'}
-                </Text>
-              </>
-            ) : status === 'quoting' ? (
+            {status === 'quoting' ? (
               <>
                 <ActivityIndicator color={colors.white} size="small" />
                 <Text style={[styles.confirmBtnText, { marginLeft: 8 }]}>GETTING QUOTE...</Text>
@@ -751,19 +677,16 @@ export default function BuyScreen() {
         showBalance={false}
       />
 
-      <TxConfirmModal
-        visible={txConfirmVisible}
+      <ConfirmTransactionModal
+        visible={confirmVisible}
         title="Confirm Buy"
         details={buyConfirmDetails}
-        onConfirm={handleBuyConfirmed}
-        onCancel={() => setTxConfirmVisible(false)}
-      />
-      <PinUnlockModal
-        visible={pinGateVisible}
-        title="Authorize Buy"
-        subtitle="Enter your PIN to sign this transaction"
-        onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
-        onCancel={() => setPinGateVisible(false)}
+        executeTransaction={executeBuyTx}
+        onSuccess={async () => { if (refreshPortfolio) await refreshPortfolio(); }}
+        onDismiss={() => setConfirmVisible(false)}
+        isExternalWallet={!!connectedWallet}
+        insufficientBalance={hasValidAmount && parsedAmount > inputBalance}
+        insufficientBalanceMsg={`Insufficient ${inputToken.symbol}. Need ${parsedAmount.toFixed(4)}, have ${inputBalance.toFixed(4)}.`}
       />
     </SafeAreaView>
   );

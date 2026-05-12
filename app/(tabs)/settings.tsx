@@ -26,7 +26,7 @@ import { Language, languageNames } from '@/constants/i18n';
 import { SocialService, UserProfile, NotificationSettings } from '@/services/socialService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
 import { getSolPrice } from '@/services/solana/priceService';
@@ -77,7 +77,7 @@ export default function SettingsScreen() {
   const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
   const [premiumDone, setPremiumDone] = useState(false);
   const [solUsdPrice, setSolUsdPrice] = useState(0);
-  const [premiumPinGateVisible, setPremiumPinGateVisible] = useState(false);
+  const [premiumConfirmVisible, setPremiumConfirmVisible] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,21 +129,16 @@ export default function SettingsScreen() {
   };
 
   const requestPremium = () => {
-    const isInternal = activeWallet?.type !== 'connected';
-    if (isInternal && pinHash) { setPremiumPinGateVisible(true); } else { executePremium(); }
+    setPremiumConfirmVisible(true);
   };
 
-  const executePremium = async () => {
-    if (!profile || !activeAddress) return;
-    const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
-    // Fetch live SOL price at moment of payment — never use 0
+  const executePremiumTx = async (): Promise<string> => {
+    if (!profile || !activeAddress) throw new Error('No wallet connected.');
+    const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey);
+    if (!tier) throw new Error('Invalid premium tier.');
     const liveSolPrice = await getSolPrice();
-    if (premiumPayWith === 'SOL' && liveSolPrice <= 0) {
-      Alert.alert('Price Unavailable', 'Could not fetch SOL price. Please try again in a moment.');
-      return;
-    }
+    if (premiumPayWith === 'SOL' && liveSolPrice <= 0) throw new Error('Could not fetch SOL price. Please try again.');
     const solAmt = liveSolPrice > 0 ? tier.usd / liveSolPrice : null;
-    setPremiumPayStatus('preparing');
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
@@ -155,20 +150,15 @@ export default function SettingsScreen() {
       onStatus: setPremiumPayStatus,
     });
 
-    if (!result.success) {
-      setPremiumPayStatus('idle');
-      Alert.alert('Payment Failed', result.error || 'Could not complete payment.');
-      return;
-    }
+    if (!result.success) throw new Error(result.error || 'Payment failed. Check your balance and try again.');
 
     setPremiumTxSig(result.signature ?? null);
-
     try {
       await VerificationService.activatePremium(profile.id, premiumTierKey, result.signature ?? undefined);
       await refreshProfile();
     } catch {}
-    refreshPortfolio().catch(() => {});
-    setPremiumDone(true);
+
+    return result.signature ?? '';
   };
 
   const rawWalletAddress = activeAddress || selectedAccount?.address || '';
@@ -497,6 +487,13 @@ export default function SettingsScreen() {
     { q: 'What chains are supported?', a: 'Currently Solana, Ethereum, Polygon, and Base. More chains are coming soon.' },
     { q: 'How does the Community work?', a: 'Post updates, share images, like and comment. You can promote posts for visibility with various duration tiers.' },
   ];
+
+  const selectedPremiumTier = PREMIUM_TIERS.find(t => t.key === premiumTierKey);
+  const premiumConfirmDetails: TxDetail[] = selectedPremiumTier ? [
+    { label: 'Plan', value: selectedPremiumTier.label },
+    { label: 'Payment Method', value: premiumPayWith },
+    { label: 'Amount', value: `$${selectedPremiumTier.usd} USD`, accent: true, total: true },
+  ] : [];
 
   return (
     <View style={styles.container}>
@@ -1257,12 +1254,20 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
-      <PinUnlockModal
-        visible={premiumPinGateVisible}
-        title="Authorize Payment"
-        subtitle="Enter your PIN to confirm Premium Certification"
-        onSuccess={() => { setPremiumPinGateVisible(false); executePremium(); }}
-        onCancel={() => setPremiumPinGateVisible(false)}
+      <ConfirmTransactionModal
+        visible={premiumConfirmVisible}
+        title="Confirm Premium"
+        details={premiumConfirmDetails}
+        executeTransaction={executePremiumTx}
+        onSuccess={async () => {
+          setPremiumDone(true);
+          refreshPortfolio().catch(() => {});
+        }}
+        onDismiss={() => {
+          setPremiumConfirmVisible(false);
+          if (!premiumDone) setActiveModal(null);
+        }}
+        isExternalWallet={activeWallet?.type === 'connected'}
       />
     </View>
   );

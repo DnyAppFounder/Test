@@ -20,8 +20,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
-import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { getSolPrice } from '@/services/solana/priceService';
 import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
@@ -37,7 +36,6 @@ export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
   const { profile, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
-  const { pinHash } = useSecurity();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,7 +52,7 @@ export default function CommunityScreen() {
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>('1h');
   const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DTEST'>('SOL');
   const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
-  const [promotePinGateVisible, setPromotePinGateVisible] = useState(false);
+  const [promoteConfirmVisible, setPromoteConfirmVisible] = useState(false);
   const DTEST_MINT = DTEST_MINT_ADDR;
 
   const [showCommentsModal, setShowCommentsModal] = useState(false);
@@ -405,25 +403,18 @@ export default function CommunityScreen() {
   };
 
   const requestPromotion = () => {
-    const isInternal = activeWallet?.type !== 'connected';
-    if (isInternal && pinHash) { setPromotePinGateVisible(true); } else { executePromotion(); }
+    setPromoteConfirmVisible(true);
   };
 
-  const executePromotion = async () => {
-    if (!selectedTierKey || !selectedPostId || !profile || !activeAddress) return;
+  const executePromotionTx = async (): Promise<string> => {
+    if (!selectedTierKey || !selectedPostId || !profile || !activeAddress) throw new Error('Missing promotion parameters');
     const tier = PROMOTE_TIERS.find(t => t.key === selectedTierKey);
-    if (!tier) return;
+    if (!tier) throw new Error('Invalid promotion tier');
 
     const usdPrice = (tier as any).usdPrice as number;
-    // Fetch live SOL price at moment of payment
     const liveSolPrice = await getSolPrice();
-    if (promotePayWith === 'SOL' && liveSolPrice <= 0) {
-      Alert.alert('Price Unavailable', 'Could not fetch SOL price. Please try again in a moment.');
-      return;
-    }
+    if (promotePayWith === 'SOL' && liveSolPrice <= 0) throw new Error('Could not fetch SOL price. Please try again.');
     const solAmount = liveSolPrice > 0 ? usdPrice / liveSolPrice : null;
-    setPromoteStep('processing');
-    setPromotePayStatus('preparing');
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
@@ -435,21 +426,14 @@ export default function CommunityScreen() {
       onStatus: setPromotePayStatus,
     });
 
-    if (!result.success) {
-      setPromoteStep('select');
-      setPromotePayStatus('idle');
-      Alert.alert('Payment Failed', result.error || 'Could not complete payment. Make sure your wallet is unlocked and has sufficient balance.');
-      return;
-    }
+    if (!result.success) throw new Error(result.error || 'Payment failed. Check your balance and try again.');
 
-    try {
-      await SocialService.promotePost(selectedPostId, tier.key);
-      setPosts(prev => prev.map(p =>
-        p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
-      ));
-    } catch {}
-    refreshPortfolio().catch(() => {});
-    setPromoteStep('done');
+    await SocialService.promotePost(selectedPostId, tier.key);
+    setPosts(prev => prev.map(p =>
+      p.id === selectedPostId ? { ...p, is_promoted: true, promoted_tier: tier.key } : p
+    ));
+
+    return result.signature ?? '';
   };
 
   const closePromoteModal = () => {
@@ -933,6 +917,12 @@ export default function CommunityScreen() {
       case 'notifications': return renderNotificationsTab();
     }
   };
+
+  const promoteConfirmDetails: TxDetail[] = selectedTier ? [
+    { label: 'Boost Duration', value: selectedTier.label },
+    { label: 'Payment Method', value: promotePayWith },
+    { label: 'Amount', value: `$${(selectedTier as any).usdPrice} USD`, accent: true, total: true },
+  ] : [];
 
   return (
     <View style={styles.container}>
@@ -1598,12 +1588,20 @@ export default function CommunityScreen() {
         </View>
       </Modal>
 
-      <PinUnlockModal
-        visible={promotePinGateVisible}
-        title="Authorize Promotion"
-        subtitle="Enter your PIN to confirm payment"
-        onSuccess={() => { setPromotePinGateVisible(false); executePromotion(); }}
-        onCancel={() => setPromotePinGateVisible(false)}
+      <ConfirmTransactionModal
+        visible={promoteConfirmVisible}
+        title="Confirm Promotion"
+        details={promoteConfirmDetails}
+        executeTransaction={executePromotionTx}
+        onSuccess={async () => {
+          setPromoteStep('done');
+          refreshPortfolio().catch(() => {});
+        }}
+        onDismiss={() => {
+          setPromoteConfirmVisible(false);
+          if (promoteStep !== 'done') setShowPromoteModal(false);
+        }}
+        isExternalWallet={activeWallet?.type === 'connected'}
       />
 
       {/* Followers / Following List Modal */}
