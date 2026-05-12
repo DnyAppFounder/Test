@@ -63,6 +63,11 @@ export interface Post {
   token_price_2: number | null;
   token_change_24h_2: number | null;
   token_logo_uri_2: string | null;
+  // GIF attachment
+  gif_url: string | null;
+  // Poll
+  poll_options: string[] | null;
+  poll_expires_at: string | null;
   // Post settings
   visibility: 'public' | 'followers';
   who_can_reply: 'everyone' | 'followers' | 'mentioned';
@@ -436,6 +441,9 @@ export class SocialService {
       language?: string;
       quotePostId?: string;
       promoteTier?: string;
+      gifUrl?: string;
+      pollOptions?: string[];
+      pollExpiresAt?: string;
     }
   ): Promise<Post | null> {
     let mediaUrl: string | null = options?.mediaUrl || null;
@@ -494,6 +502,11 @@ export class SocialService {
         is_promoted: isPromoted,
         promoted_until: promotedUntil,
         promoted_tier: promoteTier ?? null,
+        gif_url: options?.gifUrl ?? null,
+        poll_options: options?.pollOptions && options.pollOptions.length >= 2 ? options.pollOptions : null,
+        poll_expires_at: options?.pollOptions && options.pollOptions.length >= 2
+          ? (options.pollExpiresAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())
+          : null,
       })
       .select()
       .maybeSingle();
@@ -1205,5 +1218,37 @@ export class SocialService {
 
     if (!data || data.length === 0) return [];
     return this.enrichPostsWithUserState(data, currentUserId);
+  }
+
+  // ── Poll voting ──────────────────────────────────────────────────────────────
+
+  static async votePoll(postId: string, voterWallet: string, optionIndex: number): Promise<void> {
+    const { error } = await supabase
+      .from('poll_votes')
+      .insert({ post_id: postId, voter_wallet: voterWallet, option_index: optionIndex });
+    if (error && error.code !== '23505') throw error; // 23505 = unique violation (already voted)
+  }
+
+  static async getPollVotes(postId: string): Promise<{ option_index: number; count: number }[]> {
+    const { data } = await supabase
+      .from('poll_votes')
+      .select('option_index')
+      .eq('post_id', postId);
+    if (!data || data.length === 0) return [];
+    const counts: Record<number, number> = {};
+    for (const row of data) {
+      counts[row.option_index] = (counts[row.option_index] ?? 0) + 1;
+    }
+    return Object.entries(counts).map(([k, v]) => ({ option_index: Number(k), count: v }));
+  }
+
+  static async getMyPollVote(postId: string, voterWallet: string): Promise<number | null> {
+    const { data } = await supabase
+      .from('poll_votes')
+      .select('option_index')
+      .eq('post_id', postId)
+      .eq('voter_wallet', voterWallet)
+      .maybeSingle();
+    return data?.option_index ?? null;
   }
 }
