@@ -11,7 +11,7 @@ import type { GameResultData } from './GameResultCard';
 // ─── Virtual arena dimensions ─────────────────────────────────────────────────
 const VW = 320;
 const VH = 450;
-const MAX_ARENA_W = 480;
+const MAX_ARENA_W = 600;
 const PR = 14;   // player radius
 const OR = 9;    // orb radius
 const TR = 11;   // trap radius
@@ -394,16 +394,16 @@ export function DawenRushArena({ seed, mode, entryId, matchId, entryAmountSol, o
   // ── Arena ─────────────────────────────────────────────────────────────────
   return (
     <View
-      style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+      style={{ flex: 1, alignItems: 'center' }}
       onLayout={e => {
         setContainerW(e.nativeEvent.layout.width);
         setContainerH(e.nativeEvent.layout.height);
       }}
     >
     <View
-      style={[styles.arenaWrap, { height: arenaH, width: arenaW }]}>
+      style={[styles.arenaWrap, { height: containerH, width: arenaW }]}>
       {/* Game surface */}
-      <View style={[styles.arena, { height: arenaH }]}>
+      <View style={[styles.arena, { height: containerH }]}>
         {/* Background */}
         <LinearGradient
           colors={['#0A0A14', '#0D0D1A']}
@@ -414,7 +414,7 @@ export function DawenRushArena({ seed, mode, entryId, matchId, entryAmountSol, o
           <View key={`vg${i}`} style={[styles.gridV, { left: ((i + 1) / 7) * arenaW }]} />
         ))}
         {Array.from({ length: 7 }, (_, i) => (
-          <View key={`hg${i}`} style={[styles.gridH, { top: ((i + 1) / 8) * arenaH }]} />
+          <View key={`hg${i}`} style={[styles.gridH, { top: ((i + 1) / 8) * containerH }]} />
         ))}
 
         {/* Obstacles */}

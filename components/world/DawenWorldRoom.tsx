@@ -2,22 +2,144 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, useWindowDimensions,
+  Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Users, ShoppingBag, Package, Map, CreditCard as Edit3, Trash2, RotateCw, Save, X, Crown } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  WorldRoom, WorldPresence, WorldMessage, WorldRoomItem, WorldCatalogItem, WorldInventoryItem,
-  AvatarConfig, GRID_W, GRID_H,
+  ArrowLeft, Users, ShoppingBag, Package, Map,
+  CreditCard as Edit3, Trash2, RotateCw, X, Crown,
+} from 'lucide-react-native';
+import {
+  WorldRoom, WorldPresence, WorldMessage, WorldRoomItem, WorldInventoryItem,
+  AvatarConfig, GRID_W, GRID_H, PLAZA_ROOM_ID,
   upsertPresence, leaveRoom, getRoomPresence, sendMessage, getMessages,
   getRoomItems, placeRoomItem, removeRoomItem, moveRoomItem,
   subscribeToRoomMessages, subscribeToRoomPresence, subscribeToRoomItems,
 } from '@/services/worldService';
-import { AvatarPreview } from './DawenWorldAvatarEditor';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
-const RARITY_COLORS: Record<string, string> = {
-  common: '#6B7280', uncommon: '#10B981', rare: '#3B82F6', epic: '#8B5CF6', legendary: '#F59E0B',
-};
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PRESENCE_INTERVAL = 8000;
+const WALL_H = 68;
+const BUBBLE_DURATION = 3200;
+const HAIR_EMOJIS = ['', '✨', '💫', '🎩', '👒', '⭐'];
+
+// ─── WorldAvatarChar ──────────────────────────────────────────────────────────
+
+interface AvatarCharProps {
+  config: AvatarConfig;
+  username: string;
+  isPremium: boolean;
+  size?: number;
+}
+
+function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharProps) {
+  const headSize = Math.round(size * 0.42);
+  const bodyW = Math.round(size * 0.38);
+  const bodyH = Math.round(size * 0.28);
+  const legW = Math.round(size * 0.15);
+  const legH = Math.round(size * 0.2);
+  const eyeSize = Math.max(2, Math.round(headSize * 0.2));
+  const hair = HAIR_EMOJIS[config.hairStyle ?? 0] ?? '';
+
+  return (
+    <View style={ch.root}>
+      {/* Aura glow */}
+      {config.auraColor ? (
+        <View style={[ch.aura, {
+          width: bodyW + 12,
+          height: headSize + bodyH + legH + 12,
+          borderRadius: (bodyW + 12) / 2,
+          borderColor: config.auraColor,
+          shadowColor: config.auraColor,
+        }]} />
+      ) : null}
+
+      {/* Hair */}
+      {hair ? (
+        <Text style={[ch.hair, { fontSize: Math.round(headSize * 0.6) }]}>{hair}</Text>
+      ) : (
+        <View style={{ height: 4 }} />
+      )}
+
+      {/* Crown for premium */}
+      {isPremium ? (
+        <View style={ch.crownWrap}>
+          <Crown size={Math.round(headSize * 0.55)} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />
+        </View>
+      ) : null}
+
+      {/* Head */}
+      <View style={[ch.head, {
+        width: headSize, height: headSize,
+        borderRadius: headSize / 2,
+        backgroundColor: config.bodyColor,
+      }]}>
+        <View style={ch.eyes}>
+          <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
+          <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
+        </View>
+        {/* Smile */}
+        <View style={ch.smile} />
+      </View>
+
+      {/* Body */}
+      <View style={[ch.body, {
+        width: bodyW, height: bodyH,
+        backgroundColor: config.outfitColor,
+        marginTop: -2,
+      }]} />
+
+      {/* Legs */}
+      <View style={[ch.legs, { marginTop: 1 }]}>
+        <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />
+        <View style={{ width: Math.max(2, legW * 0.3) }} />
+        <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />
+      </View>
+
+      {/* Name tag */}
+      <View style={ch.nameTag}>
+        <Text style={ch.nameText} numberOfLines={1}>{username || '???'}</Text>
+      </View>
+    </View>
+  );
+}
+
+const ch = StyleSheet.create({
+  root: { alignItems: 'center' },
+  aura: {
+    position: 'absolute', top: 0, borderWidth: 1.5, opacity: 0.75,
+    shadowRadius: 8, shadowOpacity: 0.7, elevation: 4,
+  },
+  hair: { lineHeight: 16, marginBottom: -2, zIndex: 2 },
+  crownWrap: { position: 'absolute', top: 0, right: -3, zIndex: 10 },
+  head: {
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
+  },
+  eyes: { flexDirection: 'row', gap: 3, marginTop: 3 },
+  eye: { backgroundColor: 'rgba(255,255,255,0.9)' },
+  smile: {
+    width: 8, height: 4, borderBottomLeftRadius: 4, borderBottomRightRadius: 4,
+    borderBottomWidth: 1.5, borderLeftWidth: 1, borderRightWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)', marginTop: 2,
+  },
+  body: {
+    borderTopLeftRadius: 3, borderTopRightRadius: 3,
+    borderBottomLeftRadius: 2, borderBottomRightRadius: 2,
+  },
+  legs: { flexDirection: 'row' },
+  leg: { borderRadius: 2 },
+  nameTag: {
+    backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 4, paddingVertical: 1,
+    borderRadius: 4, maxWidth: 60, marginTop: 3,
+  },
+  nameText: { fontSize: 9, color: '#fff', fontWeight: '700', textAlign: 'center' },
+});
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   room: WorldRoom;
@@ -32,17 +154,21 @@ interface Props {
   onOpenDirectory: () => void;
 }
 
-const PRESENCE_INTERVAL = 8000;
-const TILE_COLORS = ['#0A0A14', '#0D0D1A'];
+// ─── DawenWorldRoom ───────────────────────────────────────────────────────────
 
 export function DawenWorldRoom({
   room, walletAddress, username, avatarConfig, isPremium,
   inventory, onBack, onOpenShop, onOpenInventory, onOpenDirectory,
 }: Props) {
   const { width: screenW } = useWindowDimensions();
-  const tileSize = Math.floor(Math.min(screenW - 32, 360) / GRID_W);
+  const insets = useSafeAreaInsets();
+  const tileSize = Math.floor(Math.min(screenW - 16, 400) / GRID_W);
+  const charSize = Math.round(tileSize * 0.94);
 
-  // State
+  const isPlaza = room.id === PLAZA_ROOM_ID;
+  const isOwner = room.type !== 'official' && room.owner_wallet === walletAddress;
+
+  // ── State ──────────────────────────────────────────────────────────────────
   const [presence, setPresence] = useState<WorldPresence[]>([]);
   const [messages, setMessages] = useState<WorldMessage[]>([]);
   const [roomItems, setRoomItems] = useState<WorldRoomItem[]>([]);
@@ -53,12 +179,33 @@ export function DawenWorldRoom({
   const [decMode, setDecMode] = useState(false);
   const [selectedInvItem, setSelectedInvItem] = useState<WorldInventoryItem | null>(null);
   const [selectedRoomItem, setSelectedRoomItem] = useState<WorldRoomItem | null>(null);
+  const [chatBubble, setChatBubble] = useState<string | null>(null);
 
+  // ── Smooth movement via Animated ──────────────────────────────────────────
+  const animX = useRef(new Animated.Value(5 * tileSize)).current;
+  const animY = useRef(new Animated.Value(4 * tileSize)).current;
+  const [avatarLeft, setAvatarLeft] = useState(5 * tileSize);
+  const [avatarTop, setAvatarTop] = useState(4 * tileSize);
+
+  useEffect(() => {
+    const xId = animX.addListener(({ value }) => setAvatarLeft(value));
+    const yId = animY.addListener(({ value }) => setAvatarTop(value));
+    return () => { animX.removeListener(xId); animY.removeListener(yId); };
+  }, []);
+
+  const animateToTile = useCallback((col: number, row: number) => {
+    Animated.parallel([
+      Animated.spring(animX, { toValue: col * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+      Animated.spring(animY, { toValue: row * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+    ]).start();
+  }, [tileSize]);
+
+  // ── Refs ───────────────────────────────────────────────────────────────────
   const chatRef = useRef<ScrollView>(null);
   const presenceRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isOwner = room.type !== 'official' && room.owner_wallet === walletAddress;
+  const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Load initial data ───────────────────────────────────────────────────────
+  // ── Load initial data ─────────────────────────────────────────────────────
   const loadPresence = useCallback(async () => {
     const p = await getRoomPresence(room.id);
     setPresence(p);
@@ -79,15 +226,12 @@ export function DawenWorldRoom({
     loadMessages();
     loadRoomItems();
 
-    // Upsert presence immediately
     upsertPresence({ walletAddress, roomId: room.id, x: myX, y: myY, username, avatarConfig, isPremium });
 
-    // Heartbeat
     presenceRef.current = setInterval(() => {
       upsertPresence({ walletAddress, roomId: room.id, x: myX, y: myY, username, avatarConfig, isPremium });
     }, PRESENCE_INTERVAL);
 
-    // Realtime subscriptions
     const msgCh = subscribeToRoomMessages(room.id, (msg) => {
       setMessages(prev => [...prev.slice(-60), msg]);
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
@@ -97,48 +241,38 @@ export function DawenWorldRoom({
 
     return () => {
       if (presenceRef.current) clearInterval(presenceRef.current);
+      if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
       leaveRoom(walletAddress, room.id);
       supabaseCleanup(msgCh, presCh, itemsCh);
     };
-  }, [room.id]);
+  }, [room.id]); // eslint-disable-line
 
-  // Update heartbeat position when user moves
   useEffect(() => {
     upsertPresence({ walletAddress, roomId: room.id, x: myX, y: myY, username, avatarConfig, isPremium });
-  }, [myX, myY]);
+  }, [myX, myY]); // eslint-disable-line
 
-  // ── Tile tap: move or place furniture ────────────────────────────────────────
+  // ── Tile tap ──────────────────────────────────────────────────────────────
   const handleTileTap = async (col: number, row: number) => {
     if (decMode && isOwner) {
       if (selectedInvItem) {
-        // Place item
         const placed = await placeRoomItem({
-          roomId: room.id,
-          walletAddress,
+          roomId: room.id, walletAddress,
           inventoryItemId: selectedInvItem.id,
           itemId: selectedInvItem.item_id,
-          x: col,
-          y: row,
-          rotation: 0,
+          x: col, y: row, rotation: 0,
         });
-        if (placed) {
-          setRoomItems(prev => [...prev, placed]);
-          setSelectedInvItem(null);
-        }
+        if (placed) { setRoomItems(prev => [...prev, placed]); setSelectedInvItem(null); }
         return;
       }
-      // Select/deselect room item at this tile
       const hit = roomItems.find(ri => ri.x === col && ri.y === row && ri.owner_wallet === walletAddress);
-      if (hit) {
-        setSelectedRoomItem(prev => prev?.id === hit.id ? null : hit);
-        return;
-      }
+      if (hit) { setSelectedRoomItem(prev => prev?.id === hit.id ? null : hit); return; }
       setSelectedRoomItem(null);
       return;
     }
-    // Move avatar
+    // Move avatar with animation
     setMyX(col);
     setMyY(row);
+    animateToTile(col, row);
   };
 
   const handleRemoveRoomItem = async () => {
@@ -162,25 +296,30 @@ export function DawenWorldRoom({
     setSending(true);
     setChatText('');
     await sendMessage({ roomId: room.id, walletAddress, username, text, avatarConfig });
+    // Show bubble
+    setChatBubble(text.length > 40 ? text.slice(0, 40) + '…' : text);
+    if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+    bubbleTimer.current = setTimeout(() => setChatBubble(null), BUBBLE_DURATION);
     setSending(false);
   };
 
-  // ── My presence in merged list ────────────────────────────────────────────
+  // ── Merged presence ───────────────────────────────────────────────────────
   const myPresence: WorldPresence = {
     id: 'me', wallet_address: walletAddress, room_id: room.id,
     x: myX, y: myY, username, avatar_config: avatarConfig,
     is_premium: isPremium, is_online: true, last_seen: new Date().toISOString(),
   };
-  const allPresence = [
-    myPresence,
-    ...presence.filter(p => p.wallet_address !== walletAddress),
-  ];
+  const otherPresence = presence.filter(p => p.wallet_address !== walletAddress);
+  const allCount = 1 + otherPresence.length;
 
   const gridW = tileSize * GRID_W;
   const gridH = tileSize * GRID_H;
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       {/* HUD */}
       <View style={styles.hud}>
         <TouchableOpacity onPress={onBack} style={styles.hudBtn}>
@@ -189,17 +328,18 @@ export function DawenWorldRoom({
         <View style={styles.hudCenter}>
           <Text style={styles.hudRoomName} numberOfLines={1}>{room.name}</Text>
           <View style={styles.hudOnline}>
+            <View style={styles.onlineDot} />
             <Users size={11} color={colors.primary} strokeWidth={2.5} />
-            <Text style={styles.hudOnlineText}>{allPresence.length}</Text>
+            <Text style={styles.hudOnlineText}>{allCount} online</Text>
           </View>
         </View>
         <View style={styles.hudRight}>
           {isOwner && (
             <TouchableOpacity
-              style={[styles.hudBtn, decMode && { backgroundColor: colors.primary }]}
+              style={[styles.hudBtn, decMode && styles.hudBtnActive]}
               onPress={() => { setDecMode(d => !d); setSelectedInvItem(null); setSelectedRoomItem(null); }}
             >
-              <Edit3 size={16} color={decMode ? '#fff' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
+              <Edit3 size={16} color={decMode ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2} />
             </TouchableOpacity>
           )}
         </View>
@@ -208,112 +348,194 @@ export function DawenWorldRoom({
       {/* Decor toolbar */}
       {decMode && isOwner && (
         <View style={styles.decorBar}>
-          <Text style={styles.decorInfo}>
-            {selectedInvItem ? `Placing: ${selectedInvItem.catalog_item?.item_name}` :
-             selectedRoomItem ? `Selected: ${selectedRoomItem.catalog_item?.item_name}` :
-             'Tap inventory to select item, then tap tile to place'}
+          <Text style={styles.decorInfo} numberOfLines={1}>
+            {selectedInvItem
+              ? `Placing: ${selectedInvItem.catalog_item?.icon_emoji} ${selectedInvItem.catalog_item?.item_name}`
+              : selectedRoomItem
+              ? `Selected: ${selectedRoomItem.catalog_item?.icon_emoji} ${selectedRoomItem.catalog_item?.item_name}`
+              : 'Pick item below, then tap tile to place'}
           </Text>
           <View style={styles.decorActions}>
             {selectedRoomItem && (
               <>
                 <TouchableOpacity style={styles.decorBtn} onPress={handleRotateRoomItem}>
-                  <RotateCw size={16} color={colors.primary} strokeWidth={2} />
+                  <RotateCw size={15} color={colors.primary} strokeWidth={2} />
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.decorBtn, { backgroundColor: 'rgba(239,68,68,0.15)' }]} onPress={handleRemoveRoomItem}>
-                  <Trash2 size={16} color="#EF4444" strokeWidth={2} />
+                <TouchableOpacity style={[styles.decorBtn, styles.decorBtnDanger]} onPress={handleRemoveRoomItem}>
+                  <Trash2 size={15} color="#EF4444" strokeWidth={2} />
                 </TouchableOpacity>
               </>
             )}
             {selectedInvItem && (
               <TouchableOpacity style={styles.decorBtn} onPress={() => setSelectedInvItem(null)}>
-                <X size={16} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+                <X size={15} color="rgba(255,255,255,0.5)" strokeWidth={2} />
               </TouchableOpacity>
             )}
           </View>
         </View>
       )}
 
-      {/* Room Grid */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
-        <View style={[styles.gridContainer, { width: gridW, height: gridH }]}>
-          <LinearGradient colors={['#060610', '#0D0D1A']} style={StyleSheet.absoluteFill} />
+      {/* Room scene */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+        style={styles.sceneScroll}
+      >
+        <View style={{ width: Math.max(gridW, screenW - 8) }}>
+          {/* ── Wall area ── */}
+          <View style={[styles.wall, { width: Math.max(gridW, screenW - 8) }]}>
+            <LinearGradient
+              colors={isPlaza
+                ? ['#0A0520', '#130830', '#0D0920']
+                : ['#080812', '#0D0D1A', '#080812']}
+              style={StyleSheet.absoluteFill}
+            />
 
-          {/* Floor tiles */}
-          {Array.from({ length: GRID_H }, (_, row) =>
-            Array.from({ length: GRID_W }, (_, col) => {
-              const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
-              const hasItem = roomItems.some(ri => ri.x === col && ri.y === row);
-              return (
-                <TouchableOpacity
-                  key={`${col}-${row}`}
-                  style={[
-                    styles.tile,
-                    {
-                      left: col * tileSize, top: row * tileSize,
-                      width: tileSize, height: tileSize,
-                      backgroundColor: (col + row) % 2 === 0 ? 'rgba(139,92,246,0.04)' : 'rgba(109,40,217,0.06)',
-                    },
-                    isSelected && { backgroundColor: 'rgba(139,92,246,0.25)' },
-                    decMode && hasItem && !isSelected && { backgroundColor: 'rgba(139,92,246,0.1)' },
-                  ]}
-                  onPress={() => handleTileTap(col, row)}
-                  activeOpacity={0.6}
-                />
-              );
-            })
-          )}
+            {/* Wall panels / depth lines */}
+            <View style={[styles.wallPanel, { left: '10%', width: '18%' }]} />
+            <View style={[styles.wallPanel, { left: '35%', width: '28%' }]} />
+            <View style={[styles.wallPanel, { left: '70%', width: '20%' }]} />
 
-          {/* Room items (furniture) */}
-          {roomItems.map(ri => (
-            <View key={ri.id} style={[
-              styles.roomItem,
-              {
-                left: ri.x * tileSize + 2,
-                top: ri.y * tileSize + 2,
-                width: tileSize - 4,
-                height: tileSize - 4,
-                backgroundColor: ri.catalog_item?.color_hex + '33' || 'rgba(139,92,246,0.2)',
-                borderColor: ri.id === selectedRoomItem?.id ? '#fff' : ri.catalog_item?.color_hex || colors.primary,
-              },
-            ]}>
-              <Text style={styles.roomItemEmoji}>{ri.catalog_item?.icon_emoji || '📦'}</Text>
-            </View>
-          ))}
-
-          {/* Avatars */}
-          {allPresence.map(p => (
-            <View key={p.wallet_address} style={[
-              styles.avatarWrap,
-              { left: p.x * tileSize, top: p.y * tileSize },
-            ]}>
-              <AvatarPreview
-                config={p.avatar_config ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null }}
-                username=""
-                isPremium={p.is_premium}
-                size={Math.min(tileSize - 4, 32)}
-              />
-              <View style={styles.avatarLabel}>
-                <Text style={styles.avatarName} numberOfLines={1}>{p.username || p.wallet_address.slice(0, 4)}</Text>
+            {/* DAWEN Plaza sign */}
+            {isPlaza ? (
+              <View style={styles.plazaSign}>
+                <Text style={styles.plazaSignText}>DAWEN WORLD</Text>
+                <View style={styles.plazaSignGlow} />
               </View>
+            ) : (
+              <View style={styles.roomSignWrap}>
+                <Text style={styles.roomSignText}>{room.name}</Text>
+              </View>
+            )}
+
+            {/* Floor/wall divider line */}
+            <View style={styles.wallDivider} />
+          </View>
+
+          {/* ── Floor grid ── */}
+          <View style={[styles.gridContainer, { width: Math.max(gridW, screenW - 8), height: gridH }]}>
+            {/* Floor background gradient */}
+            <LinearGradient
+              colors={isPlaza
+                ? ['rgba(70,30,160,0.15)', 'rgba(40,10,100,0.08)', 'rgba(20,5,60,0.04)']
+                : ['rgba(30,20,80,0.12)', 'rgba(15,10,40,0.06)', 'rgba(5,5,20,0.03)']}
+              style={StyleSheet.absoluteFill}
+            />
+
+            {/* Floor tiles */}
+            {Array.from({ length: GRID_H }, (_, row) =>
+              Array.from({ length: GRID_W }, (_, col) => {
+                const isEven = (col + row) % 2 === 0;
+                const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
+                const rowFade = 1 - (row / GRID_H) * 0.3;
+
+                return (
+                  <TouchableOpacity
+                    key={`${col}-${row}`}
+                    style={[
+                      styles.tile,
+                      {
+                        left: col * tileSize, top: row * tileSize,
+                        width: tileSize, height: tileSize,
+                        backgroundColor: isPlaza
+                          ? isEven ? `rgba(100,50,220,${0.07 * rowFade})` : `rgba(70,30,160,${0.11 * rowFade})`
+                          : isEven ? `rgba(80,60,180,${0.05 * rowFade})` : `rgba(50,35,130,${0.09 * rowFade})`,
+                      },
+                      isSelected && styles.tileSelected,
+                    ]}
+                    onPress={() => handleTileTap(col, row)}
+                    activeOpacity={0.55}
+                  />
+                );
+              })
+            )}
+
+            {/* Room items (furniture) */}
+            {roomItems.map(ri => {
+              const color = ri.catalog_item?.color_hex ?? '#8B5CF6';
+              const isSelectedItem = ri.id === selectedRoomItem?.id;
+              return (
+                <View key={ri.id} style={[
+                  styles.roomItem,
+                  {
+                    left: ri.x * tileSize + 2,
+                    top: ri.y * tileSize + 2,
+                    width: tileSize - 4,
+                    height: tileSize - 4,
+                    backgroundColor: color + '28',
+                    borderColor: isSelectedItem ? '#fff' : color + '88',
+                    shadowColor: color,
+                  },
+                ]}>
+                  <Text style={[styles.roomItemEmoji, { fontSize: Math.round(tileSize * 0.52) }]}>
+                    {ri.catalog_item?.icon_emoji ?? '📦'}
+                  </Text>
+                </View>
+              );
+            })}
+
+            {/* Other users' avatars */}
+            {otherPresence.map(p => {
+              const cfg = p.avatar_config ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null };
+              return (
+                <View
+                  key={p.wallet_address}
+                  style={[styles.avatarWrap, { left: p.x * tileSize, top: p.y * tileSize }]}
+                >
+                  <WorldAvatarChar
+                    config={cfg}
+                    username={p.username || p.wallet_address.slice(0, 4)}
+                    isPremium={p.is_premium}
+                    size={charSize}
+                  />
+                </View>
+              );
+            })}
+
+            {/* My avatar (animated) */}
+            <View style={[styles.avatarWrap, { left: avatarLeft, top: avatarTop }]}>
+              {/* Chat bubble above */}
+              {chatBubble ? (
+                <View style={styles.chatBubble}>
+                  <Text style={styles.chatBubbleText}>{chatBubble}</Text>
+                  <View style={styles.chatBubbleTail} />
+                </View>
+              ) : null}
+              <WorldAvatarChar
+                config={avatarConfig}
+                username={username}
+                isPremium={isPremium}
+                size={charSize}
+              />
             </View>
-          ))}
+          </View>
         </View>
       </ScrollView>
 
       {/* Decor inventory quick bar */}
       {decMode && isOwner && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.invBar} contentContainerStyle={styles.invBarContent}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.invBar}
+          contentContainerStyle={styles.invBarContent}
+        >
           {inventory.filter(i => i.quantity > 0).map(inv => (
             <TouchableOpacity
               key={inv.id}
               style={[styles.invBarItem, selectedInvItem?.id === inv.id && styles.invBarItemActive]}
               onPress={() => setSelectedInvItem(prev => prev?.id === inv.id ? null : inv)}
             >
-              <Text style={styles.invBarEmoji}>{inv.catalog_item?.icon_emoji || '📦'}</Text>
+              <Text style={[styles.invBarEmoji, { fontSize: Math.round(tileSize * 0.55) }]}>
+                {inv.catalog_item?.icon_emoji ?? '📦'}
+              </Text>
               {inv.quantity > 1 && <Text style={styles.invBarQty}>×{inv.quantity}</Text>}
             </TouchableOpacity>
           ))}
-          {inventory.length === 0 && <Text style={styles.invBarEmpty}>No items — visit the Shop!</Text>}
+          {inventory.length === 0 && (
+            <Text style={styles.invBarEmpty}>No items — visit the Shop!</Text>
+          )}
         </ScrollView>
       )}
 
@@ -326,32 +548,41 @@ export function DawenWorldRoom({
           showsVerticalScrollIndicator={false}
         >
           {messages.map(m => (
-            <View key={m.id} style={[styles.chatMsg, m.wallet_address === walletAddress && styles.chatMsgMine]}>
-              <Text style={styles.chatUser}>{m.username || m.wallet_address.slice(0, 4)}</Text>
+            <View key={m.id} style={styles.chatMsg}>
+              <Text style={styles.chatUser}>
+                {m.username || m.wallet_address.slice(0, 4)}
+                {m.wallet_address === walletAddress ? ' (you)' : ''}
+              </Text>
               <Text style={styles.chatText}>{m.message_text}</Text>
             </View>
           ))}
-          {messages.length === 0 && <Text style={styles.chatEmpty}>No messages yet — say hello!</Text>}
+          {messages.length === 0 && (
+            <Text style={styles.chatEmpty}>Say hello to the room!</Text>
+          )}
         </ScrollView>
         <View style={styles.chatInputRow}>
           <TextInput
             style={styles.chatInput}
             value={chatText}
             onChangeText={setChatText}
-            placeholder="Chat in room..."
+            placeholder="Chat in room…"
             placeholderTextColor="rgba(255,255,255,0.3)"
             returnKeyType="send"
             onSubmitEditing={handleSendChat}
             maxLength={200}
           />
-          <TouchableOpacity style={[styles.sendBtn, (!chatText.trim() || sending) && { opacity: 0.4 }]} onPress={handleSendChat} disabled={!chatText.trim() || sending}>
+          <TouchableOpacity
+            style={[styles.sendBtn, (!chatText.trim() || sending) && { opacity: 0.35 }]}
+            onPress={handleSendChat}
+            disabled={!chatText.trim() || sending}
+          >
             <Text style={styles.sendBtnText}>→</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {/* Bottom Nav */}
-      <View style={styles.bottomNav}>
+      <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         <NavBtn icon={Map} label="Rooms" onPress={onOpenDirectory} />
         <NavBtn icon={ShoppingBag} label="Shop" onPress={onOpenShop} />
         <NavBtn icon={Package} label="Items" onPress={onOpenInventory} />
@@ -359,6 +590,8 @@ export function DawenWorldRoom({
     </KeyboardAvoidingView>
   );
 }
+
+// ─── NavBtn ───────────────────────────────────────────────────────────────────
 
 function NavBtn({ icon: Icon, label, onPress }: { icon: any; label: string; onPress: () => void }) {
   return (
@@ -369,59 +602,188 @@ function NavBtn({ icon: Icon, label, onPress }: { icon: any; label: string; onPr
   );
 }
 
-// Cleanup supabase channels
+// ─── Cleanup helper ───────────────────────────────────────────────────────────
+
 function supabaseCleanup(...channels: any[]) {
   const { supabase: sb } = require('@/lib/supabase');
   channels.forEach(ch => { try { sb.removeChannel(ch); } catch {} });
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#060610' },
+
+  // HUD
   hud: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md,
-    paddingVertical: 10, backgroundColor: 'rgba(0,0,0,0.6)',
-    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.2)', gap: 8,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.md, paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.25)', gap: 8,
   },
-  hudBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center' },
+  hudBtn: {
+    width: 34, height: 34, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  hudBtnActive: { backgroundColor: colors.primary },
   hudCenter: { flex: 1, alignItems: 'center' },
   hudRoomName: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
-  hudOnline: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  hudOnline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  onlineDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981',
+    shadowColor: '#10B981', shadowRadius: 4, shadowOpacity: 0.8, elevation: 3,
+  },
   hudOnlineText: { fontSize: 10, color: colors.primary, fontWeight: '700' },
   hudRight: { flexDirection: 'row', gap: 6 },
+
+  // Decor bar
   decorBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.md, paddingVertical: 8,
-    backgroundColor: 'rgba(139,92,246,0.15)', borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.3)',
+    paddingHorizontal: spacing.md, paddingVertical: 7,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.3)',
   },
-  decorInfo: { fontSize: 11, color: 'rgba(255,255,255,0.7)', fontWeight: '600', flex: 1 },
+  decorInfo: { fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: '600', flex: 1 },
   decorActions: { flexDirection: 'row', gap: 6 },
-  decorBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center' },
-  gridContainer: { position: 'relative', overflow: 'hidden', borderRadius: 4 },
-  tile: { position: 'absolute', borderWidth: 0.5, borderColor: 'rgba(139,92,246,0.08)' },
-  roomItem: { position: 'absolute', borderRadius: 4, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  roomItemEmoji: { fontSize: 18 },
-  avatarWrap: { position: 'absolute', alignItems: 'center', pointerEvents: 'none' as any },
-  avatarLabel: { backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, maxWidth: 56 },
-  avatarName: { fontSize: 9, color: '#fff', fontWeight: '700', textAlign: 'center' },
-  invBar: { maxHeight: 60, borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.2)', backgroundColor: 'rgba(0,0,0,0.5)' },
-  invBarContent: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: 8, gap: 6 },
-  invBarItem: { width: 44, height: 44, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.07)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'transparent' },
+  decorBtn: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  decorBtnDanger: { backgroundColor: 'rgba(239,68,68,0.15)' },
+
+  // Scene
+  sceneScroll: { flex: 1 },
+
+  // Wall
+  wall: {
+    height: WALL_H, position: 'relative', overflow: 'hidden',
+  },
+  wallPanel: {
+    position: 'absolute', top: 8, height: WALL_H - 24,
+    backgroundColor: 'rgba(139,92,246,0.06)',
+    borderWidth: 0.5, borderColor: 'rgba(139,92,246,0.12)',
+    borderRadius: 4,
+  },
+  wallDivider: {
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: 2,
+    backgroundColor: 'rgba(139,92,246,0.35)',
+    shadowColor: '#8B5CF6', shadowOpacity: 0.8, shadowRadius: 6,
+  },
+  plazaSign: {
+    position: 'absolute', alignSelf: 'center', top: 10,
+    alignItems: 'center', left: 0, right: 0,
+  },
+  plazaSignText: {
+    fontSize: 18, fontWeight: '900', color: '#fff', letterSpacing: 3,
+    textShadowColor: '#8B5CF6', textShadowRadius: 12, textShadowOffset: { width: 0, height: 0 },
+  },
+  plazaSignGlow: {
+    position: 'absolute', top: -4, left: -20, right: -20, bottom: -4,
+    backgroundColor: 'rgba(139,92,246,0.08)', borderRadius: 8,
+  },
+  roomSignWrap: {
+    position: 'absolute', top: 12, alignSelf: 'center', left: 0, right: 0, alignItems: 'center',
+  },
+  roomSignText: {
+    fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.35)', letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+
+  // Floor grid
+  gridContainer: { position: 'relative', overflow: 'hidden' },
+  tile: {
+    position: 'absolute',
+    borderWidth: 0.5, borderColor: 'rgba(139,92,246,0.1)',
+  },
+  tileSelected: { backgroundColor: 'rgba(139,92,246,0.28)' },
+
+  // Room items
+  roomItem: {
+    position: 'absolute', borderRadius: 5, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center',
+    shadowRadius: 4, shadowOpacity: 0.4, elevation: 3,
+  },
+  roomItemEmoji: {},
+
+  // Avatars
+  avatarWrap: { position: 'absolute', alignItems: 'center' },
+  chatBubble: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    maxWidth: 110,
+    marginBottom: 4,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
+    position: 'relative',
+    alignSelf: 'center',
+  },
+  chatBubbleText: { fontSize: 11, color: '#111', fontWeight: '600', lineHeight: 15 },
+  chatBubbleTail: {
+    position: 'absolute', bottom: -5, left: '50%', marginLeft: -5,
+    width: 10, height: 10, backgroundColor: '#fff',
+    transform: [{ rotate: '45deg' }],
+  },
+
+  // Inventory quick bar
+  invBar: {
+    maxHeight: 60, borderTopWidth: 1,
+    borderTopColor: 'rgba(139,92,246,0.2)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  invBarContent: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.sm, paddingVertical: 7, gap: 6,
+  },
+  invBarItem: {
+    width: 44, height: 44, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'transparent',
+  },
   invBarItemActive: { borderColor: colors.primary, backgroundColor: colors.primaryMuted },
-  invBarEmoji: { fontSize: 22 },
-  invBarQty: { fontSize: 9, color: colors.primary, fontWeight: '800', position: 'absolute', bottom: 2, right: 4 },
+  invBarEmoji: {},
+  invBarQty: {
+    fontSize: 9, color: colors.primary, fontWeight: '800',
+    position: 'absolute', bottom: 2, right: 4,
+  },
   invBarEmpty: { fontSize: 11, color: 'rgba(255,255,255,0.3)', padding: spacing.sm },
-  chatArea: { borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.15)', backgroundColor: 'rgba(0,0,0,0.4)', maxHeight: 180 },
-  chatScroll: { maxHeight: 120, paddingHorizontal: spacing.md, paddingVertical: 6 },
+
+  // Chat
+  chatArea: {
+    borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.15)',
+    backgroundColor: 'rgba(0,0,0,0.45)', maxHeight: 160,
+  },
+  chatScroll: { maxHeight: 100, paddingHorizontal: spacing.md, paddingVertical: 5 },
   chatMsg: { marginBottom: 4 },
-  chatMsgMine: { opacity: 0.9 },
   chatUser: { fontSize: 10, fontWeight: '800', color: colors.primary, marginBottom: 1 },
   chatText: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
   chatEmpty: { fontSize: 11, color: 'rgba(255,255,255,0.25)', padding: 8 },
-  chatInputRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 8, gap: 8, borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.1)' },
-  chatInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: 8, fontSize: 13, color: '#fff', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
-  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
-  sendBtnText: { fontSize: 18, color: '#fff', fontWeight: '700' },
-  bottomNav: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.8)', borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.2)' },
-  navBtn: { flex: 1, alignItems: 'center', paddingVertical: 10, gap: 3 },
+  chatInputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.md, paddingVertical: 7, gap: 8,
+    borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.1)',
+  },
+  chatInput: {
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: borderRadius.md, paddingHorizontal: spacing.md,
+    paddingVertical: 7, fontSize: 13, color: '#fff',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+  },
+  sendBtn: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  sendBtnText: { fontSize: 16, color: '#fff', fontWeight: '700' },
+
+  // Bottom nav
+  bottomNav: {
+    flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.85)',
+    borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.2)',
+  },
+  navBtn: { flex: 1, alignItems: 'center', paddingVertical: 9, gap: 3 },
   navBtnLabel: { fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: '600' },
 });

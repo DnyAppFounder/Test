@@ -378,7 +378,7 @@ const matchedStyles = StyleSheet.create({
   entryAmt: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '500' },
 });
 
-function GameCitySection() {
+function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) => void }) {
   const { activeWallet } = useWallet();
   const { profile } = useProfile();
   const insets = useSafeAreaInsets();
@@ -399,6 +399,7 @@ function GameCitySection() {
     } else {
       setGameSeed(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
       setStage('playing');
+      onSetFullscreen?.(true);
     }
   };
 
@@ -411,12 +412,14 @@ function GameCitySection() {
     setMatch(m);
     setGameSeed(m.match_seed);
     setStage('matched');
+    onSetFullscreen?.(true);
     setTimeout(() => setStage('playing'), 3000);
   };
 
   const handleGameEnd = async (r: GameResultData) => {
     setResult(r);
     setStage('result');
+    onSetFullscreen?.(false);
     if (!walletAddress) return;
     try {
       await submitGameResult({
@@ -442,6 +445,7 @@ function GameCitySection() {
 
   const handlePlayAgain = () => {
     setStage('menu'); setMode(null); setEntry(null); setMatch(null); setResult(null); setGameSeed('');
+    onSetFullscreen?.(false);
   };
 
   // ── DAWEN World: full screen ──
@@ -451,7 +455,7 @@ function GameCitySection() {
         walletAddress={walletAddress}
         username={profile?.username ?? ''}
         isPremium={profile?.is_premium ?? false}
-        onExit={() => setStage('menu')}
+        onExit={() => { setStage('menu'); onSetFullscreen?.(false); }}
       />
     );
   }
@@ -483,7 +487,7 @@ function GameCitySection() {
           <GameModeSelector onSelect={handleModeSelect} />
           <TouchableOpacity
             style={gameStyles.worldCard}
-            onPress={() => setStage('world')}
+            onPress={() => { setStage('world'); onSetFullscreen?.(true); }}
             activeOpacity={0.85}
           >
             <LinearGradient
@@ -549,8 +553,7 @@ function GameCitySection() {
 const gameStyles = StyleSheet.create({
   arenaContainer: {
     flex: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingHorizontal: 4,
   },
   scroll: { flex: 1 },
   scrollContent: {
@@ -639,23 +642,28 @@ const rankStyles = StyleSheet.create({
 export default function DawenCityPage() {
   const { t } = useLanguage();
   const [cityTab, setCityTab] = useState<CityTab>('token');
+  const [gameFullscreen, setGameFullscreen] = useState(false);
 
   return (
     <View style={pageStyles.container}>
-      <LinearGradient colors={colors.gradient.header} style={pageStyles.header}>
-        <Text style={pageStyles.headerTitle}>Dawen City</Text>
-        <Text style={pageStyles.headerSubtitle}>Tokens · Games · Rankings</Text>
-      </LinearGradient>
+      {!gameFullscreen && (
+        <LinearGradient colors={colors.gradient.header} style={pageStyles.header}>
+          <Text style={pageStyles.headerTitle}>Dawen City</Text>
+          <Text style={pageStyles.headerSubtitle}>Tokens · Games · Rankings</Text>
+        </LinearGradient>
+      )}
 
-      <View style={pageStyles.tabsWrapper}>
-        <DawenCityTabs active={cityTab} onSelect={setCityTab} />
-      </View>
+      {!gameFullscreen && (
+        <View style={pageStyles.tabsWrapper}>
+          <DawenCityTabs active={cityTab} onSelect={setCityTab} />
+        </View>
+      )}
 
       <View style={[pageStyles.section, cityTab !== 'token' && pageStyles.hidden]}>
         <TokenCitySection />
       </View>
       <View style={[pageStyles.section, cityTab !== 'game' && pageStyles.hidden]}>
-        <GameCitySection />
+        <GameCitySection onSetFullscreen={setGameFullscreen} />
       </View>
       <View style={[pageStyles.section, cityTab !== 'rank' && pageStyles.hidden]}>
         <TopRankCitySection />
