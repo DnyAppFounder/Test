@@ -112,8 +112,11 @@ interface Props {
 
 export function DawenRushArena({ seed, mode, entryId, matchId, entryAmountSol, onGameEnd }: Props) {
   const [containerW, setContainerW] = useState(Math.min(300, MAX_ARENA_W));
+  const [containerH, setContainerH] = useState(500);
   const effectiveW = Math.min(containerW, MAX_ARENA_W);
-  const scale = effectiveW / VW;
+  // Scale is constrained by both width AND available height so arena never clips on mobile
+  const scale = Math.min(effectiveW / VW, containerH / VH);
+  const arenaW = VW * scale;
   const arenaH = VH * scale;
 
   const [gameStarted, setGameStarted] = useState(false);
@@ -392,10 +395,13 @@ export function DawenRushArena({ seed, mode, entryId, matchId, entryAmountSol, o
   return (
     <View
       style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
-      onLayout={e => setContainerW(e.nativeEvent.layout.width)}
+      onLayout={e => {
+        setContainerW(e.nativeEvent.layout.width);
+        setContainerH(e.nativeEvent.layout.height);
+      }}
     >
     <View
-      style={[styles.arenaWrap, { height: arenaH, width: effectiveW }]}>
+      style={[styles.arenaWrap, { height: arenaH, width: arenaW }]}>
       {/* Game surface */}
       <View style={[styles.arena, { height: arenaH }]}>
         {/* Background */}
@@ -405,7 +411,7 @@ export function DawenRushArena({ seed, mode, entryId, matchId, entryAmountSol, o
         />
         {/* Grid lines */}
         {Array.from({ length: 6 }, (_, i) => (
-          <View key={`vg${i}`} style={[styles.gridV, { left: ((i + 1) / 7) * effectiveW }]} />
+          <View key={`vg${i}`} style={[styles.gridV, { left: ((i + 1) / 7) * arenaW }]} />
         ))}
         {Array.from({ length: 7 }, (_, i) => (
           <View key={`hg${i}`} style={[styles.gridH, { top: ((i + 1) / 8) * arenaH }]} />

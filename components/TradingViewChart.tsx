@@ -246,7 +246,7 @@ export function TradingViewChart({
     const loop = Animated.loop(
       Animated.timing(bgAnim, {
         toValue: -BG_TILE_W,
-        duration: 4000,
+        duration: 1500,
         useNativeDriver: true,
         isInteraction: false,
       })
@@ -258,20 +258,20 @@ export function TradingViewChart({
   // Pulse live dot
   useEffect(() => {
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(dotPulse, { toValue: 2.2, duration: 600, useNativeDriver: true }),
-      Animated.timing(dotPulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+      Animated.timing(dotPulse, { toValue: 2.2, duration: 400, useNativeDriver: true }),
+      Animated.timing(dotPulse, { toValue: 1,   duration: 400, useNativeDriver: true }),
     ]));
     loop.start();
     return () => loop.stop();
   }, []);
 
-  // Visual time engine — advances rightTime every second so the chart slides left
+  // Visual time engine — advances rightTime 5× per second so the chart slides smoothly
   useEffect(() => {
     rightTimeRef.current = Date.now();
     const id = setInterval(() => {
       rightTimeRef.current = Date.now();
       setClockTick(t => t + 1);
-    }, 1000);
+    }, 200);
     return () => clearInterval(id);
   }, []);
 

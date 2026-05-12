@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, ActivityIndicator, TextInput, RefreshControl,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   TrendingUp, TrendingDown, Search, Zap, ArrowUpRight,
@@ -379,6 +380,7 @@ const matchedStyles = StyleSheet.create({
 function GameCitySection() {
   const { activeWallet } = useWallet();
   const { profile } = useProfile();
+  const insets = useSafeAreaInsets();
 
   const [stage, setStage] = useState<GameStage>('menu');
   const [mode, setMode] = useState<GameMode | null>(null);
@@ -444,7 +446,7 @@ function GameCitySection() {
   // ── Playing stage: no scroll, arena fills available space ──
   if (stage === 'playing' && gameSeed) {
     return (
-      <View style={gameStyles.arenaContainer}>
+      <View style={[gameStyles.arenaContainer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
         <DawenRushArena
           seed={gameSeed}
           mode={mode!}
