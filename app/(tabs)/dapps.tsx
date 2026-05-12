@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight,
+  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
@@ -22,6 +22,7 @@ import { SolDuelWaitingQueue } from '@/components/game/SolDuelWaitingQueue';
 import { DawenRushArena } from '@/components/game/DawenRushArena';
 import { GameResultCard, GameResultData } from '@/components/game/GameResultCard';
 import { TopRankLeaderboard } from '@/components/game/TopRankLeaderboard';
+import { DawenWorldPage } from '@/components/world/DawenWorldPage';
 
 const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
 const SELL_COLOR = '#D946EF';
@@ -29,7 +30,7 @@ const SELL_MUTED = 'rgba(217,70,239,0.12)';
 
 type CityTab = 'token' | 'game' | 'rank';
 type DiscoverTab = 'featured' | 'trending' | 'new';
-type GameStage = 'menu' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result';
+type GameStage = 'menu' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result' | 'world';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -443,6 +444,18 @@ function GameCitySection() {
     setStage('menu'); setMode(null); setEntry(null); setMatch(null); setResult(null); setGameSeed('');
   };
 
+  // ── DAWEN World: full screen ──
+  if (stage === 'world') {
+    return (
+      <DawenWorldPage
+        walletAddress={walletAddress}
+        username={profile?.username ?? ''}
+        isPremium={profile?.is_premium ?? false}
+        onExit={() => setStage('menu')}
+      />
+    );
+  }
+
   // ── Playing stage: no scroll, arena fills available space ──
   if (stage === 'playing' && gameSeed) {
     return (
@@ -466,7 +479,33 @@ function GameCitySection() {
       showsVerticalScrollIndicator={false}
     >
       {stage === 'menu' && (
-        <GameModeSelector onSelect={handleModeSelect} />
+        <>
+          <GameModeSelector onSelect={handleModeSelect} />
+          <TouchableOpacity
+            style={gameStyles.worldCard}
+            onPress={() => setStage('world')}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={['rgba(16,185,129,0.2)', 'rgba(5,150,105,0.08)']}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={gameStyles.worldIconWrap}>
+              <Globe size={22} color="#10B981" strokeWidth={2} />
+            </View>
+            <View style={gameStyles.worldBody}>
+              <View style={gameStyles.worldTitleRow}>
+                <Text style={gameStyles.worldLabel}>DAWEN World</Text>
+                <View style={gameStyles.worldBadge}>
+                  <Text style={gameStyles.worldBadgeText}>ALPHA</Text>
+                </View>
+              </View>
+              <Text style={gameStyles.worldDesc}>Virtual Solana social world</Text>
+              <Text style={gameStyles.worldSub}>Rooms · Avatars · Chat · Shop</Text>
+            </View>
+            <ChevronRight size={16} color={colors.textMuted} strokeWidth={2} />
+          </TouchableOpacity>
+        </>
       )}
 
       {stage === 'entry' && (
@@ -518,6 +557,63 @@ const gameStyles = StyleSheet.create({
     paddingHorizontal: spacing.xxl,
     paddingBottom: 32,
     gap: spacing.lg,
+  },
+  worldCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.4)',
+    overflow: 'hidden',
+  },
+  worldIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  worldBody: { flex: 1 },
+  worldTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: 3,
+  },
+  worldLabel: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  worldBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: 'rgba(16,185,129,0.15)',
+  },
+  worldBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    color: '#10B981',
+  },
+  worldDesc: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  worldSub: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
   },
 });
 
