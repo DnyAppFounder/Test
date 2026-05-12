@@ -216,17 +216,38 @@ export default function TokenDetailScreen() {
     setHoldersLoading(true);
     try {
       const rpc = SolanaConnectionService.getInstance();
-      const result = await rpc.rpcCall('getTokenLargestAccounts', [address, { commitment: 'confirmed' }]);
+      const [result, supplyResult] = await Promise.all([
+        rpc.rpcCall('getTokenLargestAccounts', [address, { commitment: 'confirmed' }]),
+        rpc.rpcCall('getTokenSupply', [address, { commitment: 'confirmed' }]).catch(() => null),
+      ]);
       const accounts: any[] = result?.value ?? [];
-      // Also fetch supply for percentage calculation
-      const supplyResult = await rpc.rpcCall('getTokenSupply', [address, { commitment: 'confirmed' }]).catch(() => null);
       const supply = supplyResult?.value?.uiAmount ?? 0;
       setTotalSupply(supply);
-      setHolders(accounts.map((a: any) => ({
-        address: a.address,
-        amount: Number(a.amount),
-        uiAmount: a.uiAmount ?? 0,
-      })));
+
+      if (accounts.length === 0) {
+        setHolders([]);
+        return;
+      }
+
+      // Resolve the OWNER wallet address from each token account (ATA).
+      // getTokenLargestAccounts returns token program account addresses, not wallet addresses.
+      const ataInfos = await rpc.batchRpcCall(
+        accounts.map((a: any) => ({
+          method: 'getAccountInfo',
+          params: [a.address, { encoding: 'jsonParsed', commitment: 'confirmed' }],
+        }))
+      ).catch(() => [] as any[]);
+
+      setHolders(accounts.map((a: any, i: number) => {
+        const info = ataInfos[i];
+        const ownerWallet: string =
+          info?.data?.parsed?.info?.owner ?? a.address;
+        return {
+          address: ownerWallet,
+          amount: Number(a.amount),
+          uiAmount: a.uiAmount ?? 0,
+        };
+      }));
     } catch (e) {
       console.warn('[Holders] Failed to load holders:', e);
       setHolders([]);
