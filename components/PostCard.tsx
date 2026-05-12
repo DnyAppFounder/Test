@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform } from 'react-native';
-import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2, X, Megaphone } from 'lucide-react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform, ActivityIndicator } from 'react-native';
+import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2, X, Megaphone, ChartBar as BarChart2 } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
 import LinkText, { extractUrls } from './LinkText';
@@ -39,6 +39,49 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
   const [avatarError, setAvatarError] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+
+  // Poll state
+  const hasPoll = !!(post.poll_options && post.poll_options.length >= 2);
+  const [pollVotes, setPollVotes] = useState<{ option_index: number; count: number }[]>([]);
+  const [myVote, setMyVote] = useState<number | null>(null);
+  const [loadingPoll, setLoadingPoll] = useState(false);
+  const [votingPoll, setVotingPoll] = useState(false);
+
+  useEffect(() => {
+    if (!hasPoll) return;
+    let active = true;
+    (async () => {
+      setLoadingPoll(true);
+      try {
+        const [votes, mine] = await Promise.all([
+          SocialService.getPollVotes(post.id),
+          currentProfile?.wallet_address
+            ? SocialService.getMyPollVote(post.id, currentProfile.wallet_address)
+            : Promise.resolve(null),
+        ]);
+        if (!active) return;
+        setPollVotes(votes);
+        setMyVote(mine);
+      } catch {}
+      finally { if (active) setLoadingPoll(false); }
+    })();
+    return () => { active = false; };
+  }, [post.id, hasPoll, currentProfile?.wallet_address]);
+
+  const handleVote = async (optionIndex: number) => {
+    if (!currentProfile?.wallet_address || myVote !== null || votingPoll) return;
+    setVotingPoll(true);
+    try {
+      await SocialService.votePoll(post.id, currentProfile.wallet_address, optionIndex);
+      const [votes] = await Promise.all([SocialService.getPollVotes(post.id)]);
+      setPollVotes(votes);
+      setMyVote(optionIndex);
+    } catch {}
+    finally { setVotingPoll(false); }
+  };
+
+  const totalVotes = pollVotes.reduce((sum, v) => sum + v.count, 0);
+  const getVoteCount = (idx: number) => pollVotes.find(v => v.option_index === idx)?.count ?? 0;
 
   const handleProfilePress = () => {
     if (post.author?.id) router.push(`/profile/${post.author.id}`);
@@ -138,6 +181,60 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         if (urls.length === 0) return null;
         return <LinkPreview url={urls[0]} />;
       })()}
+
+      {/* GIF */}
+      {post.gif_url && (
+        <TouchableOpacity activeOpacity={0.9} onPress={() => setPreviewUri(post.gif_url!)}>
+          <Image
+            source={{ uri: post.gif_url }}
+            style={styles.gifDisplay}
+            resizeMode="cover"
+          />
+        </TouchableOpacity>
+      )}
+
+      {/* Poll */}
+      {hasPoll && post.poll_options && (
+        <View style={styles.poll}>
+          <View style={styles.pollTitle}>
+            <BarChart2 size={12} color={colors.textMuted} strokeWidth={2} />
+            <Text style={styles.pollTitleText}>Poll · {totalVotes} vote{totalVotes !== 1 ? 's' : ''}</Text>
+          </View>
+          {loadingPoll ? (
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 8 }} />
+          ) : (
+            post.poll_options.map((opt, idx) => {
+              const voted = myVote !== null;
+              const count = getVoteCount(idx);
+              const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+              const isMyChoice = myVote === idx;
+              return voted ? (
+                <View key={idx} style={[styles.pollResult, isMyChoice && styles.pollResultMine]}>
+                  <View style={[styles.pollBar, { width: `${pct}%` as any }]} />
+                  <View style={styles.pollResultInner}>
+                    <Text style={[styles.pollOptText, isMyChoice && styles.pollOptTextMine]} numberOfLines={1}>{opt}</Text>
+                    <Text style={styles.pollPct}>{pct}%</Text>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.pollOption, votingPoll && { opacity: 0.6 }]}
+                  onPress={() => handleVote(idx)}
+                  activeOpacity={0.75}
+                  disabled={votingPoll || !currentProfile?.wallet_address}
+                >
+                  <Text style={styles.pollOptText} numberOfLines={1}>{opt}</Text>
+                  {votingPoll && idx === 0 && <ActivityIndicator size="small" color={colors.primary} />}
+                </TouchableOpacity>
+              );
+            })
+          )}
+          {!currentProfile?.wallet_address && myVote === null && (
+            <Text style={styles.pollNoWallet}>Connect wallet to vote</Text>
+          )}
+        </View>
+      )}
 
       {/* Media grid */}
       {mediaUrls.length > 0 && (() => {
@@ -467,6 +564,93 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     color: '#A78BFA',
+  },
+
+  // GIF
+  gifDisplay: {
+    width: '100%',
+    height: 200,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+
+  // Poll
+  poll: {
+    backgroundColor: 'rgba(139,92,246,0.05)',
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.15)',
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  pollTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 2,
+  },
+  pollTitleText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  pollOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(139,92,246,0.06)',
+  },
+  pollOptText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  pollOptTextMine: { color: colors.primary },
+  pollResult: {
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    position: 'relative',
+    height: 38,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    marginBottom: 2,
+  },
+  pollResultMine: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  pollBar: {
+    position: 'absolute',
+    top: 0, left: 0, bottom: 0,
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderRadius: borderRadius.md,
+  },
+  pollResultInner: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+  },
+  pollPct: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  pollNoWallet: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    textAlign: 'center',
+    fontWeight: '500',
+    paddingTop: 2,
   },
 });
 

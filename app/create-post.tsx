@@ -88,6 +88,18 @@ export default function CreatePostScreen() {
   const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
   const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
 
+  // GIF
+  const [gifUrl, setGifUrl] = useState<string | null>(null);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string }[]>([]);
+  const [gifSearching, setGifSearching] = useState(false);
+  const TENOR_KEY = process.env.EXPO_PUBLIC_TENOR_API_KEY ?? '';
+
+  // Poll
+  const [showPoll, setShowPoll] = useState(false);
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
+
   useEffect(() => {
     const svc = new SolanaPriceService();
     svc.getSOLPrice().then(p => { if (p > 0) setSolUsdPrice(p); }).catch(() => {});
@@ -265,6 +277,63 @@ export default function CreatePostScreen() {
     setAttachedTokens(prev => prev.filter(t => t.address !== address));
   };
 
+  // ── GIF search ────────────────────────────────────────────────────────────
+  const searchGifs = useCallback(async (query: string) => {
+    setGifQuery(query);
+    if (!TENOR_KEY) return;
+    if (!query.trim()) { setGifResults([]); return; }
+    setGifSearching(true);
+    try {
+      const url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=20&media_filter=gif`;
+      const res = await fetch(url);
+      const json = await res.json();
+      const results = (json.results || []).map((item: any) => ({
+        id: item.id,
+        url: item.media_formats?.gif?.url ?? '',
+        preview: item.media_formats?.tinygif?.url ?? item.media_formats?.gif?.url ?? '',
+      })).filter((g: any) => g.url);
+      setGifResults(results);
+    } catch {
+      setGifResults([]);
+    } finally {
+      setGifSearching(false);
+    }
+  }, [TENOR_KEY]);
+
+  const openGifPicker = () => {
+    setGifQuery('');
+    setGifResults([]);
+    setShowGifPicker(true);
+  };
+
+  const selectGif = (url: string) => {
+    setGifUrl(url);
+    setShowGifPicker(false);
+  };
+
+  // ── Poll helpers ─────────────────────────────────────────────────────────
+  const togglePoll = () => {
+    if (showPoll) {
+      setShowPoll(false);
+      setPollOptions(['', '']);
+    } else {
+      setShowPoll(true);
+    }
+  };
+
+  const setPollOption = (idx: number, text: string) => {
+    setPollOptions(prev => prev.map((o, i) => i === idx ? text : o));
+  };
+
+  const addPollOption = () => {
+    if (pollOptions.length < 4) setPollOptions(prev => [...prev, '']);
+  };
+
+  const removePollOption = (idx: number) => {
+    if (pollOptions.length <= 2) return;
+    setPollOptions(prev => prev.filter((_, i) => i !== idx));
+  };
+
   // ── Submit ────────────────────────────────────────────────────────────────
   const handlePost = async () => {
     if (!profile || !content.trim() || posting) return;
@@ -275,6 +344,7 @@ export default function CreatePostScreen() {
       const secondToken = attachedTokens[1] ?? null;
       const promoteTier = pendingCredit ?? undefined;
 
+      const validPollOptions = showPoll ? pollOptions.filter(o => o.trim().length > 0) : [];
       await SocialService.createPost(profile.id, content.trim(), {
         mediaUris: mediaUris.length > 0 ? mediaUris : undefined,
         tokenAddress: primaryToken?.address ?? undefined,
@@ -292,6 +362,8 @@ export default function CreatePostScreen() {
         allowQuotes,
         language: 'en',
         promoteTier,
+        gifUrl: gifUrl ?? undefined,
+        pollOptions: validPollOptions.length >= 2 ? validPollOptions : undefined,
       });
 
       // Consume promotion credit after post is submitted
@@ -314,7 +386,8 @@ export default function CreatePostScreen() {
 
   const charLeft = CHAR_LIMIT - content.length;
   const charWarning = charLeft <= 30;
-  const canPost = content.trim().length > 0 && content.length <= CHAR_LIMIT && !posting;
+  const pollValid = !showPoll || pollOptions.filter(o => o.trim().length > 0).length >= 2;
+  const canPost = content.trim().length > 0 && content.length <= CHAR_LIMIT && !posting && pollValid;
 
   const renderTokenCard = (token: LiveToken) => {
     const change = token.priceChange24h ?? 0;
@@ -484,6 +557,54 @@ export default function CreatePostScreen() {
             </View>
           )}
 
+          {/* GIF preview */}
+          {gifUrl && (
+            <View style={styles.gifPreviewWrap}>
+              <Image source={{ uri: gifUrl }} style={styles.gifPreview} resizeMode="cover" />
+              <TouchableOpacity style={styles.removeGifBtn} onPress={() => setGifUrl(null)} activeOpacity={0.8}>
+                <X size={14} color={colors.white} strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Poll composer */}
+          {showPoll && (
+            <View style={styles.pollComposer}>
+              <View style={styles.pollHeader}>
+                <BarChart2 size={14} color="#ef4444" strokeWidth={2} />
+                <Text style={styles.pollHeaderText}>Poll Options</Text>
+                <TouchableOpacity onPress={togglePoll} activeOpacity={0.7} style={styles.pollCloseBtn}>
+                  <X size={15} color={colors.textMuted} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
+              {pollOptions.map((opt, idx) => (
+                <View key={idx} style={styles.pollOptionRow}>
+                  <TextInput
+                    style={styles.pollOptionInput}
+                    placeholder={`Option ${idx + 1}`}
+                    placeholderTextColor={colors.textMuted}
+                    value={opt}
+                    onChangeText={t => setPollOption(idx, t)}
+                    maxLength={80}
+                  />
+                  {pollOptions.length > 2 && (
+                    <TouchableOpacity onPress={() => removePollOption(idx)} activeOpacity={0.7} style={styles.pollRemoveBtn}>
+                      <X size={13} color={colors.textMuted} strokeWidth={2.5} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+              {pollOptions.length < 4 && (
+                <TouchableOpacity style={styles.pollAddBtn} onPress={addPollOption} activeOpacity={0.8}>
+                  <Text style={styles.pollAddBtnText}>+ Add option</Text>
+                </TouchableOpacity>
+              )}
+              {pollOptions.filter(o => o.trim().length > 0).length < 2 && (
+                <Text style={styles.pollValidationText}>At least 2 options required</Text>
+              )}
+            </View>
+          )}
+
           {/* Attached media grid */}
           {mediaUris.length > 0 && (
             <View style={styles.mediaGrid}>
@@ -550,11 +671,11 @@ export default function CreatePostScreen() {
               <Text style={styles.qaLabel}>Promote</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('Poll', 'Not configured yet')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#ef444422' }]}>
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={togglePoll}>
+              <View style={[styles.qaIconWrap, { backgroundColor: showPoll ? '#ef444430' : '#ef444422', borderWidth: showPoll ? 1 : 0, borderColor: '#ef4444' }]}>
                 <BarChart2 size={20} color="#ef4444" strokeWidth={2} />
               </View>
-              <Text style={styles.qaLabel}>Poll</Text>
+              <Text style={[styles.qaLabel, showPoll && { color: '#ef4444' }]}>Poll</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => setShowTokenPicker(true)}>
@@ -564,11 +685,11 @@ export default function CreatePostScreen() {
               <Text style={styles.qaLabel}>Token</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={() => Alert.alert('GIF', 'Not configured yet')}>
-              <View style={[styles.qaIconWrap, { backgroundColor: '#10b98122' }]}>
+            <TouchableOpacity style={styles.qaItem} activeOpacity={0.8} onPress={openGifPicker}>
+              <View style={[styles.qaIconWrap, { backgroundColor: gifUrl ? '#10b98130' : '#10b98122', borderWidth: gifUrl ? 1 : 0, borderColor: '#10b981' }]}>
                 <View style={qaGifBox}><Text style={qaGifText}>GIF</Text></View>
               </View>
-              <Text style={styles.qaLabel}>GIF</Text>
+              <Text style={[styles.qaLabel, gifUrl && { color: '#10b981' }]}>GIF</Text>
             </TouchableOpacity>
           </View>
 
@@ -807,8 +928,8 @@ export default function CreatePostScreen() {
           )}
 
           {promoteStep === 'confirm' && selectedTier && (
-            <>
-              <View style={styles.modalHeader}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 40 }}>
+              <View style={[styles.modalHeader, { paddingTop: spacing.xl }]}>
                 <Text style={styles.modalTitle}>Confirm Promotion</Text>
                 <TouchableOpacity onPress={() => setPromoteStep('select')}>
                   <X size={22} color={colors.textPrimary} strokeWidth={2.5} />
@@ -867,7 +988,7 @@ export default function CreatePostScreen() {
               <TouchableOpacity style={{ alignItems: 'center', marginTop: 12 }} onPress={() => setPromoteStep('select')} activeOpacity={0.7}>
                 <Text style={{ color: colors.textMuted, fontSize: 14 }}>Go back</Text>
               </TouchableOpacity>
-            </>
+            </ScrollView>
           )}
 
           {promoteStep === 'processing' && (
@@ -895,6 +1016,68 @@ export default function CreatePostScreen() {
                 <Text style={styles.promConfirmBtnText}>Got it — Write Post</Text>
               </TouchableOpacity>
             </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* GIF picker modal */}
+      <Modal
+        visible={showGifPicker}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowGifPicker(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Search GIFs</Text>
+            <TouchableOpacity onPress={() => setShowGifPicker(false)}>
+              <X size={22} color={colors.textPrimary} strokeWidth={2.5} />
+            </TouchableOpacity>
+          </View>
+
+          {!TENOR_KEY ? (
+            <View style={styles.gifNoKeyWrap}>
+              <Text style={styles.gifNoKeyText}>GIF search is not configured yet.</Text>
+              <Text style={styles.gifNoKeySub}>Add EXPO_PUBLIC_TENOR_API_KEY to your .env file.</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.searchBox}>
+                <Search size={18} color={colors.textMuted} strokeWidth={2} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search GIFs…"
+                  placeholderTextColor={colors.textMuted}
+                  value={gifQuery}
+                  onChangeText={searchGifs}
+                  autoFocus
+                />
+                {gifSearching && <ActivityIndicator size="small" color={colors.primary} />}
+              </View>
+              <FlatList
+                data={gifResults}
+                keyExtractor={item => item.id}
+                numColumns={2}
+                columnWrapperStyle={styles.gifGrid}
+                contentContainerStyle={{ padding: spacing.sm }}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.gifItem}
+                    onPress={() => selectGif(item.url)}
+                    activeOpacity={0.8}
+                  >
+                    <Image source={{ uri: item.preview }} style={styles.gifThumb} resizeMode="cover" />
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={
+                  gifQuery.length > 0 && !gifSearching ? (
+                    <Text style={styles.emptySearch}>No GIFs found</Text>
+                  ) : gifQuery.length === 0 ? (
+                    <Text style={[styles.emptySearch, { marginTop: 60 }]}>Search for GIFs above</Text>
+                  ) : null
+                }
+              />
+            </>
           )}
         </View>
       </Modal>
@@ -1175,4 +1358,61 @@ const styles = StyleSheet.create({
   },
   pickerOptionText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary },
   pickerOptionActive: { color: colors.primary },
+
+  // GIF preview
+  gifPreviewWrap: {
+    marginBottom: spacing.lg, borderRadius: 16, overflow: 'hidden', position: 'relative',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+  },
+  gifPreview: { width: '100%', height: 200 },
+  removeGifBtn: {
+    position: 'absolute', top: 8, right: 8,
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // GIF picker
+  gifNoKeyWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, paddingHorizontal: spacing.xxl },
+  gifNoKeyText: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, textAlign: 'center' },
+  gifNoKeySub: { fontSize: 13, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
+  gifGrid: { gap: spacing.sm, paddingHorizontal: spacing.sm },
+  gifItem: { flex: 1, borderRadius: 12, overflow: 'hidden', margin: 4, minHeight: 90 },
+  gifThumb: { width: '100%', height: 100, backgroundColor: '#1A1A2E' },
+
+  // Poll composer
+  pollComposer: {
+    backgroundColor: '#12121E',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  pollHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm,
+  },
+  pollHeaderText: { fontSize: 13, fontWeight: '700', color: '#ef4444', flex: 1 },
+  pollCloseBtn: { padding: 2 },
+  pollOptionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+  },
+  pollOptionInput: {
+    flex: 1,
+    fontSize: 15, color: colors.textPrimary, fontWeight: '500',
+    backgroundColor: '#1A1A2A',
+    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+    paddingHorizontal: spacing.md, paddingVertical: 10,
+  },
+  pollRemoveBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#2A2A3A', justifyContent: 'center', alignItems: 'center',
+  },
+  pollAddBtn: {
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)', borderStyle: 'dashed',
+    borderRadius: 8, paddingVertical: 8, alignItems: 'center',
+  },
+  pollAddBtnText: { fontSize: 13, fontWeight: '700', color: '#ef4444' },
+  pollValidationText: { fontSize: 11, color: colors.textMuted, fontWeight: '500', textAlign: 'center' },
 });

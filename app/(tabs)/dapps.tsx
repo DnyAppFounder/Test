@@ -508,8 +508,8 @@ function GameCitySection() {
 const gameStyles = StyleSheet.create({
   arenaContainer: {
     flex: 1,
-    paddingHorizontal: spacing.xxl,
-    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
   },
   scroll: { flex: 1 },
   scrollContent: {
