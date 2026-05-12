@@ -9,15 +9,7 @@ import {
   Animated,
   ActivityIndicator,
 } from 'react-native';
-import {
-  Shield,
-  X,
-  TriangleAlert as AlertTriangle,
-  Lock,
-  Delete,
-  CircleCheck as CheckCircle,
-  XCircle,
-} from 'lucide-react-native';
+import { Shield, X, TriangleAlert as AlertTriangle, Lock, Delete, CircleCheck as CheckCircle, Circle as XCircle } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize } from '@/constants/theme';
 import { useSecurity } from '@/contexts/SecurityContext';
