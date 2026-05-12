@@ -60,6 +60,8 @@ interface TradingViewChartProps {
   currentPrice?: number;
   pairAddress?: string;
   tokenMint?: string;
+  chartHeight?: number;
+  hideTokenHeader?: boolean;
 }
 
 const ALL_TIMEFRAMES: { key: TimeFrame | 'ALL'; label: string }[] = [
@@ -121,15 +123,17 @@ export function TradingViewChart({
   currentPrice,
   pairAddress,
   tokenMint,
+  chartHeight,
+  hideTokenHeader = false,
 }: TradingViewChartProps) {
   const { width: screenWidth } = useWindowDimensions();
   const chartWidth = Math.min(screenWidth - 32, 600);
 
   // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
-  const CHART_H  = isMobile ? 380 : 240;
-  const VOL_H    = isMobile ? 64  : 40;
-  const PAD      = { top: 12, right: isMobile ? 76 : 60, bottom: 4, left: 4 };
+  const CHART_H  = chartHeight ?? (isMobile ? 270 : 220);
+  const VOL_H    = isMobile ? 52  : 36;
+  const PAD      = { top: 10, right: isMobile ? 72 : 60, bottom: 4, left: 4 };
 
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
     name: symbol, symbol, price: currentPrice ?? 0, priceChange24h: 0, pairAddress,
@@ -547,9 +551,9 @@ export function TradingViewChart({
 
   // ── chart header ──────────────────────────────────────────────────────────
   const header = (
-    <View style={styles.chartHeader}>
-      {/* Token info row: logo | name+addr | price+change */}
-      <View style={styles.tokenInfoRow}>
+    <View style={[styles.chartHeader, hideTokenHeader && styles.chartHeaderSlim]}>
+      {/* Token info row: logo | name+addr | price+change — hidden when parent renders its own */}
+      {!hideTokenHeader && <View style={styles.tokenInfoRow}>
         {/* Logo — large rounded square */}
         {resolvedInfo?.image ? (
           <Image source={{ uri: resolvedInfo.image }} style={styles.tokenLogoLg} />
@@ -591,7 +595,7 @@ export function TradingViewChart({
             </Text>
           </View>
         </View>
-      </View>
+      </View>}
 
       {/* Timeframe row + chart controls */}
       <View style={styles.tfControlRow}>
@@ -1148,7 +1152,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#09090F',
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    marginBottom: spacing.md,
+    marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(139,92,246,0.18)',
   },
@@ -1159,6 +1163,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(139,92,246,0.08)',
     gap: 8,
+  },
+  chartHeaderSlim: {
+    paddingTop: 8,
+    paddingBottom: 6,
+    gap: 0,
   },
   // Token info row: [logo] [name+addr flex1] [price+change]
   tokenInfoRow: {
@@ -1248,7 +1257,7 @@ const styles = StyleSheet.create({
   crosshairClose: { padding: 4 },
   crosshairCloseText: { fontSize: 11, color: colors.textMuted },
   // Chart SVG wrapper
-  svgWrap: { paddingTop: spacing.sm, paddingBottom: 2, position: 'relative', overflow: 'hidden' },
+  svgWrap: { paddingTop: 4, paddingBottom: 2, position: 'relative', overflow: 'hidden' },
   // Loading / unavailable
   loadingWrap:     { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
   loadingSubText:  { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },

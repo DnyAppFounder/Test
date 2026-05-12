@@ -9,6 +9,7 @@ import {
   Image,
   RefreshControl,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -25,6 +26,8 @@ import {
   Users,
   Crown,
   Share2,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
@@ -50,11 +53,21 @@ const BOTTOM_TABS: { key: BottomTab; label: string; icon: any }[] = [
   { key: 'holders', label: 'Holders', icon: Users },
 ];
 
+function fmtTokenPrice(p: number): string {
+  if (!p) return '0';
+  if (p >= 10000) return p.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.001) return p.toFixed(6);
+  if (p >= 0.000001) return p.toFixed(8);
+  return p.toExponential(3);
+}
+
 export default function TokenDetailScreen() {
   const { address } = useLocalSearchParams<{ address: string }>();
   const router = useRouter();
   const { activeAddress, tokens } = useWallet();
   const { profile } = useProfile();
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
 
   const [token, setToken] = useState<LiveToken | null>(null);
   const [loading, setLoading] = useState(true);
@@ -258,6 +271,16 @@ export default function TokenDetailScreen() {
   const shortAddr = token.address
     ? `${token.address.slice(0, 6)}...${token.address.slice(-4)}`
     : '';
+  const isUp = (token.priceChange24h ?? 0) >= 0;
+  const changeColor = isUp ? '#A78BFA' : '#EC4899';
+
+  // Calculate available chart height based on screen size
+  const isMobile = screenWidth < 768;
+  // Reserve: topBar(56) + tokenInfo(96) + tradePanelApprox(198) + bottomSafeArea(34) + extra padding(40)
+  const reservedHeight = 56 + 96 + 198 + 34 + 40;
+  const dynamicChartH = isMobile
+    ? Math.min(280, Math.max(200, screenHeight - reservedHeight))
+    : 220;
 
   const tokenInfoForChart: TokenInfo = {
     name: token.name,
@@ -272,28 +295,19 @@ export default function TokenDetailScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Top bar */}
+      {/* Compact top bar: < SYMBOL on left | icons on right */}
       <View style={styles.topBar}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
-        </TouchableOpacity>
-        <View style={styles.topBarCenter}>
-          {token.image ? (
-            <Image source={{ uri: token.image }} style={styles.topBarLogo} />
-          ) : (
-            <View style={styles.topBarLogoFallback}>
-              <Text style={styles.topBarLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
-            </View>
-          )}
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+          <ArrowLeft size={18} color={colors.textPrimary} strokeWidth={2.5} />
           <Text style={styles.topBarSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
-        </View>
+        </TouchableOpacity>
         <View style={styles.topBarRight}>
           <TouchableOpacity
             style={styles.iconBtn}
             onPress={() => setActiveBottomTab('chat')}
             activeOpacity={0.7}
           >
-            <MessageSquare size={17} color={activeBottomTab === 'chat' ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
+            <MessageSquare size={16} color={activeBottomTab === 'chat' ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.iconBtn, sharedToken && styles.iconBtnActive]}
@@ -301,13 +315,13 @@ export default function TokenDetailScreen() {
             activeOpacity={0.7}
           >
             {sharedToken
-              ? <CheckCircle2 size={17} color="#A78BFA" strokeWidth={2} />
-              : <Share2 size={17} color={colors.textMuted} strokeWidth={2} />}
+              ? <CheckCircle2 size={16} color="#A78BFA" strokeWidth={2} />
+              : <Share2 size={16} color={colors.textMuted} strokeWidth={2} />}
           </TouchableOpacity>
           {!checkingWatchlist && (
             <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
               <Star
-                size={17}
+                size={16}
                 color={isWatchlisted ? '#F59E0B' : colors.textMuted}
                 fill={isWatchlisted ? '#F59E0B' : 'transparent'}
                 strokeWidth={2}
@@ -317,16 +331,49 @@ export default function TokenDetailScreen() {
         </View>
       </View>
 
+      {/* Compact token info row — logo | name + mint | price + change */}
+      <View style={styles.tokenInfoRow}>
+        {token.image ? (
+          <Image source={{ uri: token.image }} style={styles.tokenInfoLogo} />
+        ) : (
+          <View style={styles.tokenInfoLogoFallback}>
+            <Text style={styles.tokenInfoLogoText}>{(token.symbol ?? '??').slice(0, 2).toUpperCase()}</Text>
+          </View>
+        )}
+        <View style={styles.tokenInfoMid}>
+          <Text style={styles.tokenInfoName} numberOfLines={1}>{token.name}</Text>
+          <TouchableOpacity style={styles.tokenInfoAddrRow} onPress={copyAddress} activeOpacity={0.7}>
+            <Text style={styles.tokenInfoAddr}>{shortAddr}</Text>
+            {copiedAddr
+              ? <CheckCircle2 size={11} color="#A78BFA" strokeWidth={2} />
+              : <Copy size={11} color="rgba(255,255,255,0.35)" strokeWidth={2} />}
+          </TouchableOpacity>
+        </View>
+        <View style={styles.tokenInfoPriceCol}>
+          <Text style={styles.tokenInfoPrice}>{fmtTokenPrice(displayPrice)}</Text>
+          <View style={styles.tokenInfoChangeRow}>
+            {isUp
+              ? <TrendingUp size={11} color={changeColor} strokeWidth={2.5} />
+              : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
+            <Text style={[styles.tokenInfoChangePct, { color: changeColor }]}>
+              {isUp ? '+' : ''}{(token.priceChange24h ?? 0).toFixed(2)}%
+            </Text>
+          </View>
+        </View>
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {/* Chart — includes unified header (logo, name, pair, mcap/price, change, timeframes, chart type) */}
+        {/* Chart — timeframe row is inside the chart component (hideTokenHeader hides logo/price only) */}
         <View style={styles.chartWrap}>
           <ErrorBoundary fallbackLabel="Chart unavailable">
             <TradingViewChart
               tokenInfo={tokenInfoForChart}
               tokenMint={token.address}
+              hideTokenHeader={true}
+              chartHeight={dynamicChartH}
             />
           </ErrorBoundary>
         </View>
@@ -532,67 +579,108 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingTop: 54,
-    paddingBottom: spacing.md,
+    paddingHorizontal: 14,
+    paddingTop: 52,
+    paddingBottom: 8,
     backgroundColor: '#0A0A0F',
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#12121A',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  topBarCenter: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-  },
-  topBarLogo: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-  },
-  topBarLogoFallback: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#1A1A28',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  topBarLogoText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: colors.primary,
+    gap: 5,
   },
   topBarSymbol: {
-    fontSize: fontSize.md,
+    fontSize: 17,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: '#A78BFA',
   },
   topBarRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 6,
   },
   iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.15)',
+  },
+  iconBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderColor: 'rgba(139,92,246,0.4)',
+  },
+  // Compact token info row
+  tokenInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+    gap: 12,
+    backgroundColor: '#0A0A0F',
+  },
+  tokenInfoLogo: {
+    width: 60,
+    height: 60,
+    borderRadius: 12,
+    backgroundColor: '#12121A',
+  },
+  tokenInfoLogoFallback: {
+    width: 60,
+    height: 60,
+    borderRadius: 12,
     backgroundColor: '#12121A',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(139,92,246,0.2)',
   },
-  iconBtnActive: {
-    backgroundColor: 'rgba(139,92,246,0.15)',
-    borderColor: 'rgba(139,92,246,0.35)',
+  tokenInfoLogoText: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#A78BFA',
+  },
+  tokenInfoMid: {
+    flex: 1,
+    gap: 4,
+  },
+  tokenInfoName: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: -0.3,
+  },
+  tokenInfoAddrRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  tokenInfoAddr: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.4)',
+    fontFamily: 'SpaceMono-Regular',
+  },
+  tokenInfoPriceCol: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  tokenInfoPrice: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#fff',
+    letterSpacing: -0.5,
+  },
+  tokenInfoChangeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  tokenInfoChangePct: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   loadingContainer: {
     flex: 1,
@@ -717,27 +805,26 @@ const styles = StyleSheet.create({
   changeUp: { color: colors.success },
   changeDown: { color: colors.error },
   chartWrap: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingHorizontal: 8,
+    paddingTop: 0,
   },
-  // Trading
   tradingWrap: {
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.xs,
-    marginBottom: spacing.md,
+    paddingHorizontal: 8,
+    marginTop: 2,
+    marginBottom: 4,
   },
   // Stats
   statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
+    marginHorizontal: 8,
+    marginBottom: spacing.sm,
     backgroundColor: '#12121A',
     borderRadius: borderRadius.md,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
   },
   statCard: {
     flex: 1,
@@ -762,8 +849,8 @@ const styles = StyleSheet.create({
   },
   // Info card
   infoCard: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
+    marginHorizontal: 8,
+    marginBottom: spacing.sm,
     backgroundColor: '#12121A',
     borderRadius: borderRadius.md,
     borderWidth: 1,
@@ -811,7 +898,7 @@ const styles = StyleSheet.create({
   // Bottom tabs
   bottomTabBar: {
     flexDirection: 'row',
-    marginHorizontal: spacing.lg,
+    marginHorizontal: 8,
     borderRadius: borderRadius.md,
     backgroundColor: '#12121A',
     borderWidth: 1,
@@ -845,7 +932,7 @@ const styles = StyleSheet.create({
   },
   // Tab content
   tabContent: {
-    marginHorizontal: spacing.lg,
+    marginHorizontal: 8,
     backgroundColor: '#12121A',
     borderRadius: borderRadius.md,
     borderWidth: 1,
