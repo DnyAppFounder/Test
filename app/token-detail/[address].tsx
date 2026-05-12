@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Image,
   RefreshControl,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -23,6 +24,7 @@ import {
   ArrowUpDown,
   Users,
   Crown,
+  Share2,
 } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
@@ -269,12 +271,31 @@ export default function TokenDetailScreen() {
           <Text style={styles.topBarSymbol}>{(token.symbol ?? '').toUpperCase()}</Text>
         </View>
         <View style={styles.topBarRight}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => setActiveBottomTab('chat')}
+            activeOpacity={0.7}
+          >
+            <MessageSquare size={17} color={activeBottomTab === 'chat' ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => {
+              const url = `https://solscan.io/token/${token.address}`;
+              if (Platform.OS === 'web') {
+                (window as any).open(url, '_blank');
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <Share2 size={17} color={colors.textMuted} strokeWidth={2} />
+          </TouchableOpacity>
           {!checkingWatchlist && (
             <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
               <Star
-                size={18}
-                color={isWatchlisted ? colors.warning : colors.textMuted}
-                fill={isWatchlisted ? colors.warning : 'transparent'}
+                size={17}
+                color={isWatchlisted ? '#F59E0B' : colors.textMuted}
+                fill={isWatchlisted ? '#F59E0B' : 'transparent'}
                 strokeWidth={2}
               />
             </TouchableOpacity>

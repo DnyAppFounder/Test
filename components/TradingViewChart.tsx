@@ -35,8 +35,7 @@ import {
   ChartArea as AreaChart,
   Copy,
   CircleCheck as CheckCircle2,
-  ChevronDown,
-  ChevronUp,
+  SlidersHorizontal,
 } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
@@ -128,9 +127,9 @@ export function TradingViewChart({
 
   // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
-  const CHART_H  = isMobile ? 300 : 220;
-  const VOL_H    = isMobile ? 70  : 40;
-  const PAD      = { top: 16, right: isMobile ? 72 : 58, bottom: 4, left: 4 };
+  const CHART_H  = isMobile ? 380 : 240;
+  const VOL_H    = isMobile ? 64  : 40;
+  const PAD      = { top: 12, right: isMobile ? 76 : 60, bottom: 4, left: 4 };
 
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
     name: symbol, symbol, price: currentPrice ?? 0, priceChange24h: 0, pairAddress,
@@ -528,7 +527,7 @@ export function TradingViewChart({
   const mcapVal    = resolvedInfo?.marketCap ?? null;
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
-  const changeColor = isUp ? '#10b981' : '#ef4444';
+  const changeColor = isUp ? '#A78BFA' : '#EC4899';
   const headerValue = valueMode === 'mcap' && mcapVal != null && mcapVal > 0
     ? fmtMcap(mcapVal)
     : `$${fmtPrice(displayPriceVal)}`;
@@ -545,77 +544,89 @@ export function TradingViewChart({
   // ── chart header ──────────────────────────────────────────────────────────
   const header = (
     <View style={styles.chartHeader}>
-      {/* Row 1: logo + name + value */}
-      <View style={styles.headerRow1}>
-        <View style={styles.tokenInfoGroup}>
-          {resolvedInfo?.image ? (
-            <Image source={{ uri: resolvedInfo.image }} style={styles.headerLogo} />
-          ) : (
-            <View style={styles.headerLogoFallback}>
-              <Text style={styles.headerLogoText}>{sym.slice(0, 2).toUpperCase()}</Text>
-            </View>
-          )}
-          <View style={styles.headerTextCol}>
-            <View style={styles.headerNameRow}>
-              <Text style={styles.headerName} numberOfLines={1}>{resolvedInfo?.name ?? sym}</Text>
-              {wsConnected && (
-                <Animated.View style={[styles.liveDot, { transform: [{ scale: dotPulse }] }]} />
-              )}
-            </View>
-            <Text style={styles.headerSymbol}>${sym.toUpperCase()}</Text>
-            {shortContractAddr ? (
-              <TouchableOpacity style={styles.addrRow} onPress={handleCopyAddr} activeOpacity={0.7}>
-                <Text style={styles.addrText}>{shortContractAddr}</Text>
-                {copiedAddr
-                  ? <CheckCircle2 size={10} color={colors.success} strokeWidth={2} />
-                  : <Copy size={10} color={colors.textMuted} strokeWidth={2} />}
-              </TouchableOpacity>
-            ) : null}
+      {/* Token info row: logo | name+addr | price+change */}
+      <View style={styles.tokenInfoRow}>
+        {/* Logo — large rounded square */}
+        {resolvedInfo?.image ? (
+          <Image source={{ uri: resolvedInfo.image }} style={styles.tokenLogoLg} />
+        ) : (
+          <View style={styles.tokenLogoLgFallback}>
+            <Text style={styles.tokenLogoLgText}>{sym.slice(0, 2).toUpperCase()}</Text>
           </View>
+        )}
+
+        {/* Name + addr col */}
+        <View style={styles.tokenInfoMid}>
+          <View style={styles.tokenNameRow}>
+            <Text style={styles.tokenNameText} numberOfLines={1}>{resolvedInfo?.name ?? sym}</Text>
+            {wsConnected && (
+              <Animated.View style={[styles.liveWsDot, { transform: [{ scale: dotPulse }] }]} />
+            )}
+          </View>
+          {shortContractAddr ? (
+            <TouchableOpacity style={styles.addrRow} onPress={handleCopyAddr} activeOpacity={0.7}>
+              <Text style={styles.addrText}>{shortContractAddr}</Text>
+              {copiedAddr
+                ? <CheckCircle2 size={10} color="#A78BFA" strokeWidth={2} />
+                : <Copy size={10} color="rgba(255,255,255,0.35)" strokeWidth={2} />}
+            </TouchableOpacity>
+          ) : null}
         </View>
 
-        <View style={styles.headerValueGroup}>
-          <Text style={styles.headerBigValue}>{headerValue}</Text>
-          <View style={styles.headerChangeRow}>
+        {/* Price + change (right) */}
+        <View style={styles.tokenPriceRight}>
+          <TouchableOpacity onPress={() => setValueMode(v => v === 'mcap' ? 'price' : 'mcap')} activeOpacity={0.8}>
+            <Text style={styles.tokenBigPrice}>{headerValue}</Text>
+          </TouchableOpacity>
+          <View style={styles.tokenChangeRow}>
             {isUp
               ? <TrendingUp size={11} color={changeColor} strokeWidth={2.5} />
               : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
-            <Text style={[styles.headerChangePct, { color: changeColor }]}>
+            <Text style={[styles.tokenChangePct, { color: changeColor }]}>
               {isUp ? '+' : ''}{change24h.toFixed(2)}%
             </Text>
           </View>
         </View>
       </View>
 
-      {/* Row 2: MCAP/PRICE toggle + chart type button */}
-      <View style={styles.headerRow2}>
-        <View style={styles.valueModeToggle}>
+      {/* Timeframe row + chart controls */}
+      <View style={styles.tfControlRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tfScroll}
+          contentContainerStyle={styles.tfScrollContent}
+        >
+          {ALL_TIMEFRAMES.map(tf => (
+            <TouchableOpacity
+              key={tf.key}
+              style={[styles.tfPill, timeframe === tf.key && styles.tfPillActive]}
+              onPress={() => setTimeframe(tf.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tfPillText, timeframe === tf.key && styles.tfPillTextActive]}>
+                {tf.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Chart mode + settings buttons */}
+        <View style={styles.chartCtrlBtns}>
           <TouchableOpacity
-            style={[styles.vmBtn, valueMode === 'mcap' && styles.vmBtnActive]}
-            onPress={() => setValueMode('mcap')} activeOpacity={0.8}>
-            <Text style={[styles.vmText, valueMode === 'mcap' && styles.vmTextActive]}>MCAP</Text>
+            style={[styles.chartCtrlBtn, showModePanel && styles.chartCtrlBtnActive]}
+            onPress={() => setShowModePanel(p => !p)}
+            activeOpacity={0.8}
+          >
+            <ModeIcon size={15} color={showModePanel ? '#A78BFA' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.vmBtn, valueMode === 'price' && styles.vmBtnActive]}
-            onPress={() => setValueMode('price')} activeOpacity={0.8}>
-            <Text style={[styles.vmText, valueMode === 'price' && styles.vmTextActive]}>PRICE</Text>
+          <TouchableOpacity style={styles.chartCtrlBtn} activeOpacity={0.8}>
+            <SlidersHorizontal size={15} color="rgba(255,255,255,0.6)" strokeWidth={2} />
           </TouchableOpacity>
         </View>
-
-        {/* Single chart type button */}
-        <TouchableOpacity
-          style={styles.chartTypeBtn}
-          onPress={() => setShowModePanel(p => !p)}
-          activeOpacity={0.8}
-        >
-          <ModeIcon size={14} color="#fff" strokeWidth={2} />
-          {showModePanel
-            ? <ChevronUp size={11} color="rgba(255,255,255,0.5)" strokeWidth={2} />
-            : <ChevronDown size={11} color="rgba(255,255,255,0.5)" strokeWidth={2} />}
-        </TouchableOpacity>
       </View>
 
-      {/* Chart type panel (shown when button clicked) */}
+      {/* Chart mode panel (conditional) */}
       {showModePanel && (
         <View style={styles.modePanelRow}>
           {CHART_MODES.map(m => {
@@ -635,20 +646,6 @@ export function TradingViewChart({
           })}
         </View>
       )}
-
-      {/* Row 3: Timeframes */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tfRowContent}>
-        {ALL_TIMEFRAMES.map(tf => (
-          <TouchableOpacity
-            key={tf.key}
-            style={[styles.tfBtn, timeframe === tf.key && styles.tfBtnActive]}
-            onPress={() => setTimeframe(tf.key)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tfText, timeframe === tf.key && styles.tfTextActive]}>{tf.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
     </View>
   );
 
@@ -741,7 +738,7 @@ export function TradingViewChart({
         <View style={styles.crosshairBar}>
           <Text style={styles.crosshairDate}>{fmtDateTime(crosshair.ts)}</Text>
           <Text style={styles.crosshairPrice}>${fmtPrice(crosshair.price)}</Text>
-          <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#10b981' : '#ef4444' }]}>
+          <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#A78BFA' : '#EC4899' }]}>
             {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%
           </Text>
           <TouchableOpacity onPress={dismissCrosshair} style={styles.crosshairClose}>
@@ -821,9 +818,9 @@ export function TradingViewChart({
               <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
             </SvgLinearGradient>
             <SvgLinearGradient id="mountainGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#10b981" stopOpacity="0.55" />
-              <Stop offset="60%"  stopColor="#10b981" stopOpacity="0.08" />
-              <Stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.55" />
+              <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.08" />
+              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
             </SvgLinearGradient>
             <SvgLinearGradient id="bondingGrad" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0%"   stopColor="#A78BFA" stopOpacity="0.45" />
@@ -831,12 +828,12 @@ export function TradingViewChart({
               <Stop offset="100%" stopColor="#4C1D95" stopOpacity="0" />
             </SvgLinearGradient>
             <SvgLinearGradient id="volGradGreen" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#10b981" stopOpacity="0.7" />
-              <Stop offset="100%" stopColor="#10b981" stopOpacity="0.2" />
+              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.8" />
+              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.25" />
             </SvgLinearGradient>
             <SvgLinearGradient id="volGradRed" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#ef4444" stopOpacity="0.7" />
-              <Stop offset="100%" stopColor="#ef4444" stopOpacity="0.2" />
+              <Stop offset="0%"   stopColor="#EC4899" stopOpacity="0.8" />
+              <Stop offset="100%" stopColor="#EC4899" stopOpacity="0.25" />
             </SvgLinearGradient>
           </Defs>
 
@@ -901,8 +898,8 @@ export function TradingViewChart({
                   return `L${x},${yOf(displayCandles[i - 1].close).toFixed(1)} L${x},${y}`;
                 }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
                 fill="url(#mountainGrad)" />
-              <Path d={linePts} stroke="#10b981" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={3} fill="#10b981" />
+              <Path d={linePts} stroke="#8B5CF6" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
             </>
           )}
 
@@ -929,7 +926,7 @@ export function TradingViewChart({
           {/* ── BAR ───────────────────────────────────────────────────────── */}
           {mode === 'bar' && displayCandles.map((c, i) => {
             const up   = c.close >= c.open;
-            const col  = up ? '#10b981' : '#ef4444';
+            const col  = up ? '#8B5CF6' : '#EC4899';
             const cx   = xOf(i);
             const bw   = Math.max(isMobile ? 4 : 2, (plotW / n) * 0.5);
             return (
@@ -944,7 +941,7 @@ export function TradingViewChart({
           {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
           {mode === 'candlestick' && displayCandles.map((c, i) => {
             const up       = c.close >= c.open;
-            const col      = up ? '#10b981' : '#ef4444';
+            const col      = up ? '#8B5CF6' : '#EC4899';
             const bodyTop  = yOf(Math.max(c.open, c.close));
             const bodyBot  = yOf(Math.min(c.open, c.close));
             const bodyH    = Math.max(1.5, bodyBot - bodyTop);
@@ -961,13 +958,13 @@ export function TradingViewChart({
           {/* ── Live price dashed horizontal line ─────────────────────────── */}
           <Line
             x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
-            stroke={isUp ? '#10b981' : '#ef4444'}
-            strokeWidth={1} strokeDasharray="4,3" opacity={0.6} />
+            stroke="#8B5CF6"
+            strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
           {/* Price pill on right edge */}
           <Rect
             x={chartWidth - PAD.right + 1} y={currentY - 9}
             width={PAD.right - 2} height={18}
-            fill={isUp ? '#059669' : '#dc2626'} rx={3} />
+            fill="#6D28D9" rx={4} />
           <SvgText
             x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
             fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
@@ -977,7 +974,7 @@ export function TradingViewChart({
           {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
           {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
             <Circle cx={lastX} cy={lastY} r={3}
-              fill={mode === 'mountain' ? '#10b981' : '#A78BFA'} opacity={1} />
+              fill="#A78BFA" opacity={1} />
           )}
 
           {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
@@ -1062,9 +1059,7 @@ export function TradingViewChart({
                 left: lastX - 10,
                 top:  lastY - 10,
                 transform: [{ scale: dotPulse }],
-                backgroundColor: mode === 'mountain'
-                  ? 'rgba(16,185,129,0.22)'
-                  : 'rgba(167,139,250,0.22)',
+                backgroundColor: 'rgba(167,139,250,0.22)',
               },
             ]}
             pointerEvents="none"
@@ -1077,73 +1072,79 @@ export function TradingViewChart({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#0D0D17',
+    backgroundColor: '#09090F',
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
     marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.15)',
+    borderColor: 'rgba(139,92,246,0.18)',
   },
   chartHeader: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
     paddingBottom: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(139,92,246,0.08)',
-    gap: spacing.sm,
+    gap: 8,
   },
-  headerRow1: {
+  // Token info row: [logo] [name+addr flex1] [price+change]
+  tokenInfoRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
   },
-  tokenInfoGroup: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-    flex: 1,
+  tokenLogoLg: {
+    width: 44, height: 44, borderRadius: 10,
+    backgroundColor: '#1A1A2E',
   },
-  headerLogo: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#1A1A28', marginTop: 2,
-  },
-  headerLogoFallback: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#1A1A28',
+  tokenLogoLgFallback: {
+    width: 44, height: 44, borderRadius: 10,
+    backgroundColor: '#1A1A2E',
     justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)', marginTop: 2,
-  },
-  headerLogoText: { fontSize: 12, fontWeight: '900', color: colors.primary },
-  headerTextCol: { gap: 2, flex: 1 },
-  headerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  headerName: { fontSize: 15, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.2 },
-  headerSymbol: { fontSize: 11, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.3 },
-  addrRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
-  addrText: { fontSize: 10, color: colors.textMuted, fontFamily: 'SpaceMono-Regular' },
-  liveDot: {
-    width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#10b981',
-  },
-  headerValueGroup: { alignItems: 'flex-end', gap: 3 },
-  headerBigValue: { fontSize: 18, fontWeight: '900', color: colors.textPrimary, letterSpacing: -0.5 },
-  headerChangeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  headerChangePct: { fontSize: 12, fontWeight: '700' },
-  headerRow2: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-  },
-  valueModeToggle: {
-    flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: borderRadius.sm, padding: 2, gap: 2,
-  },
-  vmBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6 },
-  vmBtnActive: { backgroundColor: colors.primary },
-  vmText: { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.35)', letterSpacing: 0.5 },
-  vmTextActive: { color: '#fff' },
-  // Chart type button (single)
-  chartTypeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(139,92,246,0.15)',
-    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7,
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
+  },
+  tokenLogoLgText: { fontSize: 14, fontWeight: '900', color: '#A78BFA' },
+  tokenInfoMid: { flex: 1, gap: 2 },
+  tokenNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  tokenNameText: { fontSize: 15, fontWeight: '800', color: '#fff', letterSpacing: -0.2, flexShrink: 1 },
+  liveWsDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#A78BFA',
+  },
+  addrRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  addrText: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'SpaceMono-Regular' },
+  tokenPriceRight: { alignItems: 'flex-end', gap: 3 },
+  tokenBigPrice: { fontSize: 20, fontWeight: '900', color: '#fff', letterSpacing: -0.5 },
+  tokenChangeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  tokenChangePct: { fontSize: 12, fontWeight: '700' },
+  // Timeframe pill row + chart ctrl buttons
+  tfControlRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+  },
+  tfScroll: { flex: 1 },
+  tfScrollContent: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 4 },
+  tfPill: {
+    paddingHorizontal: 9, paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  tfPillActive: {
+    backgroundColor: 'rgba(139,92,246,0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.5)',
+  },
+  tfPillText: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
+  tfPillTextActive: { color: '#A78BFA' },
+  chartCtrlBtns: { flexDirection: 'row', gap: 4 },
+  chartCtrlBtn: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  chartCtrlBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderColor: 'rgba(139,92,246,0.4)',
   },
   // Mode panel
   modePanelRow: {
@@ -1160,16 +1161,6 @@ const styles = StyleSheet.create({
   modePanelItemActive: { backgroundColor: colors.primary },
   modePanelLabel: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
   modePanelLabelActive: { color: '#fff' },
-  // Timeframes
-  tfRowContent: { gap: 3, paddingVertical: 2 },
-  tfBtn: {
-    paddingHorizontal: 11, paddingVertical: 7,
-    alignItems: 'center', borderRadius: borderRadius.sm,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  tfBtnActive: { backgroundColor: colors.primary },
-  tfText:       { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.35)' },
-  tfTextActive: { color: '#fff' },
   // Crosshair info bar
   crosshairBar: {
     flexDirection: 'row', alignItems: 'center',
@@ -1198,9 +1189,9 @@ const styles = StyleSheet.create({
   },
   returnLiveBtn: {
     alignSelf: 'center',
-    backgroundColor: 'rgba(16,185,129,0.15)',
+    backgroundColor: 'rgba(139,92,246,0.15)',
     borderWidth: 1,
-    borderColor: 'rgba(16,185,129,0.4)',
+    borderColor: 'rgba(139,92,246,0.4)',
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 6,
@@ -1209,7 +1200,7 @@ const styles = StyleSheet.create({
   returnLiveText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#10b981',
+    color: '#A78BFA',
     letterSpacing: 0.3,
   },
 });
