@@ -88,6 +88,19 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
 const TIME_H = 18;
 const BG_TILE_W = 56; // width of one repeating background tile (px)
 
+// Milliseconds per candle bucket
+const BUCKET_MS: Record<string, number> = {
+  '1m':  60_000,
+  '5m':  300_000,
+  '15m': 900_000,
+  '1H':  3_600_000,
+  '4H':  14_400_000,
+  '1D':  86_400_000,
+  '1W':  604_800_000,
+  '1M':  2_592_000_000,
+  'ALL': 86_400_000,
+};
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
@@ -185,6 +198,13 @@ export function TradingViewChart({
   const displayCandlesRef = useRef<CandleData[]>([]);
   const pairAddrRef   = useRef<string | null>(pairAddress ?? null);
 
+  // Live time engine refs — updated every second to slide chart forward in real time
+  const [clockTick, setClockTick] = useState(0);
+  const rightTimeRef  = useRef<number>(Date.now());
+  const leftTimeRef   = useRef<number>(Date.now() - 3_600_000 * 60);
+  const visibleMsRef  = useRef<number>(3_600_000 * 60);
+  const bucketMsRef   = useRef<number>(3_600_000);
+
   useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
   useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
@@ -243,6 +263,16 @@ export function TradingViewChart({
     ]));
     loop.start();
     return () => loop.stop();
+  }, []);
+
+  // Visual time engine — advances rightTime every second so the chart slides left
+  useEffect(() => {
+    rightTimeRef.current = Date.now();
+    const id = setInterval(() => {
+      rightTimeRef.current = Date.now();
+      setClockTick(t => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
   }, []);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
@@ -436,6 +466,23 @@ export function TradingViewChart({
   const plotH = CHART_H - PAD.top - PAD.bottom;
   const n     = displayCandles.length;
 
+  // ── Live time engine geometry ─────────────────────────────────────────────
+  const bucketMs  = BUCKET_MS[timeframe] ?? 3_600_000;
+  const visibleMs = maxVisible * bucketMs;
+  // When scrolled back, shift the entire window back by the same amount
+  const scrollOffsetMs = clampedOffset * bucketMs;
+  const rightTime = rightTimeRef.current - scrollOffsetMs;
+  const leftTime  = rightTime - visibleMs;
+  // Sync refs so stale closures (panResponder) can read current values
+  bucketMsRef.current  = bucketMs;
+  visibleMsRef.current = visibleMs;
+  leftTimeRef.current  = leftTime;
+
+  // Convert a Unix-ms timestamp to a chart x-coordinate
+  function tsToX(ts: number): number {
+    return PAD.left + ((ts - leftTime) / visibleMs) * plotW;
+  }
+
   const highs  = n > 0 ? displayCandles.map(c => c.high)   : [0];
   const lows   = n > 0 ? displayCandles.map(c => c.low)    : [0];
   const maxP   = Math.max(...highs);
@@ -445,7 +492,12 @@ export function TradingViewChart({
   const barW    = Math.max(isMobile ? 3   : 1.5, (plotW / Math.max(n, 1)) * 0.55);
   const candleW = Math.max(isMobile ? 6   : 2,   (plotW / Math.max(n, 1)) * (isMobile ? 0.72 : 0.6));
 
-  function xOf(i: number) { return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1)); }
+  // candle center x — uses real timestamp so chart slides left as time passes
+  function xOf(i: number): number {
+    const c = displayCandles[i];
+    if (!c) return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1));
+    return tsToX(c.timestamp + bucketMs / 2);
+  }
   function yOf(price: number) { return PAD.top + plotH - ((price - minP) / priceRange) * plotH; }
   function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
   function bondingX(i: number) {
@@ -460,14 +512,25 @@ export function TradingViewChart({
   const updateCrosshairAt = (localX: number, _localY: number) => {
     const cands = displayCandlesRef.current;
     if (!cands.length) return;
-    const nn = cands.length;
-    const pw = plotWRef.current;
-    const step = pw / nn;
-    const rawIdx = Math.round((localX - PAD.left) / step - 0.5);
-    const idx = Math.max(0, Math.min(nn - 1, rawIdx));
-    const c = cands[idx];
-    const cx = PAD.left + (idx + 0.5) * step;
-    const cy = PAD.top + (CHART_H - PAD.top - PAD.bottom) - ((c.close - Math.min(...cands.map(x => x.low))) / (((Math.max(...cands.map(x => x.high)) - Math.min(...cands.map(x => x.low))) || 1))) * (CHART_H - PAD.top - PAD.bottom);
+    const pw  = plotWRef.current;
+    const lt  = leftTimeRef.current;
+    const vm  = visibleMsRef.current;
+    const bm  = bucketMsRef.current;
+    // Convert pixel x → timestamp, then find the nearest candle
+    const rawTs = lt + ((localX - PAD.left) / pw) * vm;
+    let closestIdx = 0;
+    let closestDist = Infinity;
+    for (let i = 0; i < cands.length; i++) {
+      const d = Math.abs(cands[i].timestamp + bm / 2 - rawTs);
+      if (d < closestDist) { closestDist = d; closestIdx = i; }
+    }
+    const idx = closestIdx;
+    const c   = cands[idx];
+    const cx  = PAD.left + ((c.timestamp + bm / 2 - lt) / vm) * pw;
+    const candsLow   = Math.min(...cands.map(x => x.low));
+    const candsHigh  = Math.max(...cands.map(x => x.high));
+    const candsRange = (candsHigh - candsLow) || 1;
+    const cy  = PAD.top + (CHART_H - PAD.top - PAD.bottom) - ((c.close - candsLow) / candsRange) * (CHART_H - PAD.top - PAD.bottom);
     const firstClose = cands[0].close;
     const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
     setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
@@ -797,13 +860,17 @@ export function TradingViewChart({
     return { price, y: yOf(price) };
   });
 
-  // Time labels — evenly distributed, avoid edges crowding
-  const timeLabelCount = Math.min(6, n);
-  const timeLabelIndices = timeLabelCount <= 1
-    ? [0]
-    : Array.from({ length: timeLabelCount }, (_, i) =>
-        Math.round(i * (n - 1) / (timeLabelCount - 1))
-      );
+  // Time labels — generated from leftTime→rightTime at regular bucket intervals
+  // Aim for ~5-6 labels; step = multiple of bucketMs so labels land on clean boundaries
+  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(maxVisible / 6));
+  const firstLabelTs    = Math.ceil(leftTime / timeLabelStepMs) * timeLabelStepMs;
+  const timeLabels: { ts: number; x: number }[] = [];
+  for (let ts = firstLabelTs; ts <= rightTime; ts += timeLabelStepMs) {
+    const x = tsToX(ts);
+    if (x >= PAD.left + 16 && x <= chartWidth - PAD.right - 10) {
+      timeLabels.push({ ts, x });
+    }
+  }
 
   // Live price line (scaled to current display mode)
   const scaledLivePrice = displayPriceVal * mcapScale;
@@ -814,6 +881,12 @@ export function TradingViewChart({
   const lastCandle = displayCandles[n - 1];
   const lastX      = xOf(n - 1);
   const lastY      = yOf(lastCandle.close);
+
+  // Visual continuation segment: flat line from last candle's close to current time
+  // Drawn only when live (not scrolled back), visual only — no data stored
+  const contRightX = PAD.left + plotW; // = tsToX(rightTime) by definition
+  const contY      = lastY;
+  const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
   // Crosshair display values
   const chPrice = crosshair ? crosshair.price : null;
@@ -1050,6 +1123,17 @@ export function TradingViewChart({
             );
           })}
 
+          {/* ── Visual time continuation (flat line from last close → now) ── */}
+          {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+            <Line
+              x1={lastX} y1={contY}
+              x2={Math.min(contRightX, chartWidth - PAD.right)} y2={contY}
+              stroke="rgba(167,139,250,0.45)"
+              strokeWidth={1.5}
+              strokeDasharray="3,4"
+            />
+          )}
+
           {/* ── Live price dashed horizontal line ─────────────────────────── */}
           {showPriceLine && (
             <>
@@ -1100,24 +1184,18 @@ export function TradingViewChart({
             x2={chartWidth - PAD.right} y2={CHART_H}
             stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
 
-          {/* ── Time labels — below volume bars ───────────────────────────── */}
-          {timeLabelIndices.map(i => {
-            if (i >= n) return null;
-            const labelX = xOf(i);
-            // clamp to avoid clipping at edges
-            const clampedX = Math.max(PAD.left + 18, Math.min(chartWidth - PAD.right - 18, labelX));
-            return (
-              <SvgText
-                key={`tl${i}`}
-                x={clampedX}
-                y={CHART_H + VOL_H + TIME_H - 3}
-                fontSize={9}
-                fill="rgba(255,255,255,0.35)"
-                textAnchor="middle">
-                {fmtTime(displayCandles[i].timestamp, timeframe)}
-              </SvgText>
-            );
-          })}
+          {/* ── Time labels — timestamp-based, slide as real time passes ──── */}
+          {timeLabels.map(({ ts, x }) => (
+            <SvgText
+              key={`tl${ts}`}
+              x={x}
+              y={CHART_H + VOL_H + TIME_H - 3}
+              fontSize={9}
+              fill="rgba(255,255,255,0.35)"
+              textAnchor="middle">
+              {fmtTime(ts, timeframe)}
+            </SvgText>
+          ))}
 
           {/* ── Crosshair lines ───────────────────────────────────────────── */}
           {crosshair && (
