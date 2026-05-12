@@ -115,6 +115,9 @@ function fmtDateTime(ts: number): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
          d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+function fmtValue(v: number, mode: ValueMode): string {
+  return mode === 'mcap' ? fmtMcap(v) : `$${fmtPrice(v)}`;
+}
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export function TradingViewChart({
@@ -400,13 +403,31 @@ export function TradingViewChart({
   }, [tokenMint, applyLivePrice]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
+  // MCAP scale factor — converts USD price candles to market-cap values when
+  // the user selects MCAP display mode. ratio = marketCap / currentPrice ≈ supply
+  const _earlyPrice = livePrice ?? (currentPrice != null && currentPrice > 0 ? currentPrice
+    : (candles.length > 0 ? candles[candles.length - 1].close : 0));
+  const _earlyMcap  = resolvedInfo?.marketCap ?? null;
+  const mcapScale   = valueMode === 'mcap' && _earlyMcap != null && _earlyMcap > 0 && _earlyPrice > 0
+    ? _earlyMcap / _earlyPrice
+    : 1;
+
   const maxVisible = isMobile ? 40 : 80;
   const totalCount = candles.length;
   // panOffsetCandles=0 → show last maxVisible; increasing offset scrolls back in time
   const clampedOffset   = Math.max(0, Math.min(panOffsetCandles, Math.max(0, totalCount - maxVisible)));
   const endIdx          = Math.max(0, totalCount - clampedOffset);
   const startIdx        = Math.max(0, endIdx - maxVisible);
-  const displayCandles  = candles.slice(startIdx, endIdx || totalCount);
+  const rawSlice        = candles.slice(startIdx, endIdx || totalCount);
+  const displayCandles  = mcapScale !== 1
+    ? rawSlice.map(c => ({
+        ...c,
+        open:  c.open  * mcapScale,
+        high:  c.high  * mcapScale,
+        low:   c.low   * mcapScale,
+        close: c.close * mcapScale,
+      }))
+    : rawSlice;
   // Sync ref so the crosshair handler always sees the current visible set
   displayCandlesRef.current = displayCandles;
 
@@ -739,7 +760,7 @@ export function TradingViewChart({
         <View style={[styles.unavailableWrap, { height: CHART_H }]}>
           {displayPriceVal > 0 ? (
             <>
-              <Text style={styles.priceFallback}>${fmtPrice(displayPriceVal)}</Text>
+              <Text style={styles.priceFallback}>{fmtValue(displayPriceVal * mcapScale, valueMode)}</Text>
               <Text style={styles.unavailableText}>Chart data loading…</Text>
             </>
           ) : (
@@ -784,8 +805,9 @@ export function TradingViewChart({
         Math.round(i * (n - 1) / (timeLabelCount - 1))
       );
 
-  // Live price line
-  const clampedLive = displayPriceVal > maxP ? maxP : displayPriceVal < minP ? minP : displayPriceVal;
+  // Live price line (scaled to current display mode)
+  const scaledLivePrice = displayPriceVal * mcapScale;
+  const clampedLive = scaledLivePrice > maxP ? maxP : scaledLivePrice < minP ? minP : scaledLivePrice;
   const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
 
   // Last candle point for animated dot
@@ -808,7 +830,7 @@ export function TradingViewChart({
       {crosshair && (
         <View style={styles.crosshairBar}>
           <Text style={styles.crosshairDate}>{fmtDateTime(crosshair.ts)}</Text>
-          <Text style={styles.crosshairPrice}>${fmtPrice(crosshair.price)}</Text>
+          <Text style={styles.crosshairPrice}>{fmtValue(crosshair.price, valueMode)}</Text>
           <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#A78BFA' : '#EC4899' }]}>
             {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%
           </Text>
@@ -926,7 +948,7 @@ export function TradingViewChart({
                 fill={isMobile ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'}
                 fontWeight={isMobile ? '600' : '400'}
                 textAnchor="start">
-                {fmtPrice(price)}
+                {fmtValue(price, valueMode)}
               </SvgText>
             </G>
           ))}
@@ -1043,7 +1065,7 @@ export function TradingViewChart({
               <SvgText
                 x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
                 fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-                {fmtPrice(displayPriceVal)}
+                {fmtValue(scaledLivePrice, valueMode)}
               </SvgText>
             </>
           )}
@@ -1121,7 +1143,7 @@ export function TradingViewChart({
               <SvgText
                 x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={crosshair.y + 4.5}
                 fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-                {fmtPrice(crosshair.price)}
+                {fmtValue(crosshair.price, valueMode)}
               </SvgText>
             </G>
           )}
