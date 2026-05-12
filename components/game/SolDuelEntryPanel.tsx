@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Swords, ChevronLeft, AlertCircle, Info } from 'lucide-react-native';
+import { Swords, ChevronLeft, CircleAlert as AlertCircle, Info } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { ENTRY_AMOUNTS_SOL, computeWinnerPayout, GAME_TREASURY_WALLET } from '@/services/game/gameConfig';
 import { payToTreasury, PayStatus } from '@/services/treasuryService';

@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { X, ExternalLink, Swords, AlertCircle } from 'lucide-react-native';
+import { X, ExternalLink, Swords, CircleAlert as AlertCircle } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { DuelEntry, DuelMatch, cancelDuelEntryAndRefund } from '@/services/game/duelEntryService';
 import { useSolDuelMatchmaking } from '@/hooks/useSolDuelMatchmaking';
