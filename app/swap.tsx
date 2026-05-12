@@ -19,9 +19,7 @@ import { jupiterSwapService, JupiterQuote } from '@/services/jupiter/swapService
 import { mergedTokenListService as jupiterTokenListService, JupiterToken } from '@/services/tokenListService';
 import { getSolPrice, SolanaPriceService } from '@/services/solana/priceService';
 import { useWallet } from '@/contexts/WalletContext';
-import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
-import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
@@ -48,9 +46,7 @@ type SwapStatus = 'idle' | 'quoting' | 'signing' | 'sending' | 'success' | 'erro
 export default function SwapScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, activeWallet, refreshPortfolio, tokens: walletTokens, nativeBalance } = useWallet();
-  const { pinHash } = useSecurity();
-  const [pinGateVisible, setPinGateVisible] = useState(false);
-  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [fromToken, setFromToken] = useState<JupiterToken | null>(null);
@@ -249,10 +245,10 @@ export default function SwapScreen() {
     ? jupiterSwapService.formatAmount(parseInt(quote.outAmount), toToken.decimals)
     : '';
   const priceImpact = quote ? jupiterSwapService.calculatePriceImpact(quote) : 0;
-  const isProcessing = status === 'signing' || status === 'sending';
+  const isProcessing = false;
   const parsedAmount = parseFloat(fromAmount);
   const isInsufficientBalance = !!(fromToken && fromAmount && !isNaN(parsedAmount) && parsedAmount > fromTokenBalance);
-  const canSwap = !!quote && hasWallet && !isProcessing && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
+  const canSwap = !!quote && hasWallet && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
 
   const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
     { label: 'Action', value: `Swap ${fromToken.symbol} → ${toToken.symbol}` },
@@ -264,46 +260,21 @@ export default function SwapScreen() {
     { label: 'Total', value: `${fromAmount} ${fromToken.symbol} + fee`, total: true },
   ] : [];
 
-  const requestSwap = () => {
-    if (!canSwap) return;
-    setTxConfirmVisible(true);
-  };
-
-  const handleSwapConfirmed = () => {
-    setTxConfirmVisible(false);
-    const needsPin = !connectedWallet && !!pinHash;
-    if (needsPin) { setPinGateVisible(true); } else { handleExecuteSwap(); }
-  };
-
-  const handleExecuteSwap = async () => {
-    if (!quote || !activeAddress || !fromToken || !toToken) return;
+  const executeSwapTx = async (): Promise<string> => {
+    if (!quote || !activeAddress || !fromToken || !toToken) throw new Error('Missing swap parameters');
     const amount = parseFloat(fromAmount);
-    if (isNaN(amount) || amount <= 0) { setErrorMsg('Enter a valid amount'); setStatus('error'); return; }
-    setErrorMsg(null); setTxSignature(null);
-    try {
-      setStatus('signing');
-      const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
-      let signedTx: VersionedTransaction;
-      if (connectedWallet) {
-        signedTx = await signWithExternalWallet(swapResult.swapTransaction);
-      } else if (selectedAccount) {
-        signedTx = await signWithInternalWallet(swapResult.swapTransaction);
-      } else {
-        throw new Error('No wallet available');
-      }
-      setStatus('sending');
-      const signature = await jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
-      setTxSignature(signature);
-      setStatus('success');
-      if (refreshPortfolio) await refreshPortfolio();
-      setTimeout(() => { setFromAmount(''); setQuote(null); setStatus('idle'); setTxSignature(null); }, 4000);
-    } catch (err: any) {
-      let msg: string = err?.message || 'Transaction failed';
-      if (msg.includes('User rejected') || msg.includes('rejected')) msg = 'Transaction rejected in wallet';
-      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance for this swap';
-      else if (msg.includes('slippage')) msg = 'Price moved beyond slippage. Try again or increase slippage.';
-      setErrorMsg(msg); setStatus('error');
+    if (isNaN(amount) || amount <= 0) throw new Error('Enter a valid amount');
+
+    const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
+    let signedTx: VersionedTransaction;
+    if (connectedWallet) {
+      signedTx = await signWithExternalWallet(swapResult.swapTransaction);
+    } else if (selectedAccount) {
+      signedTx = await signWithInternalWallet(swapResult.swapTransaction);
+    } else {
+      throw new Error('No wallet available');
     }
+    return jupiterSwapService.executeSwap(swapResult.swapTransaction, async () => signedTx);
   };
 
   // "From" list: wallet-owned tokens only (you can only spend what you hold).
@@ -608,11 +579,10 @@ export default function SwapScreen() {
             styles.confirmBtn,
             (!canSwap || !!isInsufficientBalance) && styles.confirmBtnDisabled,
           ]}
-          onPress={requestSwap}
+          onPress={() => setConfirmVisible(true)}
           disabled={!canSwap || !!isInsufficientBalance}
           activeOpacity={0.85}
         >
-          {isProcessing && <ActivityIndicator size="small" color={colors.white} style={{ marginRight: 8 }} />}
           <Text style={styles.confirmBtnText}>{getButtonLabel()}</Text>
         </TouchableOpacity>
 
@@ -666,20 +636,19 @@ export default function SwapScreen() {
         </View>
       </Modal>
 
-      <TxConfirmModal
-        visible={txConfirmVisible}
+      <ConfirmTransactionModal
+        visible={confirmVisible}
         title="Confirm Swap"
         details={swapConfirmDetails}
-        onConfirm={handleSwapConfirmed}
-        onCancel={() => setTxConfirmVisible(false)}
-      />
-
-      <PinUnlockModal
-        visible={pinGateVisible}
-        title="Confirm Swap"
-        subtitle="Enter your PIN to authorize this swap"
-        onSuccess={() => { setPinGateVisible(false); handleExecuteSwap(); }}
-        onCancel={() => setPinGateVisible(false)}
+        executeTransaction={executeSwapTx}
+        onSuccess={async () => {
+          if (refreshPortfolio) await refreshPortfolio();
+          setTimeout(() => { setFromAmount(''); setQuote(null); setStatus('idle'); }, 500);
+        }}
+        onDismiss={() => setConfirmVisible(false)}
+        isExternalWallet={!!connectedWallet}
+        insufficientBalance={!!isInsufficientBalance}
+        insufficientBalanceMsg={`Insufficient ${fromToken?.symbol ?? ''} balance.`}
       />
     </SafeAreaView>
   );

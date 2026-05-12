@@ -30,9 +30,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
-import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
-import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
+import { ConfirmTransactionModal } from '@/components/ConfirmTransactionModal';
 import { spacing, borderRadius, fontSize } from '@/constants/theme';
 import { burnSplToken, PayStatus as BurnStatus } from '@/services/treasuryService';
 import {
@@ -166,9 +164,7 @@ const BG = '#0D0618';
 export default function SendScreen() {
   const router = useRouter();
   const { selectedAccount, connectedWallet, activeAddress, refreshPortfolio } = useWallet();
-  const { pinHash, walletType } = useSecurity();
-  const [pinGateVisible, setPinGateVisible] = useState(false);
-  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   const [assets, setAssets] = useState<WalletAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(true);
@@ -261,18 +257,7 @@ export default function SendScreen() {
     }
   };
 
-  const requestSend = () => {
-    if (!selectedAsset || amountNum <= 0 || !recipient) return;
-    setTxConfirmVisible(true);
-  };
-
-  const handleTxConfirmed = () => {
-    setTxConfirmVisible(false);
-    const needsPin = !connectedWallet && !!pinHash;
-    if (needsPin) { setPinGateVisible(true); } else { handleSend(); }
-  };
-
-  const sendConfirmDetails: TxDetail[] = selectedAsset ? [
+  const sendConfirmDetails = selectedAsset ? [
     { label: 'Action', value: `Send ${selectedAsset.symbol}` },
     { label: 'Amount', value: `${amountNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${selectedAsset.symbol}`, accent: true },
     { label: 'To', value: `${recipient.slice(0, 6)}...${recipient.slice(-4)}` },
@@ -282,19 +267,16 @@ export default function SendScreen() {
       : { label: 'You Pay', value: `${amountNum} ${selectedAsset.symbol} + fee`, total: true },
   ] : [];
 
-  const handleSend = async () => {
-    setError(null);
-    if (!activeAddress) { setError('No wallet connected.'); return; }
-    if (!selectedAsset) { setError('No token selected.'); return; }
-    if (!recipient.trim() || !isValidAddress(recipient.trim())) { setError('Invalid recipient address.'); return; }
-    if (isNaN(amountNum) || amountNum <= 0) { setError('Enter a valid amount.'); return; }
-    if (amountNum > currentBalance) { setError('Insufficient balance.'); return; }
+  const executeSendTx = async (): Promise<string> => {
+    if (!activeAddress) throw new Error('No wallet connected.');
+    if (!selectedAsset) throw new Error('No token selected.');
+    if (!recipient.trim() || !isValidAddress(recipient.trim())) throw new Error('Invalid recipient address.');
+    if (isNaN(amountNum) || amountNum <= 0) throw new Error('Enter a valid amount.');
+    if (amountNum > currentBalance) throw new Error('Insufficient balance.');
 
-    setStep('preparing');
-    try {
-      const solanaService = SolanaConnectionService.getInstance();
-      const fromPubkey = new PublicKey(activeAddress);
-      const toPubkey = new PublicKey(recipient.trim());
+    const solanaService = SolanaConnectionService.getInstance();
+    const fromPubkey = new PublicKey(activeAddress);
+    const toPubkey = new PublicKey(recipient.trim());
       let transaction: Transaction;
 
       if (selectedAsset.isNative) {
@@ -438,72 +420,36 @@ export default function SendScreen() {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = fromPubkey;
 
-      let signature: string;
-      setStep('signing');
+    let signature: string;
 
-      if (connectedWallet) {
-        const provider = ExternalWalletAdapter.getProvider(connectedWallet.id);
-        if (!provider) throw new Error('Wallet provider not available');
-        const signed = await provider.signTransaction(transaction);
-        setStep('sending');
-        const rawTx = (signed as Transaction).serialize();
-        signature = await sendRawTransactionWithRetry(solanaService, rawTx);
-        await pollConfirmation(solanaService, signature);
-      } else if (selectedAccount) {
-        const walletManager = SecureWalletManager.getInstance();
-        const mnemonic = await walletManager.getMnemonicUnlocked();
-        const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
-        // Wrap into a @solana/web3.js Keypair (secretKey = 64-byte seed+pubkey from nacl)
-        const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
-        transaction.sign(keypair);
-        setStep('sending');
-        const rawTx = transaction.serialize();
-        signature = await sendRawTransactionWithRetry(solanaService, rawTx);
-        await pollConfirmation(solanaService, signature);
-      } else {
-        throw new Error('No wallet available');
-      }
-
-      await saveRecipient(recipient.trim());
-      setRecentRecipients(await loadRecentRecipients());
-      setTxSignature(signature);
-      setStep('success');
-      if (refreshPortfolio) await refreshPortfolio();
-    } catch (err: any) {
-      let msg = (err?.message || 'Transaction failed').trim();
-      if (msg.includes('rejected') || msg.includes('User rejected')) {
-        msg = 'Transaction rejected in wallet';
-      } else if (msg.includes('insufficient') || msg.includes('Insufficient')) {
-        msg = 'Insufficient balance for this transaction';
-      } else if (msg.includes('Token account not found') || msg.includes('do not hold')) {
-        msg = err.message; // keep the specific message
-      } else if (msg.includes('token account') || msg.includes('TokenAccount')) {
-        msg = 'Token account missing — the recipient may not have this token';
-      } else if (msg.includes('Confirmation timeout') || msg.includes('was not confirmed')) {
-        msg = 'Confirmation timeout. Check Solana Explorer for the transaction status.';
-      } else if (
-        msg.includes('Load failed') ||
-        msg.includes('Failed to fetch') ||
-        msg.includes('RPC') ||
-        msg.includes('connect') ||
-        msg.includes('network')
-      ) {
-        msg = 'RPC connection failed. Please retry.';
-      } else if (msg.includes('custom program error') || msg.includes('0x')) {
-        msg = `Transaction failed: ${msg}`;
-      }
-      setError(msg);
-      setStep('error');
+    if (connectedWallet) {
+      const provider = ExternalWalletAdapter.getProvider(connectedWallet.id);
+      if (!provider) throw new Error('Wallet provider not available');
+      const signed = await provider.signTransaction(transaction);
+      const rawTx = (signed as Transaction).serialize();
+      signature = await sendRawTransactionWithRetry(solanaService, rawTx);
+      await pollConfirmation(solanaService, signature);
+    } else if (selectedAccount) {
+      const walletManager = SecureWalletManager.getInstance();
+      const mnemonic = await walletManager.getMnemonicUnlocked();
+      const naclKeypair = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, selectedAccount.accountIndex || 0);
+      const keypair = Keypair.fromSecretKey(naclKeypair.secretKey);
+      transaction.sign(keypair);
+      const rawTx = transaction.serialize();
+      signature = await sendRawTransactionWithRetry(solanaService, rawTx);
+      await pollConfirmation(solanaService, signature);
+    } else {
+      throw new Error('No wallet available');
     }
+
+    await saveRecipient(recipient.trim());
+    setRecentRecipients(await loadRecentRecipients());
+    return signature;
   };
 
-  const canSend = !!recipient && isValidAddress(recipient) && amountNum > 0 && amountNum <= currentBalance && (step === 'idle' || step === 'error');
-  const isBusy = step === 'preparing' || step === 'signing' || step === 'sending';
+  const canSend = !!recipient && isValidAddress(recipient) && amountNum > 0 && amountNum <= currentBalance;
+  const isBusy = false;
 
-  const stepLabel = step === 'preparing' ? 'Preparing transaction...'
-    : step === 'signing' ? 'Confirm in wallet...'
-    : step === 'sending' ? 'Sending...'
-    : `Send ${selectedAsset?.symbol ?? 'SOL'}`;
 
   if (!activeAddress) {
     return (
@@ -820,16 +766,12 @@ export default function SendScreen() {
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.sendBtn, (!canSend || isBusy) && styles.sendBtnDisabled]}
-            onPress={requestSend}
-            disabled={!canSend || isBusy}
+            onPress={() => setConfirmVisible(true)}
+            disabled={!canSend}
             activeOpacity={0.85}
           >
-            {isBusy ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <SendIcon size={16} color="#fff" />
-            )}
-            <Text style={styles.sendBtnText}>{stepLabel}</Text>
+            <SendIcon size={16} color="#fff" />
+            <Text style={styles.sendBtnText}>{`Send ${selectedAsset?.symbol ?? 'SOL'}`}</Text>
           </TouchableOpacity>
           <Text style={styles.footerNote}>Non-custodial · We never access your private keys</Text>
         </View>
@@ -884,19 +826,16 @@ export default function SendScreen() {
         </TouchableOpacity>
       </Modal>
 
-      <TxConfirmModal
-        visible={txConfirmVisible}
+      <ConfirmTransactionModal
+        visible={confirmVisible}
         title="Confirm Send"
         details={sendConfirmDetails}
-        onConfirm={handleTxConfirmed}
-        onCancel={() => setTxConfirmVisible(false)}
-      />
-      <PinUnlockModal
-        visible={pinGateVisible}
-        title="Authorize Send"
-        subtitle="Enter your PIN to sign this transaction"
-        onSuccess={() => { setPinGateVisible(false); handleSend(); }}
-        onCancel={() => setPinGateVisible(false)}
+        executeTransaction={executeSendTx}
+        onSuccess={async () => { if (refreshPortfolio) await refreshPortfolio(); }}
+        onDismiss={() => setConfirmVisible(false)}
+        isExternalWallet={!!connectedWallet}
+        insufficientBalance={amountNum > currentBalance && amountNum > 0}
+        insufficientBalanceMsg={`Insufficient balance. Need ${amountNum.toFixed(6)} ${selectedAsset?.symbol}, have ${currentBalance.toFixed(6)}.`}
       />
     </View>
   );

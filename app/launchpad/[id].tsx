@@ -15,12 +15,9 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Rocket, Zap, Clock, Users, TrendingUp, CircleCheck as CheckCircle2, Circle as XCircle, ExternalLink, RefreshCw, DollarSign, Flame, TriangleAlert as AlertTriangle, Lock, CircleCheck as CheckIcon, ShieldCheck, ShieldAlert, Shield, TrendingDown, Droplets } from 'lucide-react-native';
-import * as Clipboard from 'expo-clipboard';
+import { ArrowLeft, Rocket, Zap, Clock, Users, TrendingUp, CircleCheck as CheckCircle2, Circle as XCircle, RefreshCw, DollarSign, Flame, TriangleAlert as AlertTriangle, Lock, CircleCheck as CheckIcon, ShieldCheck, ShieldAlert, Shield, Droplets } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
-import { useSecurity } from '@/contexts/SecurityContext';
-import { PinUnlockModal } from '@/components/PinUnlockModal';
-import { TxConfirmModal, TxDetail } from '@/components/TxConfirmModal';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { launchpadService, LaunchpadToken } from '@/services/launchpadService';
 import {
   presaleService,
@@ -56,8 +53,6 @@ function shortAddr(a: string) {
 }
 
 // ─── Buy Modal ────────────────────────────────────────────────────────────────
-type BuyStatus = 'idle' | 'preparing' | 'signing' | 'sending' | 'confirmed' | 'failed';
-
 function BuyModal({
   visible, presale, token, wallet, activeWallet, nativeBalance,
   onClose, onSuccess,
@@ -71,18 +66,16 @@ function BuyModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const { pinHash } = useSecurity();
   const [amount, setAmount] = useState('');
-  const [buyStatus, setBuyStatus] = useState<BuyStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [txSig, setTxSig] = useState<string | null>(null);
-  const [pinGateVisible, setPinGateVisible] = useState(false);
-  const [txConfirmVisible, setTxConfirmVisible] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
-  const tokenEstimate = presale.launch_price > 0 && amount
-    ? parseFloat(amount) / presale.launch_price
-    : presale.hard_cap > 0 && amount
-      ? (parseFloat(amount) / presale.hard_cap) * presale.tokens_for_sale
+  const solAmt = parseFloat(amount) || 0;
+
+  const tokenEstimate = presale.launch_price > 0 && solAmt > 0
+    ? solAmt / presale.launch_price
+    : presale.hard_cap > 0 && solAmt > 0
+      ? (solAmt / presale.hard_cap) * presale.tokens_for_sale
       : 0;
 
   const fmtTokens = (n: number) => {
@@ -92,54 +85,27 @@ function BuyModal({
     return n.toFixed(2);
   };
 
-  const isBuying = buyStatus === 'preparing' || buyStatus === 'signing' || buyStatus === 'sending';
-
-  const statusLabel =
-    buyStatus === 'preparing' ? 'Preparing transaction...' :
-    buyStatus === 'signing'   ? (activeWallet?.type === 'connected' ? 'Confirm in wallet...' : 'Signing...') :
-    buyStatus === 'sending'   ? 'Sending...' :
-    `Buy ${token.symbol}`;
-
-  const solAmt = parseFloat(amount) || 0;
   const buyConfirmDetails: TxDetail[] = [
-    { label: 'Action',       value: `Buy ${token.symbol}` },
-    { label: 'Amount',       value: `${solAmt} SOL`, accent: true },
-    { label: 'You Receive',  value: `~${fmtTokens(tokenEstimate)} ${token.symbol}` },
-    { label: 'Network Fee',  value: '~0.000025 SOL' },
-    { label: 'Total',        value: `${solAmt} SOL + fee`, total: true },
+    { label: 'Action',      value: `Buy ${token.symbol}` },
+    { label: 'Amount',      value: `${solAmt} SOL`, accent: true },
+    { label: 'You Receive', value: `~${fmtTokens(tokenEstimate)} ${token.symbol}` },
+    { label: 'Network Fee', value: '~0.000025 SOL' },
+    { label: 'Total',       value: `${solAmt} SOL + fee`, total: true },
   ];
 
-  const handleBuy = async () => {
-    if (!activeWallet) { setError('No active wallet connected.'); return; }
-    setError(null);
-    setBuyStatus('preparing');
-
-    let buySignAndSend: (tx: import('@solana/web3.js').Transaction, signers?: import('@solana/web3.js').Keypair[]) => Promise<string>;
-    try {
-      const signer = await launchpadSigningService.getSigner(activeWallet);
-      buySignAndSend = launchpadSigningService.makeSignAndSend(signer);
-    } catch (sigErr: any) {
-      setError(sigErr?.message ?? 'Failed to initialize wallet signer');
-      setBuyStatus('failed');
-      return;
-    }
-
-    setBuyStatus('signing');
+  const executeBuyTx = async (): Promise<string> => {
+    if (!activeWallet) throw new Error('No active wallet connected.');
+    const signer = await launchpadSigningService.getSigner(activeWallet);
+    const buySignAndSend = launchpadSigningService.makeSignAndSend(signer);
     const res = await presaleService.buyPresale(
       { presaleId: presale.id, tokenId: presale.token_id, wallet, solAmount: solAmt },
       buySignAndSend
     );
-
-    if (res.success && res.txSignature) {
-      setBuyStatus('confirmed');
-      setTxSig(res.txSignature);
-    } else {
-      setError(res.error ?? 'Purchase failed');
-      setBuyStatus('failed');
-    }
+    if (!res.success || !res.txSignature) throw new Error(res.error ?? 'Purchase failed');
+    return res.txSignature;
   };
 
-  const handleClose = () => { setAmount(''); setError(null); setTxSig(null); setBuyStatus('idle'); onClose(); };
+  const handleClose = () => { setAmount(''); setError(null); onClose(); };
 
   const requestBuy = () => {
     const sol = parseFloat(amount);
@@ -148,58 +114,10 @@ function BuyModal({
     if (sol > presale.max_buy) { setError(`Maximum buy: ${presale.max_buy} SOL`); return; }
     if (sol > nativeBalance - 0.001) { setError('Insufficient SOL balance'); return; }
     setError(null);
-    setTxConfirmVisible(true);
+    setConfirmVisible(true);
   };
 
-  const handleBuyConfirmed = () => {
-    setTxConfirmVisible(false);
-    const isInternal = activeWallet?.type !== 'connected';
-    if (isInternal && pinHash) { setPinGateVisible(true); } else { handleBuy(); }
-  };
-
-  if (txSig) {
-    return (
-      <>
-        <Modal visible={visible} animationType="fade" transparent>
-          <View style={bs.overlay}>
-            <View style={bs.sheet}>
-              <View style={bs.successIcon}>
-                <CheckIcon size={40} color={colors.success} />
-              </View>
-              <Text style={bs.successTitle}>Purchase Confirmed!</Text>
-              <Text style={bs.successSub}>
-                {fmtTokens(tokenEstimate)} {token.symbol} reserved
-              </Text>
-              {Platform.OS === 'web' && (
-                <TouchableOpacity style={bs.explorerBtn} onPress={() => (window as any).open(`https://solscan.io/tx/${txSig}`, '_blank')}>
-                  <ExternalLink size={14} color={colors.primary} />
-                  <Text style={bs.explorerBtnText}>View on Solscan</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={bs.doneBtn} onPress={() => { onSuccess(); handleClose(); }}>
-                <Text style={bs.doneBtnText}>Done</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-        <PinUnlockModal
-          visible={pinGateVisible}
-          title="Authorize Purchase"
-          subtitle="Enter your PIN to confirm this transaction"
-          onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
-          onCancel={() => setPinGateVisible(false)}
-        />
-        <TxConfirmModal
-          visible={txConfirmVisible}
-          title={`Buy ${token.symbol}`}
-          details={buyConfirmDetails}
-          onConfirm={handleBuyConfirmed}
-          onCancel={() => setTxConfirmVisible(false)}
-          confirmLabel={`Buy ${token.symbol}`}
-        />
-      </>
-    );
-  }
+  const insufficientBalance = solAmt > 0 && solAmt > nativeBalance - 0.001;
 
   return (
     <>
@@ -208,7 +126,7 @@ function BuyModal({
           <View style={bs.sheet}>
             <View style={bs.sheetHeader}>
               <Text style={bs.sheetTitle}>Buy {token.symbol}</Text>
-              <TouchableOpacity onPress={handleClose} disabled={isBuying}>
+              <TouchableOpacity onPress={handleClose}>
                 <XCircle size={22} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
@@ -227,24 +145,16 @@ function BuyModal({
                 value={amount}
                 onChangeText={t => { setAmount(t); setError(null); }}
                 keyboardType="decimal-pad"
-                editable={!isBuying}
               />
-              <TouchableOpacity style={bs.maxBtn} onPress={() => setAmount(String(Math.min(presale.max_buy, nativeBalance - 0.001)))} disabled={isBuying}>
+              <TouchableOpacity style={bs.maxBtn} onPress={() => setAmount(String(Math.min(presale.max_buy, nativeBalance - 0.001)))}>
                 <Text style={bs.maxBtnText}>MAX</Text>
               </TouchableOpacity>
             </View>
 
-            {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && (
+            {solAmt > 0 && tokenEstimate > 0 && (
               <View style={bs.estimateCard}>
                 <Text style={bs.estimateLabel}>You receive approximately</Text>
                 <Text style={bs.estimateValue}>{fmtTokens(tokenEstimate)} {token.symbol}</Text>
-              </View>
-            )}
-
-            {isBuying && (
-              <View style={bs.statusRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={bs.statusText}>{statusLabel}</Text>
               </View>
             )}
 
@@ -260,33 +170,24 @@ function BuyModal({
               <Text style={bs.limitItem}>Max: {presale.max_buy} SOL</Text>
             </View>
 
-            <TouchableOpacity style={[bs.buyBtn, isBuying && bs.buyBtnDisabled]} onPress={requestBuy} disabled={isBuying}>
-              {isBuying
-                ? <ActivityIndicator color="#fff" size="small" />
-                : (
-                  <>
-                    <Zap size={16} color="#fff" />
-                    <Text style={bs.buyBtnText}>Buy {token.symbol}</Text>
-                  </>
-                )
-              }
+            <TouchableOpacity style={bs.buyBtn} onPress={requestBuy}>
+              <Zap size={16} color="#fff" />
+              <Text style={bs.buyBtnText}>Buy {token.symbol}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-      <PinUnlockModal
-        visible={pinGateVisible}
-        title="Authorize Purchase"
-        subtitle="Enter your PIN to confirm this transaction"
-        onSuccess={() => { setPinGateVisible(false); handleBuy(); }}
-        onCancel={() => setPinGateVisible(false)}
-      />
-      <TxConfirmModal
-        visible={txConfirmVisible}
+
+      <ConfirmTransactionModal
+        visible={confirmVisible}
         title={`Buy ${token.symbol}`}
         details={buyConfirmDetails}
-        onConfirm={handleBuyConfirmed}
-        onCancel={() => setTxConfirmVisible(false)}
+        executeTransaction={executeBuyTx}
+        onSuccess={async () => { onSuccess(); handleClose(); }}
+        onDismiss={() => setConfirmVisible(false)}
+        isExternalWallet={activeWallet?.type === 'connected'}
+        insufficientBalance={insufficientBalance}
+        insufficientBalanceMsg={`Insufficient SOL. Need ${solAmt.toFixed(4)}, have ${nativeBalance.toFixed(4)}.`}
         confirmLabel={`Buy ${token.symbol}`}
       />
     </>
