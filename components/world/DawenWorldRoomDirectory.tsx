@@ -1,0 +1,353 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
+  TextInput,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, Edit3 } from 'lucide-react-native';
+import {
+  WorldRoom, getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
+  createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
+} from '@/services/worldService';
+import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+
+const THEMES = [
+  'DAWEN Neon Room','Purple Lounge','Trading Room','Crew Room',
+  'Cyber Apartment','Solana Studio','Royal Purple Suite','Empty Grid Room',
+];
+
+const VISIBILITY_ICON: Record<string, any> = {
+  public: Globe, private: Lock, invite_only: UserCheck,
+};
+const VISIBILITY_COLOR: Record<string, string> = {
+  public: '#10B981', private: '#EF4444', invite_only: '#F59E0B',
+};
+
+interface Props {
+  walletAddress: string;
+  username: string;
+  onJoinRoom: (room: WorldRoom) => void;
+  onClose: () => void;
+}
+
+export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, onClose }: Props) {
+  const [publicRooms, setPublicRooms] = useState<WorldRoom[]>([]);
+  const [myRooms, setMyRooms] = useState<WorldRoom[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'public' | 'mine'>('public');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newTheme, setNewTheme] = useState(THEMES[0]);
+  const [newVis, setNewVis] = useState<'public' | 'private' | 'invite_only'>('public');
+  const [creating, setCreating] = useState(false);
+  const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pub, mine] = await Promise.all([getPublicRooms(), getMyRooms(walletAddress)]);
+      const [pubCounted, mineCounted] = await Promise.all([
+        getRoomsWithCounts(pub), getRoomsWithCounts(mine),
+      ]);
+      setPublicRooms(pubCounted);
+      setMyRooms(mineCounted);
+    } finally {
+      setLoading(false);
+    }
+  }, [walletAddress]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    if (!newName.trim() || creating) return;
+    setCreating(true);
+    try {
+      const room = await createRoom({ walletAddress, name: newName.trim(), theme: newTheme, visibility: newVis });
+      setCreateOpen(false);
+      setNewName('');
+      await load();
+      setTab('mine');
+    } catch (e) {
+      console.warn('[DawenWorldRoomDirectory] create error', e);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (room: WorldRoom) => {
+    if (room.is_default_personal_room) return;
+    await deleteRoom(room.id);
+    await load();
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editRoom || saving) return;
+    setSaving(true);
+    await updateRoom(editRoom.id, { name: editName.trim(), visibility: editVis });
+    setSaving(false);
+    setEditRoom(null);
+    await load();
+  };
+
+  const canAccess = (room: WorldRoom) => {
+    if (room.visibility === 'public') return true;
+    if (room.owner_wallet === walletAddress) return true;
+    return false;
+  };
+
+  const displayed = tab === 'public' ? publicRooms : myRooms;
+
+  return (
+    <View style={styles.root}>
+      <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
+
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onClose} style={styles.backBtn}>
+          <ArrowLeft size={20} color="#fff" strokeWidth={2.5} />
+        </TouchableOpacity>
+        <Map size={18} color={colors.primary} strokeWidth={2} />
+        <Text style={styles.title}>Room Directory</Text>
+        <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
+          <Plus size={16} color="#fff" strokeWidth={2.5} />
+          <Text style={styles.createText}>Create</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Tabs */}
+      <View style={styles.tabs}>
+        {(['public', 'mine'] as const).map(t => (
+          <TouchableOpacity key={t} style={[styles.tab, tab === t && styles.tabActive]} onPress={() => setTab(t)}>
+            <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+              {t === 'public' ? 'Public Rooms' : 'My Rooms'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {loading ? (
+        <View style={styles.loader}><ActivityIndicator color={colors.primary} size="large" /></View>
+      ) : (
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Always show Plaza first in public */}
+          {tab === 'public' && (() => {
+            const plaza = publicRooms.find(r => r.id === PLAZA_ROOM_ID);
+            if (!plaza) return null;
+            return (
+              <TouchableOpacity key={plaza.id} style={[styles.roomCard, styles.plazaCard]} onPress={() => onJoinRoom(plaza)}>
+                <LinearGradient colors={['rgba(139,92,246,0.3)','rgba(109,40,217,0.1)']} style={StyleSheet.absoluteFill} />
+                <View style={styles.roomIcon}><Text style={{ fontSize: 28 }}>🌐</Text></View>
+                <View style={styles.roomInfo}>
+                  <Text style={styles.plazaName}>{plaza.name}</Text>
+                  <Text style={styles.roomType}>Official Public Lobby</Text>
+                  <View style={styles.roomMeta}>
+                    <Users size={11} color={colors.primary} strokeWidth={2.5} />
+                    <Text style={styles.metaText}>{plaza.online_count ?? 0} online</Text>
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.joinBtn} onPress={() => onJoinRoom(plaza)}>
+                  <Text style={styles.joinText}>Enter</Text>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            );
+          })()}
+
+          {displayed.filter(r => r.id !== PLAZA_ROOM_ID).map(room => {
+            const VisIcon = VISIBILITY_ICON[room.visibility] ?? Globe;
+            const visColor = VISIBILITY_COLOR[room.visibility] ?? '#10B981';
+            const accessible = canAccess(room);
+            const isMyRoom = room.owner_wallet === walletAddress;
+
+            return (
+              <View key={room.id} style={styles.roomCard}>
+                <View style={styles.roomIcon}>
+                  <Text style={{ fontSize: 24 }}>{room.type === 'personal' ? '🏠' : '🏢'}</Text>
+                </View>
+                <View style={styles.roomInfo}>
+                  <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
+                  <Text style={styles.roomTheme} numberOfLines={1}>{room.theme}</Text>
+                  <View style={styles.roomMeta}>
+                    <VisIcon size={10} color={visColor} strokeWidth={2.5} />
+                    <Text style={[styles.metaText, { color: visColor }]}>{room.visibility}</Text>
+                    {(room.online_count ?? 0) > 0 && (
+                      <>
+                        <Text style={styles.dot}>·</Text>
+                        <Users size={10} color="rgba(255,255,255,0.4)" strokeWidth={2.5} />
+                        <Text style={styles.metaText}>{room.online_count}</Text>
+                      </>
+                    )}
+                  </View>
+                </View>
+
+                <View style={styles.cardActions}>
+                  {isMyRoom && (
+                    <>
+                      <TouchableOpacity onPress={() => { setEditRoom(room); setEditName(room.name); setEditVis(room.visibility as any); }}>
+                        <Edit3 size={14} color="rgba(255,255,255,0.4)" strokeWidth={2} />
+                      </TouchableOpacity>
+                      {!room.is_default_personal_room && (
+                        <TouchableOpacity onPress={() => handleDelete(room)}>
+                          <Trash2 size={14} color="rgba(239,68,68,0.6)" strokeWidth={2} />
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  )}
+                  {accessible ? (
+                    <TouchableOpacity style={styles.joinBtn} onPress={() => onJoinRoom(room)}>
+                      <Text style={styles.joinText}>Join</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.lockedBtn}>
+                      <Lock size={12} color="rgba(255,255,255,0.3)" strokeWidth={2} />
+                    </View>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+
+          {displayed.filter(r => r.id !== PLAZA_ROOM_ID).length === 0 && (
+            <View style={styles.empty}>
+              <Text style={styles.emptyEmoji}>{tab === 'mine' ? '🏠' : '🌐'}</Text>
+              <Text style={styles.emptyText}>
+                {tab === 'mine' ? 'No rooms yet. Create one!' : 'No public rooms found.'}
+              </Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
+
+      {/* Create modal */}
+      <Modal visible={createOpen} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <LinearGradient colors={['#1A0A2E','#0D0D1A']} style={StyleSheet.absoluteFill} />
+            <Text style={styles.modalTitle}>Create Room</Text>
+
+            <TextInput
+              style={styles.input} placeholder="Room name…"
+              placeholderTextColor="rgba(255,255,255,0.3)" value={newName}
+              onChangeText={setNewName} maxLength={40}
+            />
+
+            <Text style={styles.inputLabel}>Theme</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 44 }} contentContainerStyle={{ flexDirection: 'row', gap: 6 }}>
+              {THEMES.map(t => (
+                <TouchableOpacity key={t} style={[styles.themeChip, newTheme === t && styles.themeChipActive]} onPress={() => setNewTheme(t)}>
+                  <Text style={[styles.themeText, newTheme === t && styles.themeTextActive]}>{t}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <Text style={styles.inputLabel}>Visibility</Text>
+            <View style={styles.visRow}>
+              {(['public', 'private', 'invite_only'] as const).map(v => (
+                <TouchableOpacity key={v} style={[styles.visBtn, newVis === v && styles.visBtnActive]} onPress={() => setNewVis(v)}>
+                  <Text style={[styles.visText, newVis === v && styles.visTextActive]}>{v.replace('_',' ')}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={[styles.createRoomBtn, (!newName.trim() || creating) && { opacity: 0.5 }]} onPress={handleCreate} disabled={!newName.trim() || creating}>
+                {creating ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Create Room</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setCreateOpen(false)} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit modal */}
+      <Modal visible={!!editRoom} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <LinearGradient colors={['#1A0A2E','#0D0D1A']} style={StyleSheet.absoluteFill} />
+            <Text style={styles.modalTitle}>Edit Room</Text>
+            <TextInput style={styles.input} placeholder="Room name…" placeholderTextColor="rgba(255,255,255,0.3)" value={editName} onChangeText={setEditName} maxLength={40} />
+            <Text style={styles.inputLabel}>Visibility</Text>
+            <View style={styles.visRow}>
+              {(['public', 'private', 'invite_only'] as const).map(v => (
+                <TouchableOpacity key={v} style={[styles.visBtn, editVis === v && styles.visBtnActive]} onPress={() => setEditVis(v)}>
+                  <Text style={[styles.visText, editVis === v && styles.visTextActive]}>{v.replace('_',' ')}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={[styles.createRoomBtn, saving && { opacity: 0.5 }]} onPress={handleSaveEdit} disabled={saving}>
+                {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Save</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setEditRoom(null)} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#0D0A1A' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: spacing.lg, borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.2)' },
+  backBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: fontSize.lg, fontWeight: '900', color: '#fff', flex: 1 },
+  createBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary, borderRadius: borderRadius.md, paddingHorizontal: 12, paddingVertical: 7 },
+  createText: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
+  tabs: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.15)' },
+  tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
+  tabActive: { borderBottomWidth: 2, borderBottomColor: colors.primary },
+  tabText: { fontSize: fontSize.sm, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
+  tabTextActive: { color: colors.primary },
+  loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  scroll: { flex: 1 },
+  scrollContent: { padding: spacing.md, gap: 8 },
+  roomCard: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: borderRadius.lg,
+    padding: spacing.md, borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
+    overflow: 'hidden', position: 'relative',
+  },
+  plazaCard: { borderColor: 'rgba(139,92,246,0.5)' },
+  roomIcon: { width: 48, height: 48, borderRadius: 12, backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center' },
+  roomInfo: { flex: 1, gap: 3 },
+  plazaName: { fontSize: fontSize.md, fontWeight: '900', color: colors.primary },
+  roomName: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
+  roomType: { fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: '500' },
+  roomTheme: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: '500' },
+  roomMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+  dot: { color: 'rgba(255,255,255,0.3)' },
+  cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  joinBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.md, paddingHorizontal: 14, paddingVertical: 7 },
+  joinText: { fontSize: 11, fontWeight: '800', color: '#fff' },
+  lockedBtn: { width: 30, height: 30, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', alignItems: 'center' },
+  empty: { alignItems: 'center', paddingVertical: 48, gap: 12 },
+  emptyEmoji: { fontSize: 40 },
+  emptyText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
+  // Modals
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
+  modal: { backgroundColor: '#1A0A2E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.xxl, gap: 12, overflow: 'hidden', borderTopWidth: 1, borderColor: 'rgba(139,92,246,0.3)' },
+  modalTitle: { fontSize: fontSize.xl, fontWeight: '900', color: '#fff', marginBottom: 4 },
+  input: { backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: 12, fontSize: 14, color: '#fff', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
+  inputLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: 0.5 },
+  themeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'transparent' },
+  themeChipActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },
+  themeText: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.5)' },
+  themeTextActive: { color: colors.primary },
+  visRow: { flexDirection: 'row', gap: 8 },
+  visBtn: { flex: 1, paddingVertical: 8, borderRadius: borderRadius.md, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', borderWidth: 1, borderColor: 'transparent' },
+  visBtnActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },
+  visText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.45)', textTransform: 'capitalize' },
+  visTextActive: { color: colors.primary },
+  modalBtns: { gap: 8 },
+  createRoomBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.lg, paddingVertical: spacing.md, alignItems: 'center' },
+  createRoomText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
+  cancelBtn: { alignItems: 'center', paddingVertical: spacing.sm },
+  cancelText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+});
