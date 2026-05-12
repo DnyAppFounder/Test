@@ -61,6 +61,7 @@ export default function TokenDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
   const [copiedPair, setCopiedPair] = useState(false);
+  const [sharedToken, setSharedToken] = useState(false);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [checkingWatchlist, setCheckingWatchlist] = useState(true);
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTab>('chat');
@@ -162,6 +163,22 @@ export default function TokenDetailScreen() {
       setCopiedPair(true);
       setTimeout(() => setCopiedPair(false), 2000);
     }
+  };
+
+  const shareToken = async () => {
+    if (!token) return;
+    const url = `https://solscan.io/token/${token.address}`;
+    try {
+      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && (navigator as any).share) {
+        await (navigator as any).share({ title: token.name ?? token.symbol, url });
+      } else if (Platform.OS === 'web') {
+        (window as any).open(url, '_blank');
+      } else {
+        await Clipboard.setStringAsync(url);
+      }
+      setSharedToken(true);
+      setTimeout(() => setSharedToken(false), 2000);
+    } catch {}
   };
 
   const checkWatchlistStatus = async () => {
@@ -279,16 +296,13 @@ export default function TokenDetailScreen() {
             <MessageSquare size={17} color={activeBottomTab === 'chat' ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => {
-              const url = `https://solscan.io/token/${token.address}`;
-              if (Platform.OS === 'web') {
-                (window as any).open(url, '_blank');
-              }
-            }}
+            style={[styles.iconBtn, sharedToken && styles.iconBtnActive]}
+            onPress={shareToken}
             activeOpacity={0.7}
           >
-            <Share2 size={17} color={colors.textMuted} strokeWidth={2} />
+            {sharedToken
+              ? <CheckCircle2 size={17} color="#A78BFA" strokeWidth={2} />
+              : <Share2 size={17} color={colors.textMuted} strokeWidth={2} />}
           </TouchableOpacity>
           {!checkingWatchlist && (
             <TouchableOpacity style={styles.iconBtn} onPress={toggleWatchlist} activeOpacity={0.7}>
@@ -575,6 +589,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
+  },
+  iconBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderColor: 'rgba(139,92,246,0.35)',
   },
   loadingContainer: {
     flex: 1,

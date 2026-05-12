@@ -144,6 +144,10 @@ export function TradingViewChart({
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [showModePanel, setShowModePanel] = useState(false);
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [showVolume, setShowVolume] = useState(true);
+  const [showPriceLine, setShowPriceLine] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
   const [copiedAddr, setCopiedAddr] = useState(false);
   // Resolved best pair address for this token (used for WS + price polling)
   const [resolvedPairAddr, setResolvedPairAddr] = useState<string | null>(pairAddress ?? null);
@@ -615,13 +619,17 @@ export function TradingViewChart({
         <View style={styles.chartCtrlBtns}>
           <TouchableOpacity
             style={[styles.chartCtrlBtn, showModePanel && styles.chartCtrlBtnActive]}
-            onPress={() => setShowModePanel(p => !p)}
+            onPress={() => { setShowModePanel(p => !p); setShowSettingsPanel(false); }}
             activeOpacity={0.8}
           >
             <ModeIcon size={15} color={showModePanel ? '#A78BFA' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.chartCtrlBtn} activeOpacity={0.8}>
-            <SlidersHorizontal size={15} color="rgba(255,255,255,0.6)" strokeWidth={2} />
+          <TouchableOpacity
+            style={[styles.chartCtrlBtn, showSettingsPanel && styles.chartCtrlBtnActive]}
+            onPress={() => { setShowSettingsPanel(p => !p); setShowModePanel(false); }}
+            activeOpacity={0.8}
+          >
+            <SlidersHorizontal size={15} color={showSettingsPanel ? '#A78BFA' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
           </TouchableOpacity>
         </View>
       </View>
@@ -644,6 +652,65 @@ export function TradingViewChart({
               </TouchableOpacity>
             );
           })}
+        </View>
+      )}
+
+      {/* Chart settings panel (conditional) */}
+      {showSettingsPanel && (
+        <View style={styles.settingsPanel}>
+          {/* Value mode row */}
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsLabel}>Display</Text>
+            <View style={styles.settingsToggleGroup}>
+              <TouchableOpacity
+                style={[styles.settingsToggleBtn, valueMode === 'mcap' && styles.settingsToggleBtnActive]}
+                onPress={() => setValueMode('mcap')}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.settingsToggleText, valueMode === 'mcap' && styles.settingsToggleTextActive]}>MCAP</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.settingsToggleBtn, valueMode === 'price' && styles.settingsToggleBtnActive]}
+                onPress={() => setValueMode('price')}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.settingsToggleText, valueMode === 'price' && styles.settingsToggleTextActive]}>PRICE</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          {/* Volume toggle */}
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsLabel}>Volume bars</Text>
+            <TouchableOpacity
+              style={[styles.settingsSwitch, showVolume && styles.settingsSwitchOn]}
+              onPress={() => setShowVolume(v => !v)}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.settingsSwitchThumb, showVolume && styles.settingsSwitchThumbOn]} />
+            </TouchableOpacity>
+          </View>
+          {/* Price line toggle */}
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsLabel}>Price guide</Text>
+            <TouchableOpacity
+              style={[styles.settingsSwitch, showPriceLine && styles.settingsSwitchOn]}
+              onPress={() => setShowPriceLine(v => !v)}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.settingsSwitchThumb, showPriceLine && styles.settingsSwitchThumbOn]} />
+            </TouchableOpacity>
+          </View>
+          {/* Grid toggle */}
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsLabel}>Grid lines</Text>
+            <TouchableOpacity
+              style={[styles.settingsSwitch, showGrid && styles.settingsSwitchOn]}
+              onPress={() => setShowGrid(v => !v)}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.settingsSwitchThumb, showGrid && styles.settingsSwitchThumbOn]} />
+            </TouchableOpacity>
+          </View>
         </View>
       )}
     </View>
@@ -844,9 +911,11 @@ export function TradingViewChart({
           {/* ── Horizontal grid lines + price labels ──────────────────────── */}
           {priceGridLines.map(({ price, y }, i) => (
             <G key={`g${i}`}>
-              <Line
-                x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
-                stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
+              {showGrid && (
+                <Line
+                  x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
+                  stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
+              )}
               <SvgText
                 x={chartWidth - PAD.right + 4} y={y + 3.5}
                 fontSize={isMobile ? 11 : 8.5}
@@ -956,20 +1025,24 @@ export function TradingViewChart({
           })}
 
           {/* ── Live price dashed horizontal line ─────────────────────────── */}
-          <Line
-            x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
-            stroke="#8B5CF6"
-            strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
-          {/* Price pill on right edge */}
-          <Rect
-            x={chartWidth - PAD.right + 1} y={currentY - 9}
-            width={PAD.right - 2} height={18}
-            fill="#6D28D9" rx={4} />
-          <SvgText
-            x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
-            fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-            {fmtPrice(displayPriceVal)}
-          </SvgText>
+          {showPriceLine && (
+            <>
+              <Line
+                x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
+                stroke="#8B5CF6"
+                strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
+              {/* Price pill on right edge */}
+              <Rect
+                x={chartWidth - PAD.right + 1} y={currentY - 9}
+                width={PAD.right - 2} height={18}
+                fill="#6D28D9" rx={4} />
+              <SvgText
+                x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
+                fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+                {fmtPrice(displayPriceVal)}
+              </SvgText>
+            </>
+          )}
 
           {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
           {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
@@ -978,7 +1051,7 @@ export function TradingViewChart({
           )}
 
           {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
-          {displayCandles.map((c, i) => {
+          {showVolume && displayCandles.map((c, i) => {
             const h     = volBarH(c.volume);
             const vx    = xOf(i);
             const isUp  = c.close >= c.open;
@@ -1202,5 +1275,75 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#A78BFA',
     letterSpacing: 0.3,
+  },
+  // Settings panel
+  settingsPanel: {
+    backgroundColor: 'rgba(13,11,25,0.97)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
+    paddingVertical: 4,
+    overflow: 'hidden',
+  },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(139,92,246,0.08)',
+  },
+  settingsLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.7)',
+  },
+  settingsToggleGroup: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 6,
+    padding: 2,
+    gap: 2,
+  },
+  settingsToggleBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 5,
+  },
+  settingsToggleBtnActive: {
+    backgroundColor: '#7C3AED',
+  },
+  settingsToggleText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.35)',
+    letterSpacing: 0.4,
+  },
+  settingsToggleTextActive: { color: '#fff' },
+  settingsSwitch: {
+    width: 38,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  settingsSwitchOn: {
+    backgroundColor: 'rgba(124,58,237,0.5)',
+    borderColor: 'rgba(167,139,250,0.5)',
+  },
+  settingsSwitchThumb: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    alignSelf: 'flex-start',
+  },
+  settingsSwitchThumbOn: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#A78BFA',
   },
 });

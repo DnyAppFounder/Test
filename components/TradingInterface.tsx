@@ -57,6 +57,7 @@ export function TradingInterface({
   const [error, setError] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [slippage] = useState(0.5);
+  const [switchHint, setSwitchHint] = useState<string | null>(null);
 
   const solToken = tokens.find(t => t.contract_address === SOL_MINT);
   const thisToken = tokens.find(t => t.contract_address === tokenMint);
@@ -104,19 +105,46 @@ export function TradingInterface({
   };
 
   const executeSwap = async (tradeMode: TradeMode) => {
-    const parsed = parseFloat(amount);
-    if (!parsed || parsed <= 0 || !activeAddress) return;
+    if (!activeAddress) {
+      setError('Connect a wallet to trade');
+      setStatus('error');
+      return;
+    }
 
-    // If switching modes, refetch quote first
+    const parsed = parseFloat(amount);
+    if (!parsed || parsed <= 0) {
+      setError('Enter an amount to trade');
+      setStatus('error');
+      return;
+    }
+
+    // If switching modes, show a hint and wait for user to tap again
     if (tradeMode !== mode) {
       setMode(tradeMode);
       setQuote(null);
       setStatus('idle');
+      setError(null);
+      const label = tradeMode === 'buy' ? `Buy ${tokenSymbol}` : `Sell ${tokenSymbol}`;
+      setSwitchHint(`Switched to ${label} — tap again to confirm`);
+      setTimeout(() => setSwitchHint(null), 3500);
+      return;
+    }
+
+    // Pre-execution balance check
+    if (tradeMode === 'buy' && parsed > realSolBalance - 0.001) {
+      setError(`Insufficient SOL balance (need ${(parsed + 0.001).toFixed(4)} SOL)`);
+      setStatus('error');
+      return;
+    }
+    if (tradeMode === 'sell' && parsed > realTokenBalance) {
+      setError(`Insufficient ${tokenSymbol} balance`);
+      setStatus('error');
       return;
     }
 
     if (!quote) return;
     setError(null);
+    setSwitchHint(null);
     setStatus('signing');
     try {
       const swapResult = await jupiterSwapService.getSwapTransaction(quote, activeAddress, true);
@@ -151,7 +179,7 @@ export function TradingInterface({
     } catch (err: any) {
       let msg = err?.message || 'Transaction failed';
       if (msg.includes('User rejected') || msg.includes('rejected')) msg = 'Transaction rejected in wallet';
-      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance';
+      else if (msg.includes('insufficient') || msg.includes('balance')) msg = 'Insufficient balance for this trade';
       setError(msg);
       setStatus('error');
     }
@@ -180,9 +208,15 @@ export function TradingInterface({
   const applyPreset = (val: number) => {
     setMode('buy');
     setAmount(val.toString());
+    setError(null);
+    setSwitchHint(null);
+    if (status === 'error') setStatus('idle');
   };
 
   const applyMax = (tradeMode: TradeMode) => {
+    setError(null);
+    setSwitchHint(null);
+    if (status === 'error') setStatus('idle');
     if (tradeMode === 'buy') {
       const max = Math.max(0, realSolBalance - 0.005);
       if (max > 0) { setMode('buy'); setAmount(max.toFixed(4)); }
@@ -300,7 +334,7 @@ export function TradingInterface({
         <TextInput
           style={styles.amountInput}
           value={amount}
-          onChangeText={v => { setAmount(v); }}
+          onChangeText={v => { setAmount(v); if (error) setError(null); if (switchHint) setSwitchHint(null); if (status === 'error') setStatus('idle'); }}
           placeholder="0.00"
           placeholderTextColor="rgba(255,255,255,0.2)"
           keyboardType="decimal-pad"
@@ -321,6 +355,13 @@ export function TradingInterface({
               {slippage}% slip · {((quote.priceImpactPct || 0) * 100).toFixed(2)}% impact
             </Text>
           )}
+        </View>
+      )}
+
+      {/* Mode switch hint */}
+      {switchHint && !error && (
+        <View style={styles.hintBox}>
+          <Text style={styles.hintText}>{switchHint}</Text>
         </View>
       )}
 
@@ -506,6 +547,12 @@ const styles = StyleSheet.create({
   outputLabel: { fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
   outputValue: { flex: 1, fontSize: 12, color: '#A78BFA', fontWeight: '700', textAlign: 'right' },
   slippageNote: { fontSize: 10, color: 'rgba(255,255,255,0.3)', fontWeight: '500' },
+  hintBox: {
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    borderRadius: 8, padding: 10,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+  },
+  hintText: { fontSize: 11, color: '#A78BFA', fontWeight: '600', textAlign: 'center' },
   // Error / Success
   errorBox: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
