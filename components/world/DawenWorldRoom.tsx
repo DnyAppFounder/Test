@@ -4,10 +4,7 @@ import {
   ScrollView, KeyboardAvoidingView, Platform, useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import {
-  ArrowLeft, Users, ShoppingBag, Package, Map, Edit3,
-  Trash2, RotateCw, Save, X, Crown,
-} from 'lucide-react-native';
+import { ArrowLeft, Users, ShoppingBag, Package, Map, CreditCard as Edit3, Trash2, RotateCw, Save, X, Crown } from 'lucide-react-native';
 import {
   WorldRoom, WorldPresence, WorldMessage, WorldRoomItem, WorldCatalogItem, WorldInventoryItem,
   AvatarConfig, GRID_W, GRID_H,

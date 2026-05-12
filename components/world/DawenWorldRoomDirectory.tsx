@@ -4,7 +4,7 @@ import {
   TextInput,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, Edit3 } from 'lucide-react-native';
+import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
 import {
   WorldRoom, getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
   createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
