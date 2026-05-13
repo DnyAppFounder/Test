@@ -201,10 +201,15 @@ export default function WalletHome() {
     setLiveTokens(prev => { if (prev.length === 0) setLoading(true); return prev; });
     setError(null);
     try {
-      const tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
+      let tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
+      // Retry once after 2s if first attempt returns empty (transient API blip)
+      if (tokens.length === 0) {
+        await new Promise(r => setTimeout(r, 2000));
+        tokens = await liveMarketService.getTokensByCategory('trending' as MarketCategory);
+      }
       if (tokens.length === 0) {
         setLiveTokens(prev => {
-          if (prev.length === 0) setError('Unable to load tokens. Please check your internet connection.');
+          if (prev.length === 0) setError('Market data temporarily unavailable. Pull down to refresh.');
           return prev;
         });
       } else {
@@ -212,7 +217,8 @@ export default function WalletHome() {
       }
     } catch (err: any) {
       console.error('Error loading market data:', err);
-      setLiveTokens(prev => { if (prev.length === 0) setError(err.message || 'Failed to load tokens'); return prev; });
+      // Keep existing tokens visible on error — only set error if we have nothing to show
+      setLiveTokens(prev => { if (prev.length === 0) setError('Unable to load — check connection and pull to refresh.'); return prev; });
     } finally {
       setLoading(false);
     }

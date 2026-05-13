@@ -4,7 +4,11 @@ import {
   ScrollView, KeyboardAvoidingView, Platform, useWindowDimensions,
   Animated,
 } from 'react-native';
-import Svg, { Polygon } from 'react-native-svg';
+import Svg, {
+  Polygon, Rect as SvgRect, Text as SvgText, Line as SvgLine, G as SvgG,
+  Circle as SvgCircle, Defs as SvgDefs,
+  LinearGradient as SvgLinearGradient, Stop as SvgStop,
+} from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -178,18 +182,30 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
         </View>
       ) : null}
 
-      {/* Hair / hat */}
+      {/* Cap / hat */}
       {HairSprite ? (
         <View style={{ height: hairSize, marginBottom: -s(2) }}>
           <HairSprite size={hairSize} />
         </View>
       ) : (
-        <View style={{
-          width: s(20), height: s(9),
-          backgroundColor: '#5B3A1A',
-          borderTopLeftRadius: s(5), borderTopRightRadius: s(5),
-          marginBottom: -s(2),
-        }} />
+        <View style={{ alignItems: 'center', marginBottom: -s(1) }}>
+          {/* Cap brim */}
+          <View style={{
+            width: s(22), height: s(3),
+            backgroundColor: '#111',
+            borderRadius: s(1),
+            marginBottom: -s(1),
+          }} />
+          {/* Cap body */}
+          <View style={{
+            width: s(20), height: s(8),
+            backgroundColor: '#111',
+            borderTopLeftRadius: s(5), borderTopRightRadius: s(5),
+            justifyContent: 'center', alignItems: 'center',
+          }}>
+            <Text style={{ fontSize: s(4), color: '#fff', fontWeight: '900', letterSpacing: 0 }}>D</Text>
+          </View>
+        </View>
       )}
 
       {/* Head — Habbo-style square with slight rounding */}
@@ -203,10 +219,16 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
         alignItems: 'center',
         overflow: 'hidden',
       }}>
-        {/* Eyes — rectangular Habbo-style */}
-        <View style={{ flexDirection: 'row', gap: s(4), marginTop: s(4) }}>
-          <View style={{ width: s(3), height: s(4), backgroundColor: '#1A1A2E', borderRadius: 1 }} />
-          <View style={{ width: s(3), height: s(4), backgroundColor: '#1A1A2E', borderRadius: 1 }} />
+        {/* Sunglasses — single dark bar */}
+        <View style={{
+          marginTop: s(4), width: s(16), height: s(4),
+          backgroundColor: '#111', borderRadius: s(1.5),
+          flexDirection: 'row', alignItems: 'center',
+          justifyContent: 'space-between', paddingHorizontal: s(1),
+        }}>
+          <View style={{ width: s(6), height: s(3), backgroundColor: '#222', borderRadius: s(1), opacity: 0.8 }} />
+          <View style={{ width: s(1), height: s(2), backgroundColor: '#555' }} />
+          <View style={{ width: s(6), height: s(3), backgroundColor: '#222', borderRadius: s(1), opacity: 0.8 }} />
         </View>
         {/* Smile line */}
         <View style={{
@@ -214,7 +236,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
           borderBottomWidth: 1.5,
           borderColor: 'rgba(0,0,0,0.35)',
           borderBottomLeftRadius: s(2), borderBottomRightRadius: s(2),
-          marginTop: s(2),
+          marginTop: s(3),
         }} />
       </View>
 
@@ -247,21 +269,16 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
           width: s(14), height: sitting ? s(10) : s(13),
           backgroundColor: outfitColor,
           borderTopLeftRadius: s(2), borderTopRightRadius: s(2),
+          justifyContent: 'center', alignItems: 'center',
         }}>
-          {/* Shirt pocket detail */}
-          <View style={{
-            position: 'absolute',
-            width: s(4), height: s(4),
-            top: s(3), left: s(3),
-            backgroundColor: 'rgba(255,255,255,0.18)',
-            borderRadius: 1,
-          }} />
+          {/* DAWEN text on chest */}
+          <Text style={{ fontSize: s(3.5), color: 'rgba(255,255,255,0.75)', fontWeight: '900', letterSpacing: 0, marginTop: -s(1) }}>DAWEN</Text>
           {/* Belt line */}
           <View style={{
             position: 'absolute',
             bottom: 0, left: 0, right: 0,
             height: s(3),
-            backgroundColor: 'rgba(0,0,0,0.18)',
+            backgroundColor: 'rgba(0,0,0,0.25)',
           }} />
         </View>
 
@@ -307,7 +324,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
             <View style={{
               position: 'absolute', bottom: 0, left: -s(1),
               width: s(8), height: s(4),
-              backgroundColor: '#2C2020',
+              backgroundColor: '#E8E8E8',
               borderRadius: s(2),
             }} />
           </Animated.View>
@@ -321,7 +338,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
             <View style={{
               position: 'absolute', bottom: 0, left: -s(1),
               width: s(8), height: s(4),
-              backgroundColor: '#2C2020',
+              backgroundColor: '#E8E8E8',
               borderRadius: s(2),
             }} />
           </Animated.View>
@@ -674,28 +691,43 @@ export function DawenWorldRoom({
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* HUD */}
+      {/* HUD — matches screenshot layout */}
       <View style={styles.hud}>
-        <TouchableOpacity onPress={onBack} style={styles.hudBtn}>
-          <ArrowLeft size={18} color="#fff" strokeWidth={2.5} />
-        </TouchableOpacity>
-        <View style={styles.hudCenter}>
-          <Text style={styles.hudRoomName} numberOfLines={1}>{room.name}</Text>
+        {/* Left info card */}
+        <View style={styles.hudInfoCard}>
+          <View style={styles.hudTitleRow}>
+            <Text style={styles.hudGlobe}>🌐</Text>
+            <Text style={styles.hudTitle}>Dawen World</Text>
+          </View>
+          <Text style={styles.hudRoomName} numberOfLines={1}>Room: {room.name}</Text>
           <View style={styles.hudOnline}>
             <View style={styles.onlineDot} />
-            <Users size={11} color={colors.primary} strokeWidth={2.5} />
-            <Text style={styles.hudOnlineText}>{allCount} online</Text>
+            <Text style={styles.hudOnlineText}>Players: {allCount}</Text>
           </View>
         </View>
+
+        <View style={{ flex: 1 }} />
+
+        {/* Right action buttons */}
         <View style={styles.hudRight}>
+          <TouchableOpacity style={styles.hudActionBtn}>
+            <Users size={17} color="#fff" strokeWidth={2} />
+            <View style={styles.hudBadge}><Text style={styles.hudBadgeText}>{allCount}</Text></View>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.hudActionBtn}>
+            <Text style={{ fontSize: 17 }}>💬</Text>
+          </TouchableOpacity>
           {isOwner && (
             <TouchableOpacity
-              style={[styles.hudBtn, decMode && styles.hudBtnActive]}
+              style={[styles.hudActionBtn, decMode && styles.hudActionBtnActive]}
               onPress={() => { setDecMode(d => !d); setSelectedInvItem(null); setSelectedRoomItem(null); }}
             >
-              <Edit3 size={16} color={decMode ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2} />
+              <Edit3 size={16} color={decMode ? '#fff' : 'rgba(255,255,255,0.7)'} strokeWidth={2} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.hudActionBtn} onPress={onBack}>
+            <ArrowLeft size={17} color="rgba(255,255,255,0.7)" strokeWidth={2} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -820,19 +852,306 @@ export function DawenWorldRoom({
                 }
                 return tiles;
               })()}
+              {/* ── Plaza-specific SVG decorations ───────────────────────────── */}
+              {isPlaza && (() => {
+                // Wall coord helpers
+                // Back wall col c: right edge x at bwX(c), top y at bwYT(c), bottom y at bwYB(c)
+                const bwX  = (c: number) => ISO_ORIGIN_X + c * (ISO_TW / 2);
+                const bwYT = (c: number) => c * (ISO_TH / 2);
+                const bwYB = (c: number) => WALL_H + c * (ISO_TH / 2);
+                // Parallelogram polygon on back wall from col c1 to c2, fractions f1-f2 of wall height
+                const bwPoly = (c1: number, c2: number, f1: number, f2: number) =>
+                  `${bwX(c1)},${bwYT(c1) + f1 * WALL_H} ${bwX(c2)},${bwYT(c2) + f1 * WALL_H} ${bwX(c2)},${bwYT(c2) + f2 * WALL_H} ${bwX(c1)},${bwYT(c1) + f2 * WALL_H}`;
+
+                // Left wall row r: right-edge x at lwXR(r), left-edge x at lwXL(r)
+                const lwXR  = (r: number) => ISO_ORIGIN_X - r * (ISO_TW / 2);
+                const lwXL  = (r: number) => ISO_ORIGIN_X - r * (ISO_TW / 2) - ISO_TW / 2;
+                const lwYTR = (r: number) => r * (ISO_TH / 2);
+                const lwYTL = (r: number) => r * (ISO_TH / 2) + ISO_TH / 2;
+                // Parallelogram on left wall rows r1 to r2, fractions f1-f2
+                const lwPoly = (r1: number, r2: number, f1: number, f2: number) =>
+                  `${lwXR(r1)},${lwYTR(r1) + f1 * WALL_H} ${lwXL(r1)},${lwYTL(r1) + f1 * WALL_H} ${lwXL(r2 + 1)},${lwYTL(r2 + 1) + f2 * WALL_H} ${lwXR(r2 + 1)},${lwYTR(r2 + 1) + f2 * WALL_H}`;
+
+                // Floor diamond covering tiles (c1,r1) to (c2,r2)
+                const floorDiamond = (c1: number, r1: number, c2: number, r2: number) => {
+                  const top  = isoToScreen(c1, r1);
+                  const rpt  = isoToScreen(c2, r1);
+                  const bot  = isoToScreen(c2, r2);
+                  const lpt  = isoToScreen(c1, r2);
+                  return `${top.x},${top.y} ${rpt.x + ISO_TW / 2},${rpt.y + ISO_TH / 2} ${bot.x},${bot.y + ISO_TH} ${lpt.x - ISO_TW / 2},${lpt.y + ISO_TH / 2}`;
+                };
+
+                const hw = ISO_TW / 2, hh = ISO_TH / 2;
+
+                return (
+                  <SvgG>
+                    <SvgDefs>
+                      <SvgLinearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+                        <SvgStop offset="0%" stopColor="#1A0B3B" stopOpacity="1" />
+                        <SvgStop offset="60%" stopColor="#0D0620" stopOpacity="1" />
+                        <SvgStop offset="100%" stopColor="#0A0418" stopOpacity="1" />
+                      </SvgLinearGradient>
+                      <SvgLinearGradient id="rugGrad" x1="0" y1="0" x2="1" y2="1">
+                        <SvgStop offset="0%" stopColor="#4C1D95" stopOpacity="0.7" />
+                        <SvgStop offset="100%" stopColor="#5B21B6" stopOpacity="0.5" />
+                      </SvgLinearGradient>
+                    </SvgDefs>
+
+                    {/* ── Brick texture on back wall ── */}
+                    {Array.from({ length: GRID_W }, (_, col) =>
+                      [1, 2, 3, 4].map(i => {
+                        const fy = i * WALL_H / 5;
+                        const odd = i % 2 === 1;
+                        return (
+                          <SvgLine key={`bh${col}-${i}`}
+                            x1={bwX(col) + (odd ? hw * 0.3 : 0)} y1={bwYT(col) + fy}
+                            x2={bwX(col + 1) + (odd ? hw * 0.3 : 0)} y2={bwYT(col + 1) + fy}
+                            stroke="rgba(0,0,0,0.55)" strokeWidth={0.8} />
+                        );
+                      })
+                    )}
+
+                    {/* ── Brick texture on left wall ── */}
+                    {Array.from({ length: GRID_H }, (_, row) =>
+                      [1, 2, 3, 4].map(i => {
+                        const fy = i * WALL_H / 5;
+                        return (
+                          <SvgLine key={`lh${row}-${i}`}
+                            x1={lwXR(row)} y1={lwYTR(row) + fy}
+                            x2={lwXL(row)} y2={lwYTL(row) + fy}
+                            stroke="rgba(0,0,0,0.55)" strokeWidth={0.8} />
+                        );
+                      })
+                    )}
+
+                    {/* ── DAWEN D banner on left wall (rows 0-1) ── */}
+                    <Polygon points={lwPoly(0, 1, 0.05, 0.92)} fill="#0D0820" stroke="#6D28D9" strokeWidth={1.5} />
+                    <Polygon points={lwPoly(0, 1, 0.07, 0.9)} fill="#12082E" />
+                    {/* "D" symbol */}
+                    {(() => {
+                      const cx = (lwXR(0) + lwXR(1) + lwXL(0) + lwXL(1)) / 4;
+                      const cy = (lwYTR(0) + lwYTR(1) + lwYTL(0) + lwYTL(1)) / 4 + WALL_H * 0.48;
+                      const r = Math.min(ISO_TW * 0.22, WALL_H * 0.3);
+                      return (
+                        <>
+                          <SvgCircle cx={cx} cy={cy} r={r + 4} fill="#6D28D9" opacity={0.3} />
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0820" stroke="#A78BFA" strokeWidth={2} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#A78BFA" fontSize={r * 1.1} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── "DAWEN" neon text on left wall (rows 2-5) ── */}
+                    {(() => {
+                      const cx = (lwXR(2) + lwXR(5) + lwXL(2) + lwXL(5)) / 4;
+                      const cy = (lwYTR(2) + lwYTR(5) + lwYTL(2) + lwYTL(5)) / 4 + WALL_H * 0.48;
+                      const fontSize = Math.max(10, Math.min(ISO_TW * 0.55, WALL_H * 0.38));
+                      return (
+                        <>
+                          {/* Glow layer */}
+                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fontSize} fontWeight="900" textAnchor="middle" opacity={0.6} letterSpacing={2}>DAWEN</SvgText>
+                          {/* Crisp layer */}
+                          <SvgText x={cx} y={cy} fill="#D4A5FF" fontSize={fontSize} fontWeight="900" textAnchor="middle" letterSpacing={2}>DAWEN</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── Left wall flag / banner (rows 5-7) ── */}
+                    <Polygon points={lwPoly(5, 6, 0.08, 0.88)} fill="#0A0520" stroke="rgba(109,40,217,0.5)" strokeWidth={1} />
+                    {(() => {
+                      const cx = (lwXR(5) + lwXR(7) + lwXL(5) + lwXL(7)) / 4;
+                      const cy = (lwYTR(5) + lwYTR(7) + lwYTL(5) + lwYTL(7)) / 4 + WALL_H * 0.45;
+                      return (
+                        <SvgText x={cx} y={cy} fill="rgba(167,139,250,0.6)" fontSize={Math.max(8, ISO_TW * 0.25)} fontWeight="700" textAnchor="middle">DAWEN</SvgText>
+                      );
+                    })()}
+
+                    {/* ── "DAWEN WORLD" Artwork poster (back wall, cols 2-5) ── */}
+                    <Polygon points={bwPoly(2, 6, 0.04, 0.93)} fill="#0D0818" stroke="#6D28D9" strokeWidth={2} />
+                    <Polygon points={bwPoly(2.1, 5.9, 0.07, 0.90)} fill="url(#skyGrad)" />
+                    {/* City skyline buildings */}
+                    {[
+                      [2.2, 0.55, 0.2, 0.32], [2.5, 0.45, 0.18, 0.44], [2.9, 0.6, 0.22, 0.29],
+                      [3.3, 0.35, 0.2, 0.54], [3.7, 0.5, 0.25, 0.39], [4.1, 0.65, 0.18, 0.24],
+                      [4.5, 0.4, 0.22, 0.49], [4.9, 0.55, 0.2, 0.34],
+                    ].map(([c, f1, w, h], i) => (
+                      <Polygon key={`bld${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(30,10,60,0.9)" stroke="rgba(109,40,217,0.35)" strokeWidth={0.5} />
+                    ))}
+                    {/* Moon */}
+                    {(() => {
+                      const moonX = bwX(4.8) + ISO_TW * 0.1;
+                      const moonY = bwYT(4.8) + WALL_H * 0.12;
+                      const r = Math.min(ISO_TW * 0.12, WALL_H * 0.1);
+                      return (
+                        <>
+                          <SvgCircle cx={moonX} cy={moonY} r={r * 1.6} fill="#4C1D95" opacity={0.4} />
+                          <SvgCircle cx={moonX} cy={moonY} r={r} fill="#E9D5FF" />
+                        </>
+                      );
+                    })()}
+                    {/* "DAWEN WORLD" text on poster */}
+                    {(() => {
+                      const cx = bwX(4);
+                      const cy = bwYT(4) + WALL_H * 0.2;
+                      const fs = Math.max(8, Math.min(ISO_TW * 0.35, WALL_H * 0.22));
+                      return (
+                        <>
+                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.5}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy} fill="#C4B5FD" fontSize={fs} fontWeight="900" textAnchor="middle" letterSpacing={1}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy + fs * 1.3} fill="#A78BFA" fontSize={fs * 0.75} fontWeight="700" textAnchor="middle" letterSpacing={2}>WORLD</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── Window / City view (back wall, cols 6-8) ── */}
+                    <Polygon points={bwPoly(6, 9, 0.05, 0.88)} fill="#050310" stroke="#3B0764" strokeWidth={1.5} />
+                    <Polygon points={bwPoly(6.1, 8.9, 0.08, 0.85)} fill="url(#skyGrad)" />
+                    {/* Window frame dividers */}
+                    <SvgLine x1={bwX(7.5)} y1={bwYT(7.5) + 0.08 * WALL_H} x2={bwX(7.5)} y2={bwYT(7.5) + 0.85 * WALL_H} stroke="#3B0764" strokeWidth={2} />
+                    <SvgLine x1={bwX(6.1)} y1={bwYT(6.1) + WALL_H * 0.47} x2={bwX(8.9)} y2={bwYT(8.9) + WALL_H * 0.47} stroke="#3B0764" strokeWidth={1.5} />
+                    {/* City buildings in window */}
+                    {[
+                      [6.2, 0.5, 0.25, 0.34], [6.6, 0.4, 0.2, 0.44], [7.0, 0.55, 0.22, 0.29],
+                      [7.6, 0.38, 0.2, 0.46], [8.0, 0.52, 0.18, 0.32], [8.4, 0.45, 0.22, 0.38],
+                    ].map(([c, f1, w, h], i) => (
+                      <Polygon key={`win${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(20,5,45,0.95)" stroke="rgba(109,40,217,0.3)" strokeWidth={0.5} />
+                    ))}
+                    {/* Moon in window */}
+                    {(() => {
+                      const mx = bwX(8.2) + ISO_TW * 0.05;
+                      const my = bwYT(8.2) + WALL_H * 0.13;
+                      const r = Math.min(ISO_TW * 0.1, WALL_H * 0.09);
+                      return (
+                        <>
+                          <SvgCircle cx={mx} cy={my} r={r * 1.5} fill="#4C1D95" opacity={0.35} />
+                          <SvgCircle cx={mx} cy={my} r={r} fill="#F3E8FF" />
+                        </>
+                      );
+                    })()}
+
+                    {/* ── "BUILD TRADE PLAY EARN" sign (back wall, cols 6-8, upper half) ── */}
+                    <Polygon points={bwPoly(6.15, 7.4, 0.09, 0.43)} fill="#0A0218" stroke="#4C1D95" strokeWidth={1} />
+                    {(() => {
+                      const cx = bwX(6.8);
+                      const baseY = bwYT(6.8) + WALL_H * 0.15;
+                      const fs = Math.max(5, Math.min(ISO_TW * 0.17, WALL_H * 0.12));
+                      const lines = ['BUILD', 'TRADE', 'PLAY', 'EARN'];
+                      return lines.map((line, i) => (
+                        <SvgText key={`sign${i}`} x={cx} y={baseY + i * fs * 1.35} fill="#C4B5FD" fontSize={fs} fontWeight="800" textAnchor="middle" letterSpacing={1}>{line}</SvgText>
+                      ));
+                    })()}
+                    {/* D logo under text */}
+                    {(() => {
+                      const cx = bwX(7.0);
+                      const cy = bwYT(7.0) + WALL_H * 0.73;
+                      const r = Math.min(ISO_TW * 0.1, WALL_H * 0.08);
+                      return (
+                        <>
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0820" stroke="#6D28D9" strokeWidth={1.5} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#A78BFA" fontSize={r * 1.0} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── "DAWEN ARCADE" neon sign (far right, back wall cols 8-10) ── */}
+                    <Polygon points={bwPoly(8, 10, 0.06, 0.55)} fill="#0A0520" stroke="#9D4EDD" strokeWidth={1.5} />
+                    {(() => {
+                      const cx = bwX(9);
+                      const cy = bwYT(9) + WALL_H * 0.22;
+                      const fs = Math.max(7, Math.min(ISO_TW * 0.28, WALL_H * 0.18));
+                      return (
+                        <>
+                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.7}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy} fill="#E9D5FF" fontSize={fs} fontWeight="900" textAnchor="middle">DAWEN</SvgText>
+                          <SvgText x={cx} y={cy + fs * 1.3} fill="#E9D5FF" fontSize={fs} fontWeight="900" textAnchor="middle">ARCADE</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── Shelving units along back wall (cols 0-2) ── */}
+                    {(() => {
+                      const shelfX = bwX(0.3);
+                      const shelfY = bwYT(0.3) + WALL_H * 0.15;
+                      const sw = bwX(1.8) - bwX(0.3);
+                      const sh = WALL_H * 0.7;
+                      // Shelf box
+                      return (
+                        <Polygon points={bwPoly(0.1, 1.9, 0.12, 0.88)} fill="#0E0A1A" stroke="#3B0764" strokeWidth={1} />
+                      );
+                    })()}
+
+                    {/* ── Purple rug on floor (center tiles 3-6, rows 2-5) ── */}
+                    <Polygon points={floorDiamond(3, 2, 6, 5)} fill="url(#rugGrad)" stroke="#7C3AED" strokeWidth={1.8} opacity={0.85} />
+                    {/* Rug border inner */}
+                    <Polygon points={floorDiamond(3.5, 2.5, 5.5, 4.5)} fill="none" stroke="#9D4EDD" strokeWidth={1} strokeDasharray="3,2" opacity={0.6} />
+                    {/* Rug D logo */}
+                    {(() => {
+                      const center = isoToScreen(4.5, 3.5);
+                      const cx = center.x;
+                      const cy = center.y + ISO_TH / 2;
+                      const r = Math.min(ISO_TW * 0.3, ISO_TH * 1.2);
+                      return (
+                        <>
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#5B21B6" opacity={0.5} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#C4B5FD" fontSize={r * 1.2} fontWeight="900" textAnchor="middle" fontFamily="monospace" opacity={0.7}>D</SvgText>
+                        </>
+                      );
+                    })()}
+
+                    {/* ── Checkered floor section (right, cols 7-9, rows 3-6) ── */}
+                    {Array.from({ length: 3 }, (_, ci) =>
+                      Array.from({ length: 4 }, (_, ri) => {
+                        const col = 7 + ci, row = 3 + ri;
+                        const isEvenCheck = (col + row) % 2 === 0;
+                        return (
+                          <Polygon key={`ck-${col}-${row}`}
+                            points={tilePoly(col, row)}
+                            fill={isEvenCheck ? 'rgba(30,15,60,0.6)' : 'rgba(200,200,210,0.12)'}
+                            stroke="rgba(100,60,180,0.2)" strokeWidth={0.3} />
+                        );
+                      })
+                    )}
+
+                    {/* ── Sofa frame (lower left, cols 1-3, rows 5-7) ── */}
+                    {(() => {
+                      const pos1 = isoToScreen(1, 6);
+                      const pos2 = isoToScreen(3, 5);
+                      const sofaW = Math.abs(pos2.x - pos1.x) + ISO_TW;
+                      const sofaH = ISO_TH * 2;
+                      return null; // Rendered as world items from DB
+                    })()}
+
+                    {/* ── Arcade machine outline (right, col 8-9, row 1-2) ── */}
+                    {(() => {
+                      const p = isoToScreen(8.5, 1.5);
+                      const aw = ISO_TW * 0.7;
+                      const ah = WALL_H * 0.7;
+                      return (
+                        <SvgRect x={p.x - aw / 2} y={p.y - ah + ISO_TH / 4} width={aw} height={ah} fill="#0D0820" stroke="#9D4EDD" strokeWidth={1.5} rx={3} />
+                      );
+                    })()}
+
+                    {/* ── Elevation tile glow under avatar spawn ── */}
+                    <Polygon points={tilePoly(5, 4)} fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" strokeWidth={1.5} />
+                  </SvgG>
+                );
+              })()}
+
             </Svg>
 
-            {/* Room name label on back wall */}
-            <View
-              style={[styles.isoRoomLabel, {
-                left: ISO_ORIGIN_X - 60,
-                top: Math.round(WALL_H * 0.2),
-              }]}
-            >
-              <Text style={styles.isoRoomLabelText} numberOfLines={1}>
-                {isPlaza ? 'DAWEN WORLD' : room.name}
-              </Text>
-            </View>
+            {/* Room name label — only for non-plaza rooms */}
+            {!isPlaza && (
+              <View
+                style={[styles.isoRoomLabel, {
+                  left: ISO_ORIGIN_X - 60,
+                  top: Math.round(WALL_H * 0.2),
+                }]}
+              >
+                <Text style={styles.isoRoomLabelText} numberOfLines={1}>
+                  {room.name}
+                </Text>
+              </View>
+            )}
 
             {/* ── Furniture + avatars (depth-sorted Views on top of SVG) ── */}
             {(() => {
@@ -1004,8 +1323,8 @@ export function DawenWorldRoom({
             style={styles.chatInput}
             value={chatText}
             onChangeText={setChatText}
-            placeholder="Chat in room…"
-            placeholderTextColor="rgba(255,255,255,0.3)"
+            placeholder="Say something..."
+            placeholderTextColor="rgba(255,255,255,0.28)"
             returnKeyType="send"
             onSubmitEditing={handleSendChat}
             maxLength={200}
@@ -1056,10 +1375,18 @@ const styles = StyleSheet.create({
   // HUD
   hud: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: spacing.md, paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    borderBottomWidth: 1, borderBottomColor: 'rgba(139,92,246,0.25)', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
+    backgroundColor: 'rgba(0,0,0,0.82)', gap: 8,
+    borderBottomWidth: 0,
   },
+  hudInfoCard: {
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
+  },
+  hudTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  hudGlobe: { fontSize: 14 },
+  hudTitle: { fontSize: 14, fontWeight: '800', color: '#fff' },
   hudBtn: {
     width: 34, height: 34, borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -1067,14 +1394,28 @@ const styles = StyleSheet.create({
   },
   hudBtnActive: { backgroundColor: colors.primary },
   hudCenter: { flex: 1, alignItems: 'center' },
-  hudRoomName: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
-  hudOnline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  hudRoomName: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '500' },
+  hudOnline: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   onlineDot: {
     width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981',
     shadowColor: '#10B981', shadowRadius: 4, shadowOpacity: 0.8, elevation: 3,
   },
-  hudOnlineText: { fontSize: 10, color: colors.primary, fontWeight: '700' },
-  hudRight: { flexDirection: 'row', gap: 6 },
+  hudOnlineText: { fontSize: 11, color: '#10B981', fontWeight: '600' },
+  hudRight: { flexDirection: 'row', gap: 8 },
+  hudActionBtn: {
+    width: 42, height: 42, borderRadius: 12,
+    backgroundColor: 'rgba(30,20,60,0.85)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+    position: 'relative',
+  },
+  hudActionBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  hudBadge: {
+    position: 'absolute', top: -4, right: -4,
+    backgroundColor: colors.primary, borderRadius: 8,
+    minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3,
+  },
+  hudBadgeText: { fontSize: 9, color: '#fff', fontWeight: '800' },
 
   // Decor bar
   decorBar: {
@@ -1219,21 +1560,22 @@ const styles = StyleSheet.create({
   chatEmpty: { fontSize: 11, color: 'rgba(255,255,255,0.25)', padding: 8 },
   chatInputRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: spacing.md, paddingVertical: 7, gap: 8,
-    borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.1)',
+    paddingHorizontal: 12, paddingVertical: 10, gap: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   chatInput: {
-    flex: 1, backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: borderRadius.md, paddingHorizontal: spacing.md,
-    paddingVertical: 7, fontSize: 13, color: '#fff',
-    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.09)',
+    borderRadius: 24, paddingHorizontal: 16,
+    paddingVertical: 9, fontSize: 14, color: '#fff',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   sendBtn: {
-    width: 34, height: 34, borderRadius: 17,
+    width: 38, height: 38, borderRadius: 19,
     backgroundColor: colors.primary,
     justifyContent: 'center', alignItems: 'center',
+    shadowColor: colors.primary, shadowRadius: 6, shadowOpacity: 0.5, elevation: 4,
   },
-  sendBtnText: { fontSize: 16, color: '#fff', fontWeight: '700' },
+  sendBtnText: { fontSize: 18, color: '#fff', fontWeight: '700', marginTop: -1 },
   gestureBar: {
     flexDirection: 'row', gap: 6,
     paddingHorizontal: spacing.md, paddingVertical: 5,
