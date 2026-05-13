@@ -4,7 +4,7 @@ import {
   TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
+import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
 import {
   WorldRoom, SizeTier, SIZE_TIER_CONFIG,
   getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
@@ -193,7 +193,7 @@ export function DawenWorldRoomDirectory({
         <TouchableOpacity onPress={onClose} style={styles.backBtn}>
           <ArrowLeft size={20} color="#fff" strokeWidth={2.5} />
         </TouchableOpacity>
-        <Map size={18} color={colors.primary} strokeWidth={2} />
+        <MapIcon size={18} color={colors.primary} strokeWidth={2} />
         <Text style={styles.title}>Room Directory</Text>
         <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
           <Plus size={16} color="#fff" strokeWidth={2.5} />

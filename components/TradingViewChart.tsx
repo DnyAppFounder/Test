@@ -468,10 +468,15 @@ export function TradingViewChart({
 
   // ── Live time engine geometry ─────────────────────────────────────────────
   const bucketMs  = BUCKET_MS[timeframe] ?? 3_600_000;
-  const visibleMs = maxVisible * bucketMs;
-  // When scrolled back, shift the entire window back by the same amount
   const scrollOffsetMs = clampedOffset * bucketMs;
   const rightTime = rightTimeRef.current - scrollOffsetMs;
+  // Dynamic visible window: shrink to fit actual data when not scrolled so
+  // candles spread across the full chart instead of clustering on the right
+  const dataN = rawSlice.length;
+  const effectiveN = (clampedOffset > 0 || dataN === 0)
+    ? maxVisible
+    : Math.min(maxVisible, dataN + 2); // +2: live-edge slot + small right margin
+  const visibleMs = Math.max(bucketMs * 5, effectiveN * bucketMs);
   const leftTime  = rightTime - visibleMs;
   // Sync refs so stale closures (panResponder) can read current values
   bucketMsRef.current  = bucketMs;
@@ -489,8 +494,9 @@ export function TradingViewChart({
   const minP   = Math.min(...lows);
   const priceRange = (maxP - minP) || maxP * 0.01 || 1;
   const maxVol = n > 0 ? Math.max(...displayCandles.map(c => c.volume)) || 1 : 1;
-  const barW    = Math.max(isMobile ? 3   : 1.5, (plotW / Math.max(n, 1)) * 0.55);
-  const candleW = Math.max(isMobile ? 6   : 2,   (plotW / Math.max(n, 1)) * (isMobile ? 0.72 : 0.6));
+  const pixelPerBucket = n > 0 ? (bucketMs / visibleMs) * plotW : plotW / maxVisible;
+  const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
+  const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
 
   // candle center x — uses real timestamp so chart slides left as time passes
   function xOf(i: number): number {
@@ -862,7 +868,7 @@ export function TradingViewChart({
 
   // Time labels — generated from leftTime→rightTime at regular bucket intervals
   // Aim for ~5-6 labels; step = multiple of bucketMs so labels land on clean boundaries
-  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(maxVisible / 6));
+  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(effectiveN / 6));
   const firstLabelTs    = Math.ceil(leftTime / timeLabelStepMs) * timeLabelStepMs;
   const timeLabels: { ts: number; x: number }[] = [];
   for (let ts = firstLabelTs; ts <= rightTime; ts += timeLabelStepMs) {

@@ -7,7 +7,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  ArrowLeft, Users, ShoppingBag, Package, Map,
+  ArrowLeft, Users, ShoppingBag, Package, Map as MapIcon,
   CreditCard as Edit3, Trash2, RotateCw, X, Crown,
 } from 'lucide-react-native';
 import {
@@ -632,7 +632,7 @@ export function DawenWorldRoom({
 
       {/* Bottom Nav */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-        <NavBtn icon={Map} label="Rooms" onPress={onOpenDirectory} />
+        <NavBtn icon={MapIcon} label="Rooms" onPress={onOpenDirectory} />
         <NavBtn icon={ShoppingBag} label="Shop" onPress={onOpenShop} />
         <NavBtn icon={Package} label="Items" onPress={onOpenInventory} />
       </View>
