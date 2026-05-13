@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Bell, Heart, MessageCircle, UserPlus, AtSign, Repeat2, Mail } from 'lucide-react-native';
 import { Notification } from '@/services/socialService';
+import { supabase } from '@/lib/supabase';
 import { colors, spacing, fontSize } from '@/constants/theme';
 
 interface NotificationBannerProps {
@@ -22,7 +23,7 @@ function notifIcon(type: Notification['type']) {
   }
 }
 
-export default function NotificationBanner({ notification, onDismiss, onPress }: NotificationBannerProps) {
+export default function NotificationBannerInner({ notification, onDismiss, onPress }: NotificationBannerProps) {
   const slideY = useRef(new Animated.Value(-120)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,3 +141,43 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+// Self-contained named export: subscribes to realtime notifications for a user
+export function NotificationBanner({ userId }: { userId: string | null }) {
+  const [notification, setNotification] = useState<Notification | null>(null);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel(`notif_banner_${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          const n = payload.new as any;
+          setNotification({
+            id: n.id,
+            user_id: n.user_id,
+            actor_id: n.actor_id,
+            type: n.type,
+            post_id: n.post_id,
+            message: n.message ?? '',
+            read: n.read ?? false,
+            created_at: n.created_at,
+          });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [userId]);
+
+  return (
+    <NotificationBannerInner
+      notification={notification}
+      onDismiss={() => setNotification(null)}
+      onPress={() => setNotification(null)}
+    />
+  );
+}
