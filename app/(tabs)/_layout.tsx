@@ -46,19 +46,25 @@ function AnimatedGlobeIcon({ size, color, count }: { size: number; color: string
   const prevActive = useRef(false);
 
   useEffect(() => {
-    Animated.loop(
+    const rotateLoop = Animated.loop(
       Animated.timing(rotateAnim, {
         toValue: 1,
         duration: 6000,
         useNativeDriver: true,
       })
-    ).start();
-    Animated.loop(
+    );
+    const glowLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(glowAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
         Animated.timing(glowAnim, { toValue: 0, duration: 1500, useNativeDriver: true }),
       ])
-    ).start();
+    );
+    rotateLoop.start();
+    glowLoop.start();
+    return () => {
+      rotateLoop.stop();
+      glowLoop.stop();
+    };
   }, []);
 
   useEffect(() => {

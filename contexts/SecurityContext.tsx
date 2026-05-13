@@ -59,7 +59,8 @@ interface SecurityContextValue extends SecurityState {
 
 const SecurityContext = createContext<SecurityContextValue | undefined>(undefined);
 
-// Read a value: wallet-specific key first, then migrate from global legacy key
+// Read a value: wallet-specific key first, then migrate from global legacy key.
+// ONLY use this for pin_hash and wallet_type — not for step-completion flags.
 async function readKey(addr: string, suffix: string, globalKey: string): Promise<string | null> {
   if (addr) {
     const val = await AsyncStorage.getItem(wKey(addr, suffix)).catch(() => null);
@@ -73,11 +74,24 @@ async function readKey(addr: string, suffix: string, globalKey: string): Promise
   return legacy;
 }
 
-// Write a value to both wallet-specific and global keys
+// Read a value ONLY from the per-wallet key — no global fallback.
+// Used for step-completion flags so new wallets never inherit a previous user's state.
+async function readKeyWalletOnly(addr: string, suffix: string): Promise<string | null> {
+  if (!addr) return null;
+  return AsyncStorage.getItem(wKey(addr, suffix)).catch(() => null);
+}
+
+// Write a value to both wallet-specific and global keys (for identity fields).
 async function writeKey(addr: string, suffix: string, globalKey: string, value: string) {
   const ops: Promise<void>[] = [AsyncStorage.setItem(globalKey, value)];
   if (addr) ops.push(AsyncStorage.setItem(wKey(addr, suffix), value));
   await Promise.all(ops).catch(() => {});
+}
+
+// Write a value ONLY to the per-wallet key (for step-completion flags).
+async function writeKeyWalletOnly(addr: string, suffix: string, value: string) {
+  if (!addr) return;
+  await AsyncStorage.setItem(wKey(addr, suffix), value).catch(() => {});
 }
 
 export function SecurityProvider({ children }: { children: ReactNode }) {
@@ -103,6 +117,8 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
 
     const load = async () => {
       try {
+        // pin_hash and wallet_type: keep global fallback for backward compat.
+        // All step-completion flags: per-wallet ONLY — no global inheritance.
         const [
           pinHashVal,
           walletTypeVal,
@@ -115,13 +131,14 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
         ] = await Promise.all([
           readKey(addr, 'pin_hash',                 G.pinHash),
           readKey(addr, 'wallet_type',              G.walletType),
-          readKey(addr, 'biometric_enabled',        G.biometricEnabled),
-          readKey(addr, 'biometric_offered',        G.biometricOffered),
-          readKey(addr, 'seed_backup_confirmed',    G.seedBackupConfirmed),
-          readKey(addr, 'import_backup_confirmed',  G.importBackupConfirmed),
-          readKey(addr, 'external_warning_accepted',G.externalWarningAccepted),
-          readKey(addr, 'onboarding_complete',      G.onboardingComplete),
+          readKeyWalletOnly(addr, 'biometric_enabled'),
+          readKeyWalletOnly(addr, 'biometric_offered'),
+          readKeyWalletOnly(addr, 'seed_backup_confirmed'),
+          readKeyWalletOnly(addr, 'import_backup_confirmed'),
+          readKeyWalletOnly(addr, 'external_warning_accepted'),
+          readKeyWalletOnly(addr, 'onboarding_complete'),
         ]);
+        console.log(`[Security] Loaded for ${addr.slice(0, 8)}: pin=${!!pinHashVal} type=${walletTypeVal} onboarding=${onboardingCompleteVal} seed=${seedBackupVal} import=${importBackupVal}`);
 
         // If pin not found locally, try Supabase backup (only when authenticated)
         let finalPinHash = pinHashVal;
@@ -228,8 +245,8 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
   // ── setBiometricEnabled ───────────────────────────────────────────────────
   const setBiometricEnabled = useCallback(async (enabled: boolean, profileId?: string) => {
     const val = enabled ? 'true' : 'false';
-    await writeKey(addr, 'biometric_enabled', G.biometricEnabled, val);
-    await writeKey(addr, 'biometric_offered',  G.biometricOffered,  'true');
+    await writeKeyWalletOnly(addr, 'biometric_enabled', val);
+    await writeKeyWalletOnly(addr, 'biometric_offered', 'true');
     setState(s => ({ ...s, biometricEnabled: enabled, biometricOffered: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ biometric_enabled: enabled }).eq('id', profileId).then(() => {});
@@ -238,13 +255,13 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
 
   // ── markBiometricOffered ──────────────────────────────────────────────────
   const markBiometricOffered = useCallback(async () => {
-    await writeKey(addr, 'biometric_offered', G.biometricOffered, 'true');
+    await writeKeyWalletOnly(addr, 'biometric_offered', 'true');
     setState(s => ({ ...s, biometricOffered: true }));
   }, [addr]);
 
   // ── confirmSeedBackup ─────────────────────────────────────────────────────
   const confirmSeedBackup = useCallback(async (profileId?: string) => {
-    await writeKey(addr, 'seed_backup_confirmed', G.seedBackupConfirmed, 'true');
+    await writeKeyWalletOnly(addr, 'seed_backup_confirmed', 'true');
     setState(s => ({ ...s, seedBackupConfirmed: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ seed_backup_confirmed: true }).eq('id', profileId).then(() => {});
@@ -253,7 +270,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
 
   // ── confirmImportBackup ───────────────────────────────────────────────────
   const confirmImportBackup = useCallback(async (profileId?: string) => {
-    await writeKey(addr, 'import_backup_confirmed', G.importBackupConfirmed, 'true');
+    await writeKeyWalletOnly(addr, 'import_backup_confirmed', 'true');
     setState(s => ({ ...s, importBackupConfirmed: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ backup_confirmation_accepted: true }).eq('id', profileId).then(() => {});
@@ -262,7 +279,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
 
   // ── acceptExternalWarning ─────────────────────────────────────────────────
   const acceptExternalWarning = useCallback(async (profileId?: string) => {
-    await writeKey(addr, 'external_warning_accepted', G.externalWarningAccepted, 'true');
+    await writeKeyWalletOnly(addr, 'external_warning_accepted', 'true');
     setState(s => ({ ...s, externalWarningAccepted: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ external_backup_warning_accepted: true }).eq('id', profileId).then(() => {});
@@ -271,7 +288,8 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
 
   // ── completeOnboarding ────────────────────────────────────────────────────
   const completeOnboarding = useCallback(async (profileId?: string) => {
-    await writeKey(addr, 'onboarding_complete', G.onboardingComplete, 'true');
+    console.log(`[Security] completeOnboarding for ${addr.slice(0, 8)}`);
+    await writeKeyWalletOnly(addr, 'onboarding_complete', 'true');
     setState(s => ({ ...s, onboardingComplete: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ onboarding_complete: true }).eq('id', profileId).then(() => {});

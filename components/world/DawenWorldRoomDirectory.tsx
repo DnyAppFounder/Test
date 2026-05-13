@@ -88,18 +88,21 @@ export function DawenWorldRoomDirectory({
     const trimmed = newName.trim();
     if (trimmed.length < 3) { setNameError('Name must be at least 3 characters.'); return; }
     if (trimmed.length > 40) { setNameError('Name must be 40 characters or less.'); return; }
+    if (!walletAddress) { setNameError('Wallet not connected. Please reconnect and try again.'); return; }
     if (creating) return;
     setNameError('');
     setCreating(true);
     try {
-      await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis });
+      const room = await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis });
+      console.log('[DawenWorldRoomDirectory] room created:', room.id, room.name);
       setCreateOpen(false);
       setNewName('');
       await load();
       setTab('mine');
-    } catch (e) {
-      console.warn('[DawenWorldRoomDirectory] create error', e);
-      setNameError('Failed to create room. Please try again.');
+    } catch (e: any) {
+      console.error('[DawenWorldRoomDirectory] create error:', e?.message ?? e, JSON.stringify(e));
+      const msg = e?.message ?? e?.error_description ?? 'Failed to create room. Please try again.';
+      setNameError(msg);
     } finally {
       setCreating(false);
     }

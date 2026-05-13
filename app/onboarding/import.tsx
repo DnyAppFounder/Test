@@ -141,6 +141,11 @@ export default function ImportWallet() {
             style={styles.primaryButton}
             onPress={async () => {
               await AsyncStorage.setItem('security:wallet_type', 'imported');
+              for (const { address } of importedAddresses) {
+                const addr = address.toLowerCase().trim();
+                await AsyncStorage.setItem(`security:${addr}:wallet_type`, 'imported').catch(() => {});
+              }
+              console.log('[Onboarding] Wallet imported, wallet_type written, loading accounts');
               await forceReloadAccounts();
               router.replace('/(tabs)');
             }}

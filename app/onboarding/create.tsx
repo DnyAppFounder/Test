@@ -151,7 +151,13 @@ export default function CreateWallet() {
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={async () => {
+              // Write global key (backward compat) + per-wallet key for each created address
               await AsyncStorage.setItem('security:wallet_type', 'created');
+              for (const { address } of createdAddresses) {
+                const addr = address.toLowerCase().trim();
+                await AsyncStorage.setItem(`security:${addr}:wallet_type`, 'created').catch(() => {});
+              }
+              console.log('[Onboarding] Wallet created, wallet_type written, loading accounts');
               await forceReloadAccounts();
               router.replace('/(tabs)');
             }}
