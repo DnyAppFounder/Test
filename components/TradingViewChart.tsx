@@ -86,7 +86,6 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
 ];
 
 const TIME_H = 18;
-const BG_TILE_W = 56; // width of one repeating background tile (px)
 
 // Milliseconds per candle bucket
 const BUCKET_MS: Record<string, number> = {
@@ -147,8 +146,8 @@ export function TradingViewChart({
 
   // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
-  const CHART_H  = chartHeight ?? (isMobile ? 270 : 220);
-  const VOL_H    = isMobile ? 52  : 36;
+  const CHART_H  = chartHeight ?? (isMobile ? 380 : 240);
+  const VOL_H    = isMobile ? 60  : 40;
   const PAD      = { top: 10, right: isMobile ? 72 : 60, bottom: 4, left: 4 };
 
   const resolvedInfo: TokenInfo | undefined = tokenInfo ?? (symbol != null ? {
@@ -179,7 +178,6 @@ export function TradingViewChart({
 
   // Animated values
   const dotPulse = useRef(new Animated.Value(1)).current;
-  const bgAnim = useRef(new Animated.Value(0)).current;
 
   // Historical scroll state
   const [panOffsetCandles, setPanOffsetCandles] = useState(0);
@@ -187,6 +185,11 @@ export function TradingViewChart({
   const plotWRef           = useRef(0);
   const panStartOffsetRef  = useRef(0);
   const isPanScrollRef     = useRef(false);
+
+  // Stable price scale — recomputed only when visible candle set changes, NOT on every clock tick.
+  // This prevents the Y axis from jumping during horizontal time animation.
+  const priceScaleRef    = useRef({ maxP: 0, minP: 0, priceRange: 1, maxVol: 1 });
+  const priceScaleKeyRef = useRef('');
 
   const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef         = useRef<WebSocket | null>(null);
@@ -241,20 +244,6 @@ export function TradingViewChart({
     return () => { cancelled = true; };
   }, [tokenMint, pairAddress]);
 
-  // Moving background grid animation
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(bgAnim, {
-        toValue: -BG_TILE_W,
-        duration: 1500,
-        useNativeDriver: true,
-        isInteraction: false,
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-
   // Pulse live dot
   useEffect(() => {
     const loop = Animated.loop(Animated.sequence([
@@ -265,13 +254,13 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Visual time engine — advances rightTime 5× per second so the chart slides smoothly
+  // Visual time engine — advances rightTime once per second; horizontal viewport slides smoothly
   useEffect(() => {
     rightTimeRef.current = Date.now();
     const id = setInterval(() => {
       rightTimeRef.current = Date.now();
       setClockTick(t => t + 1);
-    }, 200);
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -379,6 +368,7 @@ export function TradingViewChart({
     setCrosshair(null);
     setPanOffsetCandles(0);
     panOffsetRef.current = 0;
+    priceScaleKeyRef.current = ''; // force scale recalculation for new timeframe/token
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
@@ -488,12 +478,30 @@ export function TradingViewChart({
     return PAD.left + ((ts - leftTime) / visibleMs) * plotW;
   }
 
-  const highs  = n > 0 ? displayCandles.map(c => c.high)   : [0];
-  const lows   = n > 0 ? displayCandles.map(c => c.low)    : [0];
-  const maxP   = Math.max(...highs);
-  const minP   = Math.min(...lows);
-  const priceRange = (maxP - minP) || maxP * 0.01 || 1;
-  const maxVol = n > 0 ? Math.max(...displayCandles.map(c => c.volume)) || 1 : 1;
+  // ── Stable price scale ───────────────────────────────────────────────────
+  // Key includes: timeframe, visible candle count, first + second-to-last candle timestamps.
+  // Live price updates within a candle bucket do NOT change these → scale is frozen during
+  // horizontal time animation, only rebuilding when a new candle closes or tf changes.
+  {
+    const stableLastIdx = Math.max(0, n - 2);
+    const key = `${timeframe}|${valueMode}|${n}|${displayCandles[0]?.timestamp ?? 0}|${displayCandles[stableLastIdx]?.timestamp ?? 0}`;
+    if (key !== priceScaleKeyRef.current && n > 0) {
+      priceScaleKeyRef.current = key;
+      // Use closed candles (all but last) for the base range; last candle is live and changing
+      const closedSlice = n > 1 ? displayCandles.slice(0, n - 1) : displayCandles;
+      const rMax = Math.max(...closedSlice.map(c => c.high));
+      const rMin = Math.min(...closedSlice.map(c => c.low));
+      const range = (rMax - rMin) || rMax * 0.02 || 0.001;
+      const pad   = range * 0.12; // 12% head/foot room so live candle stays visible
+      priceScaleRef.current = {
+        maxP:       rMax + pad,
+        minP:       Math.max(0, rMin - pad),
+        priceRange: (rMax + pad) - Math.max(0, rMin - pad) || 1,
+        maxVol:     Math.max(...displayCandles.map(c => c.volume)) || 1,
+      };
+    }
+  }
+  const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
   const pixelPerBucket = n > 0 ? (bucketMs / visibleMs) * plotW : plotW / maxVisible;
   const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
   const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
@@ -620,8 +628,11 @@ export function TradingViewChart({
   const sym              = resolvedInfo?.symbol ?? 'TOKEN';
   const contractAddr     = resolvedInfo?.address ?? tokenMint ?? '';
   const shortContractAddr = contractAddr ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}` : '';
-  const displayPriceVal  = livePrice ?? (currentPrice != null && currentPrice > 0 ? currentPrice
-    : (candles.length > 0 ? candles[candles.length - 1].close : 0));
+  // Single source of truth: latest real close from candles (updated by applyLivePrice).
+  // Never use livePrice state directly for display — applyLivePrice keeps candles in sync.
+  const latestClose     = candles.length > 0 ? candles[candles.length - 1].close : 0;
+  const displayPriceVal = latestClose > 0 ? latestClose
+    : (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
   const mcapVal    = resolvedInfo?.marketCap ?? null;
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
@@ -953,35 +964,6 @@ export function TradingViewChart({
           });
         }}
       >
-        {/* ── Animated moving background grid ──────────────────────────── */}
-        <View style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]} pointerEvents="none">
-          <Animated.View
-            style={{ transform: [{ translateX: bgAnim }], width: chartWidth + BG_TILE_W * 2 }}
-            pointerEvents="none"
-          >
-            <Svg width={chartWidth + BG_TILE_W * 2} height={totalH}>
-              {/* Moving vertical grid lines */}
-              {Array.from({ length: Math.ceil((chartWidth + BG_TILE_W * 2) / BG_TILE_W) + 1 }, (_, i) => (
-                <Line key={`bv${i}`}
-                  x1={i * BG_TILE_W} y1={0} x2={i * BG_TILE_W} y2={totalH}
-                  stroke="rgba(139,92,246,0.06)" strokeWidth={1} />
-              ))}
-              {/* Subtle accent lines every 3rd */}
-              {Array.from({ length: Math.ceil((chartWidth + BG_TILE_W * 2) / (BG_TILE_W * 3)) + 1 }, (_, i) => (
-                <Line key={`ba${i}`}
-                  x1={i * BG_TILE_W * 3} y1={0} x2={i * BG_TILE_W * 3} y2={totalH}
-                  stroke="rgba(139,92,246,0.12)" strokeWidth={1} />
-              ))}
-              {/* Horizontal scanlines */}
-              {Array.from({ length: Math.ceil(totalH / 14) }, (_, i) => (
-                <Line key={`bh${i}`}
-                  x1={0} y1={i * 14} x2={chartWidth + BG_TILE_W * 2} y2={i * 14}
-                  stroke="rgba(139,92,246,0.025)" strokeWidth={1} />
-              ))}
-            </Svg>
-          </Animated.View>
-        </View>
-
         <Svg width={chartWidth} height={totalH}>
           <Defs>
             <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
