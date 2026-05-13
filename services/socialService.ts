@@ -1037,7 +1037,7 @@ export class SocialService {
       .maybeSingle();
 
     if (data) {
-      await this.createNotification(receiverId, senderId, 'message', null, 'sent you a message');
+      await this.createNotification(receiverId, senderId, 'message', null, content.slice(0, 100));
     }
 
     return data;

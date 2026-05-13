@@ -28,7 +28,7 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
 import VerificationBadge from '@/components/VerificationBadge';
-import NotificationBanner from '@/components/NotificationBanner';
+// NotificationBanner is handled globally in _layout.tsx
 import { supabase } from '@/lib/supabase';
 
 type TopTab = 'feed' | 'profile' | 'messages' | 'notifications';
@@ -110,9 +110,6 @@ export default function CommunityScreen() {
     return () => { cancelled = true; };
   }, []);
   const usdToSol = (usd: number): number | null => solUsdPrice > 0 ? usd / solUsdPrice : null;
-
-  // In-app notification banner
-  const [bannerNotif, setBannerNotif] = useState<Notification | null>(null);
 
   // Timestamp set when notifications are cleared — hides older notifications locally
   const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
@@ -235,9 +232,6 @@ export default function CommunityScreen() {
             return [n, ...prev];
           });
           setUnreadNotifCount(c => c + 1);
-          if (activeTabRef.current !== 'notifications') {
-            setBannerNotif(n);
-          }
         }
       )
       .subscribe();
@@ -1029,13 +1023,6 @@ export default function CommunityScreen() {
 
   return (
     <View style={styles.container}>
-      {/* In-app notification banner */}
-      <NotificationBanner
-        notification={bannerNotif}
-        onDismiss={() => setBannerNotif(null)}
-        onPress={() => { setBannerNotif(null); setActiveTab('notifications'); }}
-      />
-
       {/* Nebula background gradient */}
       <LinearGradient
         colors={['#0D0618', '#130A24', '#0A0A14', '#0D0618']}
