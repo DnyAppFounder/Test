@@ -454,6 +454,8 @@ export function TradingViewChart({
   const plotW = chartWidth - PAD.left - PAD.right;
   plotWRef.current = plotW;
   const plotH = CHART_H - PAD.top - PAD.bottom;
+  const plotHRef = useRef(plotH);
+  plotHRef.current = plotH;
   const n     = displayCandles.length;
 
   // ── Live time engine geometry ─────────────────────────────────────────────
@@ -512,7 +514,10 @@ export function TradingViewChart({
     if (!c) return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1));
     return tsToX(c.timestamp + bucketMs / 2);
   }
-  function yOf(price: number) { return PAD.top + plotH - ((price - minP) / priceRange) * plotH; }
+  function yOf(price: number) {
+    const raw = PAD.top + plotH - ((price - minP) / priceRange) * plotH;
+    return Math.max(PAD.top, Math.min(PAD.top + plotH, raw));
+  }
   function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
   function bondingX(i: number) {
     if (n <= 1) return PAD.left + plotW / 2;
@@ -541,10 +546,10 @@ export function TradingViewChart({
     const idx = closestIdx;
     const c   = cands[idx];
     const cx  = PAD.left + ((c.timestamp + bm / 2 - lt) / vm) * pw;
-    const candsLow   = Math.min(...cands.map(x => x.low));
-    const candsHigh  = Math.max(...cands.map(x => x.high));
-    const candsRange = (candsHigh - candsLow) || 1;
-    const cy  = PAD.top + (CHART_H - PAD.top - PAD.bottom) - ((c.close - candsLow) / candsRange) * (CHART_H - PAD.top - PAD.bottom);
+    const { minP: scaleMin, priceRange: scaleRange } = priceScaleRef.current;
+    const ph  = plotHRef.current;
+    const rawCy = PAD.top + ph - ((c.close - scaleMin) / scaleRange) * ph;
+    const cy  = Math.max(PAD.top, Math.min(PAD.top + ph, rawCy));
     const firstClose = cands[0].close;
     const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
     setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
