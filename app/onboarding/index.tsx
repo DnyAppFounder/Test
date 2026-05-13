@@ -217,9 +217,8 @@ export default function OnboardingWelcome() {
                 <>
                   <TouchableOpacity
                     style={styles.modalPrimaryBtn}
-                    onPress={async () => {
+                    onPress={() => {
                       setShowEnterModal(false);
-                      await markOnboardingComplete();
                       console.log('[Onboarding] Navigating to create wallet');
                       router.push('/onboarding/create');
                     }}
@@ -238,9 +237,8 @@ export default function OnboardingWelcome() {
 
                   <TouchableOpacity
                     style={styles.modalSecondaryBtn}
-                    onPress={async () => {
+                    onPress={() => {
                       setShowEnterModal(false);
-                      await markOnboardingComplete();
                       console.log('[Onboarding] Navigating to import wallet');
                       router.push('/onboarding/import');
                     }}
