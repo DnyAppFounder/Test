@@ -101,6 +101,21 @@ const BUCKET_MS: Record<string, number> = {
 };
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+/** Remove candles that have zero, NaN, Infinity, or structurally invalid prices.
+ *  Prevents 1W/1M edge-case spikes and scale corruption from bad API rows. */
+function filterValidCandles(cs: CandleData[]): CandleData[] {
+  return cs.filter(c => {
+    if (!c || !isFinite(c.timestamp) || c.timestamp <= 0) return false;
+    if (!isFinite(c.open)  || c.open  <= 0) return false;
+    if (!isFinite(c.close) || c.close <= 0) return false;
+    if (!isFinite(c.high)  || c.high  <= 0) return false;
+    if (!isFinite(c.low)   || c.low   <= 0) return false;
+    if (c.high < c.low || c.high < c.open || c.high < c.close) return false;
+    return true;
+  });
+}
+
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
   if (p >= 10000) return p.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -364,6 +379,7 @@ export function TradingViewChart({
   }, [applyLivePrice]);
 
   useEffect(() => {
+    console.log(`[TradingViewChart] Timeframe → ${timeframe}  mint=${tokenMint?.slice(0, 8) ?? 'none'}`);
     setLivePrice(null);
     setCrosshair(null);
     setPanOffsetCandles(0);
@@ -438,7 +454,7 @@ export function TradingViewChart({
   const clampedOffset   = Math.max(0, Math.min(panOffsetCandles, Math.max(0, totalCount - maxVisible)));
   const endIdx          = Math.max(0, totalCount - clampedOffset);
   const startIdx        = Math.max(0, endIdx - maxVisible);
-  const rawSlice        = candles.slice(startIdx, endIdx || totalCount);
+  const rawSlice        = filterValidCandles(candles.slice(startIdx, endIdx || totalCount));
   const displayCandles  = mcapScale !== 1
     ? rawSlice.map(c => ({
         ...c,
@@ -491,14 +507,18 @@ export function TradingViewChart({
       priceScaleKeyRef.current = key;
       // Use closed candles (all but last) for the base range; last candle is live and changing
       const closedSlice = n > 1 ? displayCandles.slice(0, n - 1) : displayCandles;
-      const rMax = Math.max(...closedSlice.map(c => c.high));
-      const rMin = Math.min(...closedSlice.map(c => c.low));
-      const range = (rMax - rMin) || rMax * 0.02 || 0.001;
+      const validSlice  = filterValidCandles(closedSlice);
+      const scaleSource = validSlice.length > 0 ? validSlice : closedSlice;
+      const rMax = scaleSource.length > 0 ? Math.max(...scaleSource.map(c => c.high)) : 0;
+      const rMin = scaleSource.length > 0 ? Math.min(...scaleSource.map(c => c.low))  : 0;
+      const safeMax = isFinite(rMax) && rMax > 0 ? rMax : 1;
+      const safeMin = isFinite(rMin) && rMin >= 0 ? rMin : 0;
+      const range = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
       const pad   = range * 0.12; // 12% head/foot room so live candle stays visible
       priceScaleRef.current = {
-        maxP:       rMax + pad,
-        minP:       Math.max(0, rMin - pad),
-        priceRange: (rMax + pad) - Math.max(0, rMin - pad) || 1,
+        maxP:       safeMax + pad,
+        minP:       Math.max(0, safeMin - pad),
+        priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
         maxVol:     Math.max(...displayCandles.map(c => c.volume)) || 1,
       };
     }

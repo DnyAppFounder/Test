@@ -69,11 +69,14 @@ export default function RootLayout() {
 
   return (
     <View style={styles.root} onLayout={onLayoutRootView}>
-      <ErrorBoundary fallbackLabel="App error — please refresh">
-        <LanguageProvider>
-          <WalletProvider>
-          <SecurityProvider>
-            <ProfileProvider>
+      {/* Providers live OUTSIDE the ErrorBoundary so wallet/security/profile state
+          survives a screen-level crash. Only the navigation Stack resets on Retry,
+          keeping the user connected instead of forcing a full app reload. */}
+      <LanguageProvider>
+        <WalletProvider>
+        <SecurityProvider>
+          <ProfileProvider>
+            <ErrorBoundary fallbackLabel="App error — please refresh">
               <Stack
                 screenOptions={{
                   headerShown: false,
@@ -94,11 +97,11 @@ export default function RootLayout() {
               </Stack>
               <InAppNotifications />
               <StatusBar style="light" />
-            </ProfileProvider>
-          </SecurityProvider>
-          </WalletProvider>
-        </LanguageProvider>
-      </ErrorBoundary>
+            </ErrorBoundary>
+          </ProfileProvider>
+        </SecurityProvider>
+        </WalletProvider>
+      </LanguageProvider>
     </View>
   );
 }
