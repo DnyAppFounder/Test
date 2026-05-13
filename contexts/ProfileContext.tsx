@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { SocialService, UserProfile } from '@/services/socialService';
+import { supabase } from '@/lib/supabase';
 
 interface ProfileContextValue {
   profile: UserProfile | null;
@@ -67,23 +68,36 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setUnreadMessageCount(0);
       return;
     }
-    let cancelled = false;
-    const poll = async () => {
+    // Initial fetch of unread counts
+    const fetchCounts = async () => {
       try {
         const [notifs, convos] = await Promise.all([
           SocialService.getNotifications(profile.id),
           SocialService.getConversations(profile.id),
         ]);
-        if (!cancelled) {
-          setUnreadNotifCount(notifs.filter(n => !n.read).length);
-          const msgCount = convos.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
-          setUnreadMessageCount(msgCount);
-        }
+        setUnreadNotifCount(notifs.filter(n => !n.read).length);
+        const msgCount = convos.reduce((sum, c) => sum + ((c as any).unreadCount || 0), 0);
+        setUnreadMessageCount(msgCount);
       } catch {}
     };
-    poll();
-    const interval = setInterval(poll, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
+    fetchCounts();
+
+    // Realtime: increment counters instantly without polling
+    const channel = supabase
+      .channel(`profile_unread_${profile.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${profile.id}` },
+        () => { setUnreadNotifCount(c => c + 1); }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${profile.id}` },
+        () => { setUnreadMessageCount(c => c + 1); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [profile?.id]);
 
   const updateProfile = useCallback(async (updates: { username?: string; bio?: string; avatar_url?: string; banner_url?: string; twitter_url?: string | null; telegram_url?: string | null; discord_url?: string | null; [key: string]: unknown }) => {

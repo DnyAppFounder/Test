@@ -16,6 +16,7 @@ import {
   upsertPresence, leaveRoom, getRoomPresence, sendMessage, getMessages,
   getRoomItems, placeRoomItem, removeRoomItem, moveRoomItem,
   subscribeToRoomMessages, subscribeToRoomPresence, subscribeToRoomItems,
+  subscribeToPositionBroadcasts, broadcastPosition,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
@@ -233,6 +234,8 @@ export function DawenWorldRoom({
   const presenceRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const otherAnimsRef = useRef<Map<string, { x: Animated.Value; y: Animated.Value }>>(new Map());
+  // Channel for instant position broadcasts (lower latency than DB → realtime roundtrip)
+  const posChRef = useRef<ReturnType<typeof subscribeToPositionBroadcasts> | null>(null);
 
   const getOtherAnim = useCallback((wallet: string, startX: number, startY: number) => {
     if (!otherAnimsRef.current.has(wallet)) {
@@ -281,11 +284,26 @@ export function DawenWorldRoom({
     const presCh = subscribeToRoomPresence(room.id, loadPresence);
     const itemsCh = subscribeToRoomItems(room.id, loadRoomItems);
 
+    // Subscribe to instant position broadcasts so avatar movement is smooth
+    // and not dependent on the slower DB → realtime → loadPresence() roundtrip.
+    const posCh = subscribeToPositionBroadcasts(room.id, (data) => {
+      if (data.walletAddress === walletAddress) return; // ignore own echoes
+      setPresence(prev => {
+        const exists = prev.some(p => p.wallet_address === data.walletAddress);
+        if (!exists) return prev; // presence subscription handles new player joins
+        return prev.map(p =>
+          p.wallet_address === data.walletAddress ? { ...p, x: data.x, y: data.y } : p
+        );
+      });
+    });
+    posChRef.current = posCh;
+
     return () => {
       if (presenceRef.current) clearInterval(presenceRef.current);
       if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
       leaveRoom(walletAddress, room.id);
-      supabaseCleanup(msgCh, presCh, itemsCh);
+      supabaseCleanup(msgCh, presCh, itemsCh, posCh);
+      posChRef.current = null;
     };
   }, [room.id]); // eslint-disable-line
 
@@ -326,6 +344,10 @@ export function DawenWorldRoom({
     setMyX(col);
     setMyY(row);
     animateToTile(col, row);
+    // Broadcast position instantly so other players see movement without DB latency
+    if (posChRef.current) {
+      broadcastPosition(posChRef.current, { walletAddress, x: col, y: row, username, avatarConfig, isPremium });
+    }
   };
 
   const handleRemoveRoomItem = async () => {

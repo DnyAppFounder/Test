@@ -537,6 +537,20 @@ export function broadcastPosition(
   channel.send({ type: 'broadcast', event: 'move', payload: data }).catch(() => {});
 }
 
+// Creates a subscribed channel that both RECEIVES position broadcasts from other players
+// and can be used to SEND this player's position via broadcastPosition().
+export function subscribeToPositionBroadcasts(
+  roomId: string,
+  onMove: (data: PositionBroadcast) => void
+) {
+  return supabase
+    .channel(`world_pos_${roomId}`)
+    .on('broadcast', { event: 'move' }, (event) => {
+      if (event.payload) onMove(event.payload as PositionBroadcast);
+    })
+    .subscribe();
+}
+
 // ─── Room online count helper ─────────────────────────────────────────────────
 export async function getRoomsWithCounts(rooms: WorldRoom[]): Promise<WorldRoom[]> {
   if (!rooms.length) return rooms;

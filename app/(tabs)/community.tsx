@@ -244,6 +244,80 @@ export default function CommunityScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id]);
 
+  // Realtime: live social feed updates (posts, likes, comments, reposts, incoming DMs)
+  useEffect(() => {
+    if (!profile?.id) return;
+    const uid = profile.id;
+    const channel = supabase
+      .channel(`community_social_${uid}`)
+      // New post from anyone → silent feed refresh so it appears in the list
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' },
+        (payload) => {
+          const raw = payload.new as any;
+          // Skip own posts — already added optimistically via handleCreatePost
+          if (raw.author_id === uid) return;
+          loadFeed();
+        }
+      )
+      // Another user likes a post → increment like counter in-place
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_likes' },
+        (payload) => {
+          const { post_id, user_id } = payload.new as any;
+          if (user_id === uid) return;
+          setPosts(prev => prev.map(p =>
+            p.id === post_id ? { ...p, likes_count: p.likes_count + 1 } : p
+          ));
+        }
+      )
+      // Unlike → decrement (needs REPLICA IDENTITY FULL on post_likes, set in migration)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'post_likes' },
+        (payload) => {
+          const post_id = (payload.old as any)?.post_id;
+          if (!post_id) return;
+          setPosts(prev => prev.map(p =>
+            p.id === post_id ? { ...p, likes_count: Math.max(0, p.likes_count - 1) } : p
+          ));
+        }
+      )
+      // New comment → increment comment counter in-place
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_comments' },
+        (payload) => {
+          const { post_id } = payload.new as any;
+          setPosts(prev => prev.map(p =>
+            p.id === post_id ? { ...p, comments_count: p.comments_count + 1 } : p
+          ));
+        }
+      )
+      // New repost → increment repost counter in-place
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reposts' },
+        (payload) => {
+          const { post_id, user_id } = payload.new as any;
+          if (user_id === uid) return;
+          setPosts(prev => prev.map(p =>
+            p.id === post_id ? { ...p, reposts_count: p.reposts_count + 1 } : p
+          ));
+        }
+      )
+      // Un-repost (needs REPLICA IDENTITY FULL on reposts, set in migration)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reposts' },
+        (payload) => {
+          const post_id = (payload.old as any)?.post_id;
+          if (!post_id) return;
+          setPosts(prev => prev.map(p =>
+            p.id === post_id ? { ...p, reposts_count: Math.max(0, p.reposts_count - 1) } : p
+          ));
+        }
+      )
+      // Incoming DM → refresh conversation list to show unread badge
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${uid}` },
+        () => { loadConversations(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id, loadFeed, loadConversations]);
+
   // Reload feed + conversations when screen regains focus (e.g. after returning from chat/profile)
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;

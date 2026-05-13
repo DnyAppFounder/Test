@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
 import { Send, MessageCircle, User } from 'lucide-react-native';
 import { tokenDiscussionService, TokenDiscussion } from '@/services/tokenDiscussionService';
 import { SocialService, UserProfile } from '@/services/socialService';
+import { supabase } from '@/lib/supabase';
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
@@ -36,13 +37,7 @@ export function TokenDiscussionComponent({ tokenAddress, userWallet }: TokenDisc
   const profileCache = useRef<ProfileCache>({});
   const [profileMap, setProfileMap] = useState<ProfileCache>({});
 
-  useEffect(() => {
-    loadDiscussions();
-    const interval = setInterval(loadDiscussions, 30000);
-    return () => clearInterval(interval);
-  }, [tokenAddress]);
-
-  const loadDiscussions = async () => {
+  const loadDiscussions = useCallback(async () => {
     const data = await tokenDiscussionService.getDiscussions(tokenAddress);
     setDiscussions(data);
     setLoading(false);
@@ -65,7 +60,21 @@ export function TokenDiscussionComponent({ tokenAddress, userWallet }: TokenDisc
       updates[wallet] = profile;
     }
     setProfileMap(prev => ({ ...prev, ...updates }));
-  };
+  }, [tokenAddress]);
+
+  // Initial load + realtime subscription for live chat messages
+  useEffect(() => {
+    loadDiscussions();
+    const channel = supabase
+      .channel(`token_discussion_${tokenAddress}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'token_discussions', filter: `token_address=eq.${tokenAddress}` },
+        () => { loadDiscussions(); }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [tokenAddress, loadDiscussions]);
 
   const handlePost = async () => {
     if (!message.trim()) return;
