@@ -477,7 +477,12 @@ export function TradingViewChart({
   // ── Live time engine geometry ─────────────────────────────────────────────
   const bucketMs  = BUCKET_MS[timeframe] ?? 3_600_000;
   const scrollOffsetMs = clampedOffset * bucketMs;
-  const rightTime = rightTimeRef.current - scrollOffsetMs;
+  // When scrolled into history, anchor rightTime to the last visible candle's
+  // timestamp rather than current wall-clock time. This prevents historical
+  // candles from drifting rightward as the real-time clock advances.
+  const rightTime = clampedOffset > 0 && displayCandles.length > 0
+    ? displayCandles[displayCandles.length - 1].timestamp + bucketMs * 1.5
+    : rightTimeRef.current - scrollOffsetMs;
   // Dynamic visible window: shrink to fit actual data when not scrolled so
   // candles spread across the full chart instead of clustering on the right
   const dataN = rawSlice.length;
@@ -497,30 +502,45 @@ export function TradingViewChart({
   }
 
   // ── Stable price scale ───────────────────────────────────────────────────
-  // Key includes: timeframe, visible candle count, first + second-to-last candle timestamps.
-  // Live price updates within a candle bucket do NOT change these → scale is frozen during
-  // horizontal time animation, only rebuilding when a new candle closes or tf changes.
+  // Key is stable across live-tick updates (only changes on new candle close or tf change)
+  // so the vertical axis doesn't jitter. After setting the base scale we do a separate
+  // in-place expansion pass for the live candle, so it can never clip beyond the plot area.
   {
     const stableLastIdx = Math.max(0, n - 2);
     const key = `${timeframe}|${valueMode}|${n}|${displayCandles[0]?.timestamp ?? 0}|${displayCandles[stableLastIdx]?.timestamp ?? 0}`;
     if (key !== priceScaleKeyRef.current && n > 0) {
       priceScaleKeyRef.current = key;
-      // Use closed candles (all but last) for the base range; last candle is live and changing
-      const closedSlice = n > 1 ? displayCandles.slice(0, n - 1) : displayCandles;
-      const validSlice  = filterValidCandles(closedSlice);
-      const scaleSource = validSlice.length > 0 ? validSlice : closedSlice;
+      const allValid = filterValidCandles(displayCandles);
+      const scaleSource = allValid.length > 0 ? allValid : displayCandles;
       const rMax = scaleSource.length > 0 ? Math.max(...scaleSource.map(c => c.high)) : 0;
       const rMin = scaleSource.length > 0 ? Math.min(...scaleSource.map(c => c.low))  : 0;
       const safeMax = isFinite(rMax) && rMax > 0 ? rMax : 1;
       const safeMin = isFinite(rMin) && rMin >= 0 ? rMin : 0;
       const range = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
-      const pad   = range * 0.12; // 12% head/foot room so live candle stays visible
+      const pad   = range * 0.15;
       priceScaleRef.current = {
         maxP:       safeMax + pad,
         minP:       Math.max(0, safeMin - pad),
         priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
         maxVol:     Math.max(...displayCandles.map(c => c.volume)) || 1,
       };
+    }
+    // Expand scale in-place when the live candle exceeds current bounds.
+    // This prevents the newest candle from being clipped at the top/bottom.
+    const liveC = n > 0 ? displayCandles[n - 1] : null;
+    if (liveC) {
+      const { maxP: cMax, minP: cMin, maxVol } = priceScaleRef.current;
+      const liveHigh = isFinite(liveC.high) && liveC.high > 0 ? liveC.high : 0;
+      const liveLow  = isFinite(liveC.low)  && liveC.low  > 0 ? liveC.low  : cMin;
+      if (liveHigh > cMax || liveLow < cMin) {
+        const newMax = Math.max(cMax, liveHigh * 1.05);
+        const newMin = Math.max(0, Math.min(cMin, liveLow * 0.95));
+        priceScaleRef.current = {
+          maxP: newMax, minP: newMin,
+          priceRange: (newMax - newMin) || 1,
+          maxVol,
+        };
+      }
     }
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;

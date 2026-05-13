@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, useWindowDimensions,
   Animated,
 } from 'react-native';
+import Svg, { Polygon } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -59,14 +60,15 @@ interface AvatarCharProps {
   username: string;
   isPremium: boolean;
   size?: number;
+  sitting?: boolean;
 }
 
-function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharProps) {
+function WorldAvatarChar({ config, username, isPremium, size = 34, sitting = false }: AvatarCharProps) {
   const headSize = Math.round(size * 0.42);
   const bodyW = Math.round(size * 0.38);
   const bodyH = Math.round(size * 0.28);
   const legW = Math.round(size * 0.15);
-  const legH = Math.round(size * 0.2);
+  const legH = sitting ? Math.round(size * 0.1) : Math.round(size * 0.2);
   const eyeSize = Math.max(2, Math.round(headSize * 0.2));
   const hairIdx = config.hairStyle ?? 0;
   const HairSprite = HAIR_SPRITES[hairIdx] ?? null;
@@ -111,7 +113,6 @@ function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharP
           <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
           <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
         </View>
-        {/* Smile */}
         <View style={ch.smile} />
       </View>
 
@@ -122,11 +123,11 @@ function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharP
         marginTop: -2,
       }]} />
 
-      {/* Legs */}
-      <View style={[ch.legs, { marginTop: 1 }]}>
-        <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />
-        <View style={{ width: Math.max(2, legW * 0.3) }} />
-        <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />
+      {/* Legs — folded when sitting */}
+      <View style={[ch.legs, { marginTop: 1 }, sitting && ch.legsSitting]}>
+        <View style={[ch.leg, { width: sitting ? legW * 1.8 : legW, height: legH, backgroundColor: config.outfitColor, borderRadius: 2 }]} />
+        {!sitting && <View style={{ width: Math.max(2, legW * 0.3) }} />}
+        {!sitting && <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />}
       </View>
 
       {/* Name tag */}
@@ -160,6 +161,7 @@ const ch = StyleSheet.create({
     borderBottomLeftRadius: 2, borderBottomRightRadius: 2,
   },
   legs: { flexDirection: 'row' },
+  legsSitting: { transform: [{ rotate: '90deg' }] },
   leg: { borderRadius: 2 },
   nameTag: {
     backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 4, paddingVertical: 1,
@@ -191,8 +193,53 @@ export function DawenWorldRoom({
 }: Props) {
   const { width: screenW } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const tileSize = Math.floor(Math.min(screenW - 16, 400) / GRID_W);
-  const charSize = Math.round(tileSize * 0.94);
+
+  // ── Isometric projection constants ───────────────────────────────────────
+  // ISO_TW = tile diamond width, ISO_TH = tile diamond height (2:1 ratio)
+  const ISO_TW = Math.max(40, Math.floor(Math.min(screenW - 8, 480) / ((GRID_W + GRID_H) * 0.5)));
+  const ISO_TH = Math.round(ISO_TW / 2);
+  const WALL_H = Math.round(ISO_TW * 0.9);
+  const ISO_ORIGIN_X = Math.round(GRID_H * ISO_TW / 2);
+  const ISO_ORIGIN_Y = WALL_H;
+  const ISO_CANVAS_W = (GRID_W + GRID_H) * Math.round(ISO_TW / 2) + 2;
+  const ISO_CANVAS_H = WALL_H + (GRID_W + GRID_H) * Math.round(ISO_TH / 2) + ISO_TH + 8;
+
+  function isoToScreen(col: number, row: number) {
+    return {
+      x: ISO_ORIGIN_X + (col - row) * (ISO_TW / 2),
+      y: ISO_ORIGIN_Y + (col + row) * (ISO_TH / 2),
+    };
+  }
+
+  // Tile top-vertex → diamond polygon points string for SVG
+  function tilePoly(col: number, row: number): string {
+    const { x, y } = isoToScreen(col, row);
+    const hw = ISO_TW / 2, hh = ISO_TH / 2;
+    return `${x},${y} ${x + hw},${y + hh} ${x},${y + ISO_TH} ${x - hw},${y + hh}`;
+  }
+
+  // Left wall panel polygon (col=0 wall, for each row)
+  function leftWallPoly(row: number): string {
+    const { x, y } = isoToScreen(0, row);
+    const lx = x - ISO_TW / 2, ly = y + ISO_TH / 2;
+    return `${x},${y} ${lx},${ly} ${lx},${ly - WALL_H} ${x},${y - WALL_H}`;
+  }
+
+  // Back wall panel polygon (row=0 wall, for each col)
+  function backWallPoly(col: number): string {
+    const { x, y } = isoToScreen(col, 0);
+    const rx = x + ISO_TW / 2, ry = y + ISO_TH / 2;
+    return `${x},${y} ${rx},${ry} ${rx},${ry - WALL_H} ${x},${y - WALL_H}`;
+  }
+
+  // Screen position of the CENTER of a tile (for placing sprites)
+  function tileCenterScreen(col: number, row: number) {
+    const { x, y } = isoToScreen(col, row);
+    return { x, y: y + ISO_TH / 2 };
+  }
+
+  const SITTABLE = new Set(['Chairs', 'Sofas', 'Beds', 'Gaming Items']);
+  const charSize = Math.max(26, Math.round(ISO_TW * 0.9));
 
   const isPlaza = room.id === PLAZA_ROOM_ID;
   const isOwner = room.type !== 'official' && room.owner_wallet === walletAddress;
@@ -206,6 +253,7 @@ export function DawenWorldRoom({
   const [roomItems, setRoomItems] = useState<WorldRoomItem[]>([]);
   const [myX, setMyX] = useState(5);
   const [myY, setMyY] = useState(4);
+  const [sittingOnItemId, setSittingOnItemId] = useState<string | null>(null);
   const [chatText, setChatText] = useState('');
   const [sending, setSending] = useState(false);
   const [decMode, setDecMode] = useState(false);
@@ -213,11 +261,12 @@ export function DawenWorldRoom({
   const [selectedRoomItem, setSelectedRoomItem] = useState<WorldRoomItem | null>(null);
   const [chatBubble, setChatBubble] = useState<string | null>(null);
 
-  // ── Smooth movement via Animated ──────────────────────────────────────────
-  const animX = useRef(new Animated.Value(5 * tileSize)).current;
-  const animY = useRef(new Animated.Value(4 * tileSize)).current;
-  const [avatarLeft, setAvatarLeft] = useState(5 * tileSize);
-  const [avatarTop, setAvatarTop] = useState(4 * tileSize);
+  // ── Smooth movement via Animated (in isometric screen coords) ─────────────
+  const initScreen = isoToScreen(5, 4);
+  const animX = useRef(new Animated.Value(initScreen.x)).current;
+  const animY = useRef(new Animated.Value(initScreen.y)).current;
+  const [avatarLeft, setAvatarLeft] = useState(initScreen.x);
+  const [avatarTop, setAvatarTop] = useState(initScreen.y);
 
   useEffect(() => {
     const xId = animX.addListener(({ value }) => setAvatarLeft(value));
@@ -226,11 +275,12 @@ export function DawenWorldRoom({
   }, []);
 
   const animateToTile = useCallback((col: number, row: number) => {
+    const { x, y } = isoToScreen(col, row);
     Animated.parallel([
-      Animated.spring(animX, { toValue: col * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
-      Animated.spring(animY, { toValue: row * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+      Animated.spring(animX, { toValue: x, useNativeDriver: false, tension: 160, friction: 16 }),
+      Animated.spring(animY, { toValue: y, useNativeDriver: false, tension: 160, friction: 16 }),
     ]).start();
-  }, [tileSize]);
+  }, [ISO_TW, ISO_TH, ISO_ORIGIN_X, ISO_ORIGIN_Y]); // eslint-disable-line
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const chatRef = useRef<ScrollView>(null);
@@ -240,15 +290,16 @@ export function DawenWorldRoom({
   // Channel for instant position broadcasts (lower latency than DB → realtime roundtrip)
   const posChRef = useRef<ReturnType<typeof subscribeToPositionBroadcasts> | null>(null);
 
-  const getOtherAnim = useCallback((wallet: string, startX: number, startY: number) => {
+  const getOtherAnim = useCallback((wallet: string, startCol: number, startRow: number) => {
     if (!otherAnimsRef.current.has(wallet)) {
+      const { x, y } = isoToScreen(startCol, startRow);
       otherAnimsRef.current.set(wallet, {
-        x: new Animated.Value(startX * tileSize),
-        y: new Animated.Value(startY * tileSize),
+        x: new Animated.Value(x),
+        y: new Animated.Value(y),
       });
     }
     return otherAnimsRef.current.get(wallet)!;
-  }, [tileSize]);
+  }, [ISO_TW, ISO_TH, ISO_ORIGIN_X, ISO_ORIGIN_Y]); // eslint-disable-line
 
   // ── Load initial data ─────────────────────────────────────────────────────
   const loadPresence = useCallback(async () => {
@@ -318,9 +369,10 @@ export function DawenWorldRoom({
   useEffect(() => {
     presence.filter(p => p.wallet_address !== walletAddress).forEach(p => {
       const anim = getOtherAnim(p.wallet_address, p.x, p.y);
+      const { x, y } = isoToScreen(p.x, p.y);
       Animated.parallel([
-        Animated.spring(anim.x, { toValue: p.x * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
-        Animated.spring(anim.y, { toValue: p.y * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+        Animated.spring(anim.x, { toValue: x, useNativeDriver: false, tension: 160, friction: 16 }),
+        Animated.spring(anim.y, { toValue: y, useNativeDriver: false, tension: 160, friction: 16 }),
       ]).start();
     });
   }, [presence]); // eslint-disable-line
@@ -343,11 +395,32 @@ export function DawenWorldRoom({
       setSelectedRoomItem(null);
       return;
     }
-    // Move avatar with animation
+
+    // Check if the tile has a sittable item (chair, sofa, bed, gaming seat)
+    const sittableItem = roomItems.find(
+      ri => ri.x === col && ri.y === row && SITTABLE.has(ri.catalog_item?.category ?? '')
+    );
+    if (sittableItem) {
+      if (sittingOnItemId === sittableItem.id && myX === col && myY === row) {
+        // Already sitting here — stand up
+        setSittingOnItemId(null);
+      } else {
+        // Move to chair and sit
+        setMyX(col); setMyY(row);
+        animateToTile(col, row);
+        setSittingOnItemId(sittableItem.id);
+        if (posChRef.current) {
+          broadcastPosition(posChRef.current, { walletAddress, x: col, y: row, username, avatarConfig, isPremium });
+        }
+      }
+      return;
+    }
+
+    // Moving to empty tile clears sitting state
+    setSittingOnItemId(null);
     setMyX(col);
     setMyY(row);
     animateToTile(col, row);
-    // Broadcast position instantly so other players see movement without DB latency
     if (posChRef.current) {
       broadcastPosition(posChRef.current, { walletAddress, x: col, y: row, username, avatarConfig, isPremium });
     }
@@ -389,9 +462,6 @@ export function DawenWorldRoom({
   };
   const otherPresence = presence.filter(p => p.wallet_address !== walletAddress);
   const allCount = 1 + otherPresence.length;
-
-  const gridW = tileSize * GRID_W;
-  const gridH = tileSize * GRID_H;
 
   return (
     <KeyboardAvoidingView
@@ -453,141 +523,197 @@ export function DawenWorldRoom({
         </View>
       )}
 
-      {/* Room scene */}
+      {/* Room scene — isometric Habbo-style */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'flex-start' }}
         style={styles.sceneScroll}
       >
-        <View style={{ width: Math.max(gridW, screenW - 8) }}>
-          {/* ── Wall area ── */}
-          <View style={[styles.wall, { width: Math.max(gridW, screenW - 8) }]}>
-            <LinearGradient
-              colors={themeVis.wallGradient}
-              style={StyleSheet.absoluteFill}
-            />
+        <LinearGradient
+          colors={['#060610', '#0A0A1A', '#060610']}
+          style={{ width: Math.max(ISO_CANVAS_W, screenW), height: ISO_CANVAS_H + 4 }}
+        >
+          {/* Tap responder layer — inverse iso projection maps touches to grid coords */}
+          <View
+            style={{ width: ISO_CANVAS_W, height: ISO_CANVAS_H, alignSelf: 'center', position: 'relative' }}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={(e) => {
+              const lx = e.nativeEvent.locationX;
+              const ly = e.nativeEvent.locationY;
+              const dx = lx - ISO_ORIGIN_X;
+              const dy = ly - ISO_ORIGIN_Y;
+              const col = Math.round((dx / (ISO_TW / 2) + dy / (ISO_TH / 2)) / 2);
+              const row = Math.round((dy / (ISO_TH / 2) - dx / (ISO_TW / 2)) / 2);
+              const cc = Math.max(0, Math.min(GRID_W - 1, col));
+              const rr = Math.max(0, Math.min(GRID_H - 1, row));
+              handleTileTap(cc, rr);
+            }}
+          >
+            {/* ── SVG: walls + floor tiles ── */}
+            <Svg width={ISO_CANVAS_W} height={ISO_CANVAS_H} style={StyleSheet.absoluteFill}>
+              {/* Back wall panels (row=0, along all cols) */}
+              {Array.from({ length: GRID_W }, (_, col) => (
+                <Polygon
+                  key={`bw-${col}`}
+                  points={backWallPoly(col)}
+                  fill={themeVis.wallGradient[1]}
+                  stroke={themeVis.dividerColor}
+                  strokeWidth={0.6}
+                  opacity={0.92}
+                />
+              ))}
 
-            {/* Wall panels / depth lines */}
-            <View style={[styles.wallPanel, { left: '10%', width: '18%' }]} />
-            <View style={[styles.wallPanel, { left: '35%', width: '28%' }]} />
-            <View style={[styles.wallPanel, { left: '70%', width: '20%' }]} />
+              {/* Left wall panels (col=0, along all rows) */}
+              {Array.from({ length: GRID_H }, (_, row) => (
+                <Polygon
+                  key={`lw-${row}`}
+                  points={leftWallPoly(row)}
+                  fill={themeVis.wallGradient[0]}
+                  stroke={themeVis.dividerColor}
+                  strokeWidth={0.6}
+                  opacity={0.88}
+                />
+              ))}
 
-            {/* DAWEN Plaza sign */}
-            {isPlaza ? (
-              <View style={styles.plazaSign}>
-                <Text style={styles.plazaSignText}>DAWEN WORLD</Text>
-                <View style={styles.plazaSignGlow} />
-              </View>
-            ) : (
-              <View style={styles.roomSignWrap}>
-                <Text style={styles.roomSignText}>{room.name}</Text>
-              </View>
-            )}
+              {/* Floor tiles — depth-sorted (ascending col+row = back to front) */}
+              {(() => {
+                const tiles: ReactNode[] = [];
+                // Sort tiles by depth: col+row ascending
+                const sorted: [number, number][] = [];
+                for (let col = 0; col < GRID_W; col++) {
+                  for (let row = 0; row < GRID_H; row++) {
+                    sorted.push([col, row]);
+                  }
+                }
+                sorted.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+                for (const [col, row] of sorted) {
+                  const isEven = (col + row) % 2 === 0;
+                  const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
+                  const hasSittable = roomItems.some(
+                    ri => ri.x === col && ri.y === row && SITTABLE.has(ri.catalog_item?.category ?? '')
+                  );
+                  tiles.push(
+                    <Polygon
+                      key={`t-${col}-${row}`}
+                      points={tilePoly(col, row)}
+                      fill={
+                        isSelected
+                          ? themeVis.dividerColor + '55'
+                          : hasSittable
+                          ? themeVis.dividerColor + '22'
+                          : isEven
+                          ? themeVis.floorEven
+                          : themeVis.floorOdd
+                      }
+                      stroke={themeVis.dividerColor}
+                      strokeWidth={isSelected ? 1.5 : 0.35}
+                      strokeOpacity={isSelected ? 0.9 : 0.3}
+                    />
+                  );
+                }
+                return tiles;
+              })()}
+            </Svg>
 
-            {/* Floor/wall divider line */}
-            <View style={[styles.wallDivider, { backgroundColor: themeVis.dividerColor + '88', shadowColor: themeVis.dividerColor }]} />
-          </View>
-
-          {/* ── Floor grid ── */}
-          <View style={[styles.gridContainer, { width: Math.max(gridW, screenW - 8), height: gridH }]}>
-            {/* Floor background gradient */}
-            <LinearGradient
-              colors={[themeVis.floorOdd, themeVis.floorEven, 'rgba(0,0,0,0.02)']}
-              style={StyleSheet.absoluteFill}
-            />
-
-            {/* Floor tiles */}
-            {Array.from({ length: GRID_H }, (_, row) =>
-              Array.from({ length: GRID_W }, (_, col) => {
-                const isEven = (col + row) % 2 === 0;
-                const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
-                const tileOpacity = 1 - (row / GRID_H) * 0.3;
-
-                return (
-                  <TouchableOpacity
-                    key={`${col}-${row}`}
-                    style={[
-                      styles.tile,
-                      {
-                        left: col * tileSize, top: row * tileSize,
-                        width: tileSize, height: tileSize,
-                        backgroundColor: isEven ? themeVis.floorEven : themeVis.floorOdd,
-                        opacity: isSelected ? 1 : tileOpacity,
-                      },
-                      isSelected && styles.tileSelected,
-                    ]}
-                    onPress={() => handleTileTap(col, row)}
-                    activeOpacity={0.55}
-                  />
-                );
-              })
-            )}
-
-            {/* Room items (furniture) */}
-            {roomItems.map(ri => {
-              const color = ri.catalog_item?.color_hex ?? '#8B5CF6';
-              const isSelectedItem = ri.id === selectedRoomItem?.id;
-              const spriteSize = tileSize - 8;
-              return (
-                <View key={ri.id} style={[
-                  styles.roomItem,
-                  {
-                    left: ri.x * tileSize + 2,
-                    top: ri.y * tileSize + 2,
-                    width: tileSize - 4,
-                    height: tileSize - 4,
-                    backgroundColor: color + '28',
-                    borderColor: isSelectedItem ? '#fff' : color + '88',
-                    shadowColor: color,
-                  },
-                ]}>
-                  <WorldSprite
-                    emoji={ri.catalog_item?.icon_emoji ?? '📦'}
-                    size={spriteSize}
-                    color={color}
-                  />
-                </View>
-              );
-            })}
-
-            {/* Other users' avatars (animated positions) */}
-            {otherPresence.map(p => {
-              const cfg = p.avatar_config ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null };
-              const anim = getOtherAnim(p.wallet_address, p.x, p.y);
-              return (
-                <Animated.View
-                  key={p.wallet_address}
-                  style={[styles.avatarWrap, { left: anim.x, top: anim.y }]}
-                >
-                  <WorldAvatarChar
-                    config={cfg}
-                    username={p.username || p.wallet_address.slice(0, 4)}
-                    isPremium={p.is_premium}
-                    size={charSize}
-                  />
-                </Animated.View>
-              );
-            })}
-
-            {/* My avatar (animated) */}
-            <View style={[styles.avatarWrap, { left: avatarLeft, top: avatarTop }]}>
-              {/* Chat bubble above */}
-              {chatBubble ? (
-                <View style={styles.chatBubble}>
-                  <Text style={styles.chatBubbleText}>{chatBubble}</Text>
-                  <View style={styles.chatBubbleTail} />
-                </View>
-              ) : null}
-              <WorldAvatarChar
-                config={avatarConfig}
-                username={username}
-                isPremium={isPremium}
-                size={charSize}
-              />
+            {/* Room name label on back wall */}
+            <View
+              style={[styles.isoRoomLabel, {
+                left: ISO_ORIGIN_X - 60,
+                top: Math.round(WALL_H * 0.2),
+              }]}
+            >
+              <Text style={styles.isoRoomLabelText} numberOfLines={1}>
+                {isPlaza ? 'DAWEN WORLD' : room.name}
+              </Text>
             </View>
+
+            {/* ── Furniture + avatars (depth-sorted Views on top of SVG) ── */}
+            {(() => {
+              type DepthNode = { depth: number; node: ReactNode };
+              const nodes: DepthNode[] = [];
+
+              // Furniture
+              roomItems.forEach(ri => {
+                const center = tileCenterScreen(ri.x, ri.y);
+                const color = ri.catalog_item?.color_hex ?? '#8B5CF6';
+                const isSelectedItem = ri.id === selectedRoomItem?.id;
+                const spriteSize = Math.round(ISO_TW * 0.88);
+                nodes.push({
+                  depth: ri.x + ri.y,
+                  node: (
+                    <View
+                      key={`ri-${ri.id}`}
+                      pointerEvents="none"
+                      style={[styles.isoFurniture, {
+                        left: center.x - spriteSize / 2,
+                        top: center.y - spriteSize + ISO_TH / 4,
+                        width: spriteSize,
+                        height: spriteSize,
+                        borderColor: isSelectedItem ? '#ffffff' : 'transparent',
+                        shadowColor: color,
+                      }]}
+                    >
+                      <WorldSprite emoji={ri.catalog_item?.icon_emoji ?? '📦'} size={spriteSize - 4} color={color} />
+                    </View>
+                  ),
+                });
+              });
+
+              // Other players
+              otherPresence.forEach(p => {
+                const cfg = p.avatar_config ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null };
+                const anim = getOtherAnim(p.wallet_address, p.x, p.y);
+                nodes.push({
+                  depth: p.x + p.y + 0.5,
+                  node: (
+                    <Animated.View
+                      key={`op-${p.wallet_address}`}
+                      style={[styles.isoAvatarWrap, {
+                        left: Animated.subtract(anim.x, charSize / 2) as any,
+                        top: Animated.subtract(anim.y, charSize - ISO_TH / 4) as any,
+                      }]}
+                    >
+                      <WorldAvatarChar config={cfg} username={p.username || p.wallet_address.slice(0, 4)} isPremium={p.is_premium} size={charSize} />
+                    </Animated.View>
+                  ),
+                });
+              });
+
+              // My avatar
+              nodes.push({
+                depth: myX + myY + 0.5,
+                node: (
+                  <Animated.View
+                    key="my-avatar"
+                    pointerEvents="none"
+                    style={[styles.isoAvatarWrap, {
+                      left: Animated.subtract(animX, charSize / 2) as any,
+                      top: Animated.subtract(animY, charSize - ISO_TH / 4) as any,
+                    }]}
+                  >
+                    {chatBubble ? (
+                      <View style={styles.chatBubble}>
+                        <Text style={styles.chatBubbleText}>{chatBubble}</Text>
+                        <View style={styles.chatBubbleTail} />
+                      </View>
+                    ) : null}
+                    <WorldAvatarChar
+                      config={avatarConfig}
+                      username={username}
+                      isPremium={isPremium}
+                      size={charSize}
+                      sitting={sittingOnItemId !== null}
+                    />
+                  </Animated.View>
+                ),
+              });
+
+              nodes.sort((a, b) => a.depth - b.depth);
+              return nodes.map(n => n.node);
+            })()}
           </View>
-        </View>
+        </LinearGradient>
       </ScrollView>
 
       {/* Decor inventory quick bar */}
@@ -786,7 +912,24 @@ const styles = StyleSheet.create({
   },
   roomItemEmoji: {},
 
-  // Avatars
+  // Isometric scene
+  isoRoomLabel: {
+    position: 'absolute', zIndex: 2, alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 4,
+  },
+  isoRoomLabelText: {
+    fontSize: 13, fontWeight: '900', color: 'rgba(255,255,255,0.45)',
+    letterSpacing: 2.5, textTransform: 'uppercase',
+  },
+  isoFurniture: {
+    position: 'absolute', justifyContent: 'center', alignItems: 'center',
+    zIndex: 3,
+    borderWidth: 1, borderRadius: 4,
+    shadowOpacity: 0.35, shadowRadius: 4, elevation: 3,
+  },
+  isoAvatarWrap: { position: 'absolute', alignItems: 'center', zIndex: 5 },
+
+  // Avatars (legacy, keep for compatibility)
   avatarWrap: { position: 'absolute', alignItems: 'center' },
   chatBubble: {
     backgroundColor: '#fff',
