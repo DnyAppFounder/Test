@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { useProfile } from '@/contexts/ProfileContext';
+import { useWallet } from '@/contexts/WalletContext';
 import { useOnboardingGuard } from '@/hooks/useOnboardingGuard';
 import { PinSetupModal } from '@/components/onboarding/PinSetupModal';
 import { UsernameSetupModal } from '@/components/onboarding/UsernameSetupModal';
@@ -18,15 +19,19 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { nextStep, isReady } = useOnboardingGuard();
   const { completeOnboarding, logEvent, onboardingComplete } = useSecurity();
   const { profile } = useProfile();
+  const { activeWallet } = useWallet();
 
-  // Mark complete once when all steps are done — no profile?.id required so it
-  // always fires, even before the Supabase profile finishes loading.
+  // Only mark complete when all steps are done AND a real wallet is present.
+  // Without the activeWallet guard this effect fires while activeWallet is null
+  // (brief window after navigation) and writes the global 'security:onboarding_complete'
+  // key, which then gets read by every future wallet address via the legacy-key
+  // fallback in readKey(), silently skipping all onboarding steps.
   useEffect(() => {
-    if (isReady && nextStep === null && !onboardingComplete) {
+    if (isReady && activeWallet && nextStep === null && !onboardingComplete) {
       completeOnboarding(profile?.id);
       if (profile?.id) logEvent(profile.id, 'onboarding_completed');
     }
-  }, [isReady, nextStep, onboardingComplete, profile?.id]);
+  }, [isReady, activeWallet, nextStep, onboardingComplete, profile?.id]);
 
   return (
     <>
