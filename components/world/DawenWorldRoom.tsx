@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import Svg, {
   Polygon, Rect as SvgRect, Text as SvgText, Line as SvgLine, G as SvgG,
-  Circle as SvgCircle, Defs as SvgDefs,
+  Circle as SvgCircle, Defs as SvgDefs, Ellipse as SvgEllipse, Path as SvgPath,
   LinearGradient as SvgLinearGradient, Stop as SvgStop,
 } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -40,7 +40,7 @@ interface ThemeVisual {
 }
 
 const THEME_VISUALS: Record<string, ThemeVisual> = {
-  'DAWEN Neon Room':      { wallGradient: ['#0A0520','#130830','#0D0920'], floorEven: 'rgba(100,50,220,0.07)', floorOdd: 'rgba(70,30,160,0.11)', dividerColor: '#8B5CF6' },
+  'DAWEN Neon Room':      { wallGradient: ['#0A0C14','#111828','#0A0C14'], floorEven: 'rgba(180,150,70,0.08)', floorOdd: 'rgba(140,110,45,0.13)', dividerColor: '#C09030' },
   'Purple Lounge':        { wallGradient: ['#120530','#1E0840','#120530'], floorEven: 'rgba(120,60,240,0.08)', floorOdd: 'rgba(90,40,200,0.13)', dividerColor: '#9D4EDD' },
   'Trading Room':         { wallGradient: ['#051005','#0A1F0A','#051005'], floorEven: 'rgba(16,185,129,0.07)', floorOdd: 'rgba(10,120,80,0.11)', dividerColor: '#10B981' },
   'Crew Room':            { wallGradient: ['#0A0A1A','#131328','#0A0A1A'], floorEven: 'rgba(59,130,246,0.07)', floorOdd: 'rgba(37,99,235,0.11)', dividerColor: '#3B82F6' },
@@ -188,159 +188,181 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
           <HairSprite size={hairSize} />
         </View>
       ) : (
-        <View style={{ alignItems: 'center', marginBottom: -s(1) }}>
+        <Svg width={s(26)} height={s(14)} viewBox="0 0 26 14" style={{ marginBottom: -s(2) }}>
+          {/* Cap dome */}
+          <SvgEllipse cx={13} cy={7} rx={11} ry={6.5} fill={outfitColor} />
+          {/* Cap highlight */}
+          <SvgEllipse cx={10} cy={4.5} rx={4.5} ry={2.5} fill="rgba(255,255,255,0.18)" />
           {/* Cap brim */}
-          <View style={{
-            width: s(22), height: s(3),
-            backgroundColor: '#111',
-            borderRadius: s(1),
-            marginBottom: -s(1),
-          }} />
-          {/* Cap body */}
-          <View style={{
-            width: s(20), height: s(8),
-            backgroundColor: '#111',
-            borderTopLeftRadius: s(5), borderTopRightRadius: s(5),
-            justifyContent: 'center', alignItems: 'center',
-          }}>
-            <Text style={{ fontSize: s(4), color: '#fff', fontWeight: '900', letterSpacing: 0 }}>D</Text>
-          </View>
-        </View>
+          <SvgRect x={1} y={10} width={24} height={4} rx={2} fill={outfitColor} opacity={0.85} />
+          {/* Brim shadow */}
+          <SvgRect x={1} y={12} width={24} height={2} rx={1} fill="rgba(0,0,0,0.2)" />
+          {/* D badge */}
+          <SvgCircle cx={13} cy={7} r={3.5} fill="rgba(0,0,0,0.2)" />
+          <SvgText x={13} y={9} fill="rgba(255,255,255,0.9)" fontSize={5.5} fontWeight="900" textAnchor="middle">D</SvgText>
+        </Svg>
       )}
 
-      {/* Head — Habbo-style square with slight rounding */}
-      <View style={{
-        width: s(18), height: s(16),
-        backgroundColor: skinColor,
-        borderRadius: s(3),
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.25)',
-        justifyContent: 'flex-start',
-        alignItems: 'center',
-        overflow: 'hidden',
-      }}>
-        {/* Sunglasses — single dark bar */}
-        <View style={{
-          marginTop: s(4), width: s(16), height: s(4),
-          backgroundColor: '#111', borderRadius: s(1.5),
-          flexDirection: 'row', alignItems: 'center',
-          justifyContent: 'space-between', paddingHorizontal: s(1),
-        }}>
-          <View style={{ width: s(6), height: s(3), backgroundColor: '#222', borderRadius: s(1), opacity: 0.8 }} />
-          <View style={{ width: s(1), height: s(2), backgroundColor: '#555' }} />
-          <View style={{ width: s(6), height: s(3), backgroundColor: '#222', borderRadius: s(1), opacity: 0.8 }} />
-        </View>
-        {/* Smile line */}
-        <View style={{
-          width: s(7), height: 1,
-          borderBottomWidth: 1.5,
-          borderColor: 'rgba(0,0,0,0.35)',
-          borderBottomLeftRadius: s(2), borderBottomRightRadius: s(2),
-          marginTop: s(3),
-        }} />
-      </View>
+      {/* Head — SVG with realistic facial features */}
+      <Svg width={s(24)} height={s(23)} viewBox="0 0 24 23">
+        {/* Ear left */}
+        <SvgEllipse cx={1.8} cy={12} rx={2.2} ry={3} fill={skinColor} />
+        <SvgEllipse cx={2} cy={12} rx={1.2} ry={2} fill="rgba(0,0,0,0.08)" />
+        {/* Ear right */}
+        <SvgEllipse cx={22.2} cy={12} rx={2.2} ry={3} fill={skinColor} />
+        <SvgEllipse cx={22} cy={12} rx={1.2} ry={2} fill="rgba(0,0,0,0.08)" />
+        {/* Head oval */}
+        <SvgEllipse cx={12} cy={11.5} rx={9.8} ry={9.5} fill={skinColor} />
+        {/* Forehead highlight */}
+        <SvgEllipse cx={10} cy={6} rx={4.5} ry={2.5} fill="rgba(255,255,255,0.12)" />
+        {/* Eyebrow left */}
+        <SvgPath d="M5,8 Q7.5,6.2 9.5,7.5" stroke="rgba(0,0,0,0.5)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
+        {/* Eyebrow right */}
+        <SvgPath d="M14.5,7.5 Q16.5,6.2 19,8" stroke="rgba(0,0,0,0.5)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
+        {/* Eye socket left */}
+        <SvgEllipse cx={8} cy={11.5} rx={3.2} ry={2.8} fill="white" />
+        {/* Eye socket right */}
+        <SvgEllipse cx={16} cy={11.5} rx={3.2} ry={2.8} fill="white" />
+        {/* Iris left */}
+        <SvgEllipse cx={8.4} cy={11.5} rx={1.8} ry={2} fill={outfitColor} />
+        {/* Iris right */}
+        <SvgEllipse cx={16.4} cy={11.5} rx={1.8} ry={2} fill={outfitColor} />
+        {/* Pupil left */}
+        <SvgEllipse cx={8.6} cy={11.4} rx={1} ry={1.1} fill="#0A0A0A" />
+        {/* Pupil right */}
+        <SvgEllipse cx={16.6} cy={11.4} rx={1} ry={1.1} fill="#0A0A0A" />
+        {/* Eye shine left */}
+        <SvgEllipse cx={9.1} cy={10.8} rx={0.5} ry={0.5} fill="white" />
+        {/* Eye shine right */}
+        <SvgEllipse cx={17.1} cy={10.8} rx={0.5} ry={0.5} fill="white" />
+        {/* Nose */}
+        <SvgPath d="M11,14.5 Q12,16 13,14.5" stroke="rgba(0,0,0,0.25)" strokeWidth={1.1} fill="none" strokeLinecap="round" />
+        {/* Nostril left */}
+        <SvgEllipse cx={10.5} cy={15.5} rx={0.8} ry={0.5} fill="rgba(0,0,0,0.15)" />
+        {/* Nostril right */}
+        <SvgEllipse cx={13.5} cy={15.5} rx={0.8} ry={0.5} fill="rgba(0,0,0,0.15)" />
+        {/* Smile */}
+        <SvgPath d="M8,18 Q12,21 16,18" stroke="rgba(0,0,0,0.45)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
+        {/* Cheek blush left */}
+        <SvgEllipse cx={5} cy={15} rx={3} ry={2} fill="rgba(255,150,130,0.22)" />
+        {/* Cheek blush right */}
+        <SvgEllipse cx={19} cy={15} rx={3} ry={2} fill="rgba(255,150,130,0.22)" />
+      </Svg>
 
       {/* Neck */}
-      <View style={{ width: s(7), height: s(3), backgroundColor: skinColor }} />
+      <Svg width={s(10)} height={s(5)} viewBox="0 0 10 5" style={{ marginTop: -s(1) }}>
+        <SvgRect x={1} y={0} width={8} height={5} rx={2} fill={skinColor} />
+      </Svg>
 
       {/* Body row: left arm + torso + right arm */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: -s(1) }}>
         {/* Left arm */}
         {sitting ? (
-          <View style={{
-            width: s(5), height: s(7),
-            backgroundColor: outfitColor,
-            borderTopLeftRadius: s(2), borderBottomLeftRadius: s(3),
-            marginTop: s(1),
-            transform: [{ rotate: '50deg' }, { translateX: s(2) }],
-          }} />
+          <Svg width={s(7)} height={s(10)} viewBox="0 0 7 10"
+            style={{ transform: [{ rotate: '50deg' }, { translateX: s(2) }] as any, marginTop: s(1) }}
+          >
+            <SvgRect x={0.5} y={0} width={6} height={7.5} rx={3} fill={outfitColor} />
+            <SvgRect x={0.5} y={6} width={6} height={2} rx={1} fill="rgba(255,255,255,0.15)" />
+            <SvgEllipse cx={3.5} cy={9.5} rx={3} ry={2} fill={skinColor} />
+          </Svg>
         ) : (
-          <Animated.View style={{
-            width: s(5), height: s(12),
-            backgroundColor: outfitColor,
-            borderTopLeftRadius: s(2), borderBottomLeftRadius: s(3),
-            marginTop: s(1),
-            transform: leftArmTransform as any,
-          }} />
+          <Animated.View style={{ marginTop: s(1), transform: leftArmTransform as any }}>
+            <Svg width={s(7)} height={s(16)} viewBox="0 0 7 16">
+              <SvgRect x={0.5} y={0} width={6} height={12} rx={3} fill={outfitColor} />
+              <SvgRect x={0.5} y={10} width={6} height={2} rx={1} fill="rgba(255,255,255,0.15)" />
+              <SvgEllipse cx={3.5} cy={14.5} rx={3} ry={2.5} fill={skinColor} />
+            </Svg>
+          </Animated.View>
         )}
 
         {/* Torso */}
-        <View style={{
-          width: s(14), height: sitting ? s(10) : s(13),
-          backgroundColor: outfitColor,
-          borderTopLeftRadius: s(2), borderTopRightRadius: s(2),
-          justifyContent: 'center', alignItems: 'center',
-        }}>
-          {/* DAWEN text on chest */}
-          <Text style={{ fontSize: s(3.5), color: 'rgba(255,255,255,0.75)', fontWeight: '900', letterSpacing: 0, marginTop: -s(1) }}>DAWEN</Text>
-          {/* Belt line */}
-          <View style={{
-            position: 'absolute',
-            bottom: 0, left: 0, right: 0,
-            height: s(3),
-            backgroundColor: 'rgba(0,0,0,0.25)',
-          }} />
-        </View>
+        <Svg width={s(16)} height={sitting ? s(12) : s(15)} viewBox={`0 0 16 ${sitting ? 12 : 15}`}>
+          {/* Body */}
+          <SvgRect x={0} y={0} width={16} height={sitting ? 12 : 15} rx={2} fill={outfitColor} />
+          {/* Jacket shading right side */}
+          <SvgPath d={`M10,0 L16,0 L16,${sitting ? 12 : 15} L10,${sitting ? 12 : 15} Z`} fill="rgba(0,0,0,0.1)" />
+          {/* Left lapel */}
+          <SvgPath d="M8,0 L4,4 L7,10 L8,6 Z" fill="rgba(255,255,255,0.14)" />
+          {/* Right lapel */}
+          <SvgPath d="M8,0 L12,4 L9,10 L8,6 Z" fill="rgba(0,0,0,0.14)" />
+          {/* Collar V neck */}
+          <SvgPath d="M5,0 L8,5 L11,0" stroke="rgba(255,255,255,0.55)" strokeWidth={0.8} fill="none" />
+          {/* Shirt collar white */}
+          <SvgPath d="M6.5,0 L8,3 L9.5,0" fill="rgba(255,255,255,0.3)" />
+          {/* Pocket */}
+          <SvgRect x={2} y={6} width={4.5} height={3.5} rx={1} fill="rgba(0,0,0,0.18)" />
+          <SvgRect x={2.5} y={5.5} width={3.5} height={0.8} rx={0.4} fill="rgba(255,255,255,0.15)" />
+          {/* Button row */}
+          <SvgCircle cx={8} cy={7} r={0.8} fill="rgba(255,255,255,0.5)" />
+          <SvgCircle cx={8} cy={9.5} r={0.8} fill="rgba(255,255,255,0.5)" />
+          {sitting ? null : <SvgCircle cx={8} cy={12} r={0.8} fill="rgba(255,255,255,0.5)" />}
+          {/* DAWEN text */}
+          <SvgText x={8} y={4.2} fill="rgba(255,255,255,0.7)" fontSize={2.4} fontWeight="900" textAnchor="middle">DAWEN</SvgText>
+          {/* Belt */}
+          <SvgRect x={0} y={sitting ? 10 : 13} width={16} height={2} rx={0} fill="rgba(0,0,0,0.32)" />
+          {/* Belt buckle */}
+          <SvgRect x={6} y={sitting ? 10 : 13} width={4} height={2} rx={0.8} fill="rgba(200,180,60,0.7)" />
+          <SvgRect x={7.2} y={sitting ? 10.3 : 13.3} width={1.6} height={1.4} rx={0.5} fill="rgba(0,0,0,0.4)" />
+        </Svg>
 
         {/* Right arm */}
         {sitting ? (
-          <View style={{
-            width: s(5), height: s(7),
-            backgroundColor: outfitColor,
-            borderTopRightRadius: s(2), borderBottomRightRadius: s(3),
-            marginTop: s(1),
-            transform: [{ rotate: '-50deg' }, { translateX: -s(2) }],
-          }} />
+          <Svg width={s(7)} height={s(10)} viewBox="0 0 7 10"
+            style={{ transform: [{ rotate: '-50deg' }, { translateX: -s(2) }] as any, marginTop: s(1) }}
+          >
+            <SvgRect x={0.5} y={0} width={6} height={7.5} rx={3} fill={outfitColor} />
+            <SvgRect x={0.5} y={6} width={6} height={2} rx={1} fill="rgba(0,0,0,0.12)" />
+            <SvgEllipse cx={3.5} cy={9.5} rx={3} ry={2} fill={skinColor} />
+          </Svg>
         ) : (
-          <Animated.View style={{
-            width: s(5), height: s(12),
-            backgroundColor: outfitColor,
-            borderTopRightRadius: s(2), borderBottomRightRadius: s(3),
-            marginTop: s(1),
-            transform: rightArmTransform as any,
-          }} />
+          <Animated.View style={{ marginTop: s(1), transform: rightArmTransform as any }}>
+            <Svg width={s(7)} height={s(16)} viewBox="0 0 7 16">
+              <SvgRect x={0.5} y={0} width={6} height={12} rx={3} fill={outfitColor} />
+              <SvgRect x={0.5} y={10} width={6} height={2} rx={1} fill="rgba(0,0,0,0.12)" />
+              <SvgEllipse cx={3.5} cy={14.5} rx={3} ry={2.5} fill={skinColor} />
+            </Svg>
+          </Animated.View>
         )}
       </View>
 
       {/* Legs */}
       {sitting ? (
-        // Sitting: legs extend horizontally forward
-        <View style={{ flexDirection: 'row', gap: s(2), marginTop: s(1) }}>
-          <View style={{
-            width: s(13), height: s(6),
-            backgroundColor: '#1A1A2E',
-            borderRadius: s(2),
-          }} />
-        </View>
+        <Svg width={s(18)} height={s(9)} viewBox="0 0 18 9" style={{ marginTop: s(1) }}>
+          {/* Left leg horizontal */}
+          <SvgRect x={0} y={0} width={8} height={7} rx={3} fill="#1C1F3A" />
+          <SvgRect x={0} y={5} width={10} height={4} rx={2} fill="#1A1A22" />
+          {/* Right leg horizontal */}
+          <SvgRect x={10} y={0} width={8} height={7} rx={3} fill="#1C1F3A" />
+          <SvgRect x={9} y={5} width={10} height={4} rx={2} fill="#1A1A22" />
+        </Svg>
       ) : (
         <View style={{ flexDirection: 'row', gap: s(2), marginTop: s(1) }}>
           {/* Left leg */}
-          <Animated.View style={{
-            width: s(6), height: s(11),
-            backgroundColor: '#1C1C3A',
-            borderBottomLeftRadius: s(2),
-            transform: [{ translateY: leg1Y }],
-          }}>
-            <View style={{
-              position: 'absolute', bottom: 0, left: -s(1),
-              width: s(8), height: s(4),
-              backgroundColor: '#E8E8E8',
-              borderRadius: s(2),
-            }} />
+          <Animated.View style={{ transform: [{ translateY: leg1Y }] }}>
+            <Svg width={s(9)} height={s(16)} viewBox="0 0 9 16">
+              <SvgRect x={0} y={0} width={9} height={10} rx={3} fill="#1C1F3A" />
+              {/* Knee highlight */}
+              <SvgEllipse cx={4.5} cy={6} rx={3} ry={1.5} fill="rgba(255,255,255,0.06)" />
+              {/* Ankle */}
+              <SvgRect x={1} y={9.5} width={7} height={2} rx={1} fill="#252545" />
+              {/* Shoe */}
+              <SvgRect x={-1} y={11.5} width={11} height={4.5} rx={2.5} fill="#1A1A22" />
+              {/* Shoe toe */}
+              <SvgEllipse cx={9} cy={14.5} rx={2} ry={2} fill="#1A1A22" />
+              {/* Sole */}
+              <SvgRect x={-1} y={14.5} width={12} height={1.5} rx={0.75} fill="#303038" />
+            </Svg>
           </Animated.View>
           {/* Right leg */}
-          <Animated.View style={{
-            width: s(6), height: s(11),
-            backgroundColor: '#1C1C3A',
-            borderBottomRightRadius: s(2),
-            transform: [{ translateY: leg2Y }],
-          }}>
-            <View style={{
-              position: 'absolute', bottom: 0, left: -s(1),
-              width: s(8), height: s(4),
-              backgroundColor: '#E8E8E8',
-              borderRadius: s(2),
-            }} />
+          <Animated.View style={{ transform: [{ translateY: leg2Y }] }}>
+            <Svg width={s(9)} height={s(16)} viewBox="0 0 9 16">
+              <SvgRect x={0} y={0} width={9} height={10} rx={3} fill="#1C1F3A" />
+              <SvgEllipse cx={4.5} cy={6} rx={3} ry={1.5} fill="rgba(255,255,255,0.06)" />
+              <SvgRect x={1} y={9.5} width={7} height={2} rx={1} fill="#252545" />
+              <SvgRect x={-1} y={11.5} width={11} height={4.5} rx={2.5} fill="#1A1A22" />
+              <SvgEllipse cx={9} cy={14.5} rx={2} ry={2} fill="#1A1A22" />
+              <SvgRect x={-1} y={14.5} width={12} height={1.5} rx={0.75} fill="#303038" />
+            </Svg>
           </Animated.View>
         </View>
       )}
@@ -769,7 +791,7 @@ export function DawenWorldRoom({
         style={styles.sceneScroll}
       >
         <LinearGradient
-          colors={['#060610', '#0A0A1A', '#060610']}
+          colors={['#07080F', '#0D1020', '#07080F']}
           style={{ width: Math.max(ISO_CANVAS_W, screenW), height: ISO_CANVAS_H + 4 }}
         >
           {/* Tap responder layer — inverse iso projection maps touches to grid coords */}
@@ -887,13 +909,13 @@ export function DawenWorldRoom({
                   <SvgG>
                     <SvgDefs>
                       <SvgLinearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
-                        <SvgStop offset="0%" stopColor="#1A0B3B" stopOpacity="1" />
-                        <SvgStop offset="60%" stopColor="#0D0620" stopOpacity="1" />
-                        <SvgStop offset="100%" stopColor="#0A0418" stopOpacity="1" />
+                        <SvgStop offset="0%" stopColor="#060A1A" stopOpacity="1" />
+                        <SvgStop offset="60%" stopColor="#080C14" stopOpacity="1" />
+                        <SvgStop offset="100%" stopColor="#050810" stopOpacity="1" />
                       </SvgLinearGradient>
                       <SvgLinearGradient id="rugGrad" x1="0" y1="0" x2="1" y2="1">
-                        <SvgStop offset="0%" stopColor="#4C1D95" stopOpacity="0.7" />
-                        <SvgStop offset="100%" stopColor="#5B21B6" stopOpacity="0.5" />
+                        <SvgStop offset="0%" stopColor="#8B6820" stopOpacity="0.65" />
+                        <SvgStop offset="100%" stopColor="#C09030" stopOpacity="0.45" />
                       </SvgLinearGradient>
                     </SvgDefs>
 
@@ -925,8 +947,8 @@ export function DawenWorldRoom({
                     )}
 
                     {/* ── DAWEN D banner on left wall (rows 0-1) ── */}
-                    <Polygon points={lwPoly(0, 1, 0.05, 0.92)} fill="#0D0820" stroke="#6D28D9" strokeWidth={1.5} />
-                    <Polygon points={lwPoly(0, 1, 0.07, 0.9)} fill="#12082E" />
+                    <Polygon points={lwPoly(0, 1, 0.05, 0.92)} fill="#0A0C12" stroke="#B8860B" strokeWidth={1.5} />
+                    <Polygon points={lwPoly(0, 1, 0.07, 0.9)} fill="#0D0F18" />
                     {/* "D" symbol */}
                     {(() => {
                       const cx = (lwXR(0) + lwXR(1) + lwXL(0) + lwXL(1)) / 4;
@@ -934,9 +956,9 @@ export function DawenWorldRoom({
                       const r = Math.min(ISO_TW * 0.22, WALL_H * 0.3);
                       return (
                         <>
-                          <SvgCircle cx={cx} cy={cy} r={r + 4} fill="#6D28D9" opacity={0.3} />
-                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0820" stroke="#A78BFA" strokeWidth={2} />
-                          <SvgText x={cx} y={cy + r * 0.35} fill="#A78BFA" fontSize={r * 1.1} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
+                          <SvgCircle cx={cx} cy={cy} r={r + 4} fill="#B8860B" opacity={0.25} />
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0F18" stroke="#F0D060" strokeWidth={2} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#F0D060" fontSize={r * 1.1} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
                         </>
                       );
                     })()}
@@ -949,25 +971,25 @@ export function DawenWorldRoom({
                       return (
                         <>
                           {/* Glow layer */}
-                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fontSize} fontWeight="900" textAnchor="middle" opacity={0.6} letterSpacing={2}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy} fill="#B8860B" fontSize={fontSize} fontWeight="900" textAnchor="middle" opacity={0.55} letterSpacing={2}>DAWEN</SvgText>
                           {/* Crisp layer */}
-                          <SvgText x={cx} y={cy} fill="#D4A5FF" fontSize={fontSize} fontWeight="900" textAnchor="middle" letterSpacing={2}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy} fill="#F0D060" fontSize={fontSize} fontWeight="900" textAnchor="middle" letterSpacing={2}>DAWEN</SvgText>
                         </>
                       );
                     })()}
 
                     {/* ── Left wall flag / banner (rows 5-7) ── */}
-                    <Polygon points={lwPoly(5, 6, 0.08, 0.88)} fill="#0A0520" stroke="rgba(109,40,217,0.5)" strokeWidth={1} />
+                    <Polygon points={lwPoly(5, 6, 0.08, 0.88)} fill="#090C12" stroke="rgba(184,134,11,0.5)" strokeWidth={1} />
                     {(() => {
                       const cx = (lwXR(5) + lwXR(7) + lwXL(5) + lwXL(7)) / 4;
                       const cy = (lwYTR(5) + lwYTR(7) + lwYTL(5) + lwYTL(7)) / 4 + WALL_H * 0.45;
                       return (
-                        <SvgText x={cx} y={cy} fill="rgba(167,139,250,0.6)" fontSize={Math.max(8, ISO_TW * 0.25)} fontWeight="700" textAnchor="middle">DAWEN</SvgText>
+                        <SvgText x={cx} y={cy} fill="rgba(220,190,80,0.65)" fontSize={Math.max(8, ISO_TW * 0.25)} fontWeight="700" textAnchor="middle">DAWEN</SvgText>
                       );
                     })()}
 
                     {/* ── "DAWEN WORLD" Artwork poster (back wall, cols 2-5) ── */}
-                    <Polygon points={bwPoly(2, 6, 0.04, 0.93)} fill="#0D0818" stroke="#6D28D9" strokeWidth={2} />
+                    <Polygon points={bwPoly(2, 6, 0.04, 0.93)} fill="#0A0D16" stroke="#1A3A5C" strokeWidth={2} />
                     <Polygon points={bwPoly(2.1, 5.9, 0.07, 0.90)} fill="url(#skyGrad)" />
                     {/* City skyline buildings */}
                     {[
@@ -975,7 +997,7 @@ export function DawenWorldRoom({
                       [3.3, 0.35, 0.2, 0.54], [3.7, 0.5, 0.25, 0.39], [4.1, 0.65, 0.18, 0.24],
                       [4.5, 0.4, 0.22, 0.49], [4.9, 0.55, 0.2, 0.34],
                     ].map(([c, f1, w, h], i) => (
-                      <Polygon key={`bld${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(30,10,60,0.9)" stroke="rgba(109,40,217,0.35)" strokeWidth={0.5} />
+                      <Polygon key={`bld${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(8,16,36,0.92)" stroke="rgba(30,60,100,0.4)" strokeWidth={0.5} />
                     ))}
                     {/* Moon */}
                     {(() => {
@@ -984,8 +1006,8 @@ export function DawenWorldRoom({
                       const r = Math.min(ISO_TW * 0.12, WALL_H * 0.1);
                       return (
                         <>
-                          <SvgCircle cx={moonX} cy={moonY} r={r * 1.6} fill="#4C1D95" opacity={0.4} />
-                          <SvgCircle cx={moonX} cy={moonY} r={r} fill="#E9D5FF" />
+                          <SvgCircle cx={moonX} cy={moonY} r={r * 1.6} fill="#1A3050" opacity={0.4} />
+                          <SvgCircle cx={moonX} cy={moonY} r={r} fill="#E8F0FF" />
                         </>
                       );
                     })()}
@@ -996,25 +1018,25 @@ export function DawenWorldRoom({
                       const fs = Math.max(8, Math.min(ISO_TW * 0.35, WALL_H * 0.22));
                       return (
                         <>
-                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.5}>DAWEN</SvgText>
-                          <SvgText x={cx} y={cy} fill="#C4B5FD" fontSize={fs} fontWeight="900" textAnchor="middle" letterSpacing={1}>DAWEN</SvgText>
-                          <SvgText x={cx} y={cy + fs * 1.3} fill="#A78BFA" fontSize={fs * 0.75} fontWeight="700" textAnchor="middle" letterSpacing={2}>WORLD</SvgText>
+                          <SvgText x={cx} y={cy} fill="#1A5080" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.6}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy} fill="#60A8D8" fontSize={fs} fontWeight="900" textAnchor="middle" letterSpacing={1}>DAWEN</SvgText>
+                          <SvgText x={cx} y={cy + fs * 1.3} fill="#F0D060" fontSize={fs * 0.75} fontWeight="700" textAnchor="middle" letterSpacing={2}>WORLD</SvgText>
                         </>
                       );
                     })()}
 
                     {/* ── Window / City view (back wall, cols 6-8) ── */}
-                    <Polygon points={bwPoly(6, 9, 0.05, 0.88)} fill="#050310" stroke="#3B0764" strokeWidth={1.5} />
+                    <Polygon points={bwPoly(6, 9, 0.05, 0.88)} fill="#050810" stroke="#1A2840" strokeWidth={1.5} />
                     <Polygon points={bwPoly(6.1, 8.9, 0.08, 0.85)} fill="url(#skyGrad)" />
                     {/* Window frame dividers */}
-                    <SvgLine x1={bwX(7.5)} y1={bwYT(7.5) + 0.08 * WALL_H} x2={bwX(7.5)} y2={bwYT(7.5) + 0.85 * WALL_H} stroke="#3B0764" strokeWidth={2} />
-                    <SvgLine x1={bwX(6.1)} y1={bwYT(6.1) + WALL_H * 0.47} x2={bwX(8.9)} y2={bwYT(8.9) + WALL_H * 0.47} stroke="#3B0764" strokeWidth={1.5} />
+                    <SvgLine x1={bwX(7.5)} y1={bwYT(7.5) + 0.08 * WALL_H} x2={bwX(7.5)} y2={bwYT(7.5) + 0.85 * WALL_H} stroke="#1A2840" strokeWidth={2} />
+                    <SvgLine x1={bwX(6.1)} y1={bwYT(6.1) + WALL_H * 0.47} x2={bwX(8.9)} y2={bwYT(8.9) + WALL_H * 0.47} stroke="#1A2840" strokeWidth={1.5} />
                     {/* City buildings in window */}
                     {[
                       [6.2, 0.5, 0.25, 0.34], [6.6, 0.4, 0.2, 0.44], [7.0, 0.55, 0.22, 0.29],
                       [7.6, 0.38, 0.2, 0.46], [8.0, 0.52, 0.18, 0.32], [8.4, 0.45, 0.22, 0.38],
                     ].map(([c, f1, w, h], i) => (
-                      <Polygon key={`win${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(20,5,45,0.95)" stroke="rgba(109,40,217,0.3)" strokeWidth={0.5} />
+                      <Polygon key={`win${i}`} points={bwPoly(c, c + w, f1, f1 + h)} fill="rgba(6,12,28,0.95)" stroke="rgba(25,55,90,0.35)" strokeWidth={0.5} />
                     ))}
                     {/* Moon in window */}
                     {(() => {
@@ -1023,21 +1045,21 @@ export function DawenWorldRoom({
                       const r = Math.min(ISO_TW * 0.1, WALL_H * 0.09);
                       return (
                         <>
-                          <SvgCircle cx={mx} cy={my} r={r * 1.5} fill="#4C1D95" opacity={0.35} />
-                          <SvgCircle cx={mx} cy={my} r={r} fill="#F3E8FF" />
+                          <SvgCircle cx={mx} cy={my} r={r * 1.5} fill="#1A3050" opacity={0.35} />
+                          <SvgCircle cx={mx} cy={my} r={r} fill="#E8F4FF" />
                         </>
                       );
                     })()}
 
                     {/* ── "BUILD TRADE PLAY EARN" sign (back wall, cols 6-8, upper half) ── */}
-                    <Polygon points={bwPoly(6.15, 7.4, 0.09, 0.43)} fill="#0A0218" stroke="#4C1D95" strokeWidth={1} />
+                    <Polygon points={bwPoly(6.15, 7.4, 0.09, 0.43)} fill="#080C14" stroke="#1A3A5C" strokeWidth={1} />
                     {(() => {
                       const cx = bwX(6.8);
                       const baseY = bwYT(6.8) + WALL_H * 0.15;
                       const fs = Math.max(5, Math.min(ISO_TW * 0.17, WALL_H * 0.12));
                       const lines = ['BUILD', 'TRADE', 'PLAY', 'EARN'];
                       return lines.map((line, i) => (
-                        <SvgText key={`sign${i}`} x={cx} y={baseY + i * fs * 1.35} fill="#C4B5FD" fontSize={fs} fontWeight="800" textAnchor="middle" letterSpacing={1}>{line}</SvgText>
+                        <SvgText key={`sign${i}`} x={cx} y={baseY + i * fs * 1.35} fill="#F0D060" fontSize={fs} fontWeight="800" textAnchor="middle" letterSpacing={1}>{line}</SvgText>
                       ));
                     })()}
                     {/* D logo under text */}
@@ -1047,43 +1069,38 @@ export function DawenWorldRoom({
                       const r = Math.min(ISO_TW * 0.1, WALL_H * 0.08);
                       return (
                         <>
-                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0820" stroke="#6D28D9" strokeWidth={1.5} />
-                          <SvgText x={cx} y={cy + r * 0.35} fill="#A78BFA" fontSize={r * 1.0} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#0D0F18" stroke="#C09030" strokeWidth={1.5} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#F0D060" fontSize={r * 1.0} fontWeight="900" textAnchor="middle" fontFamily="monospace">D</SvgText>
                         </>
                       );
                     })()}
 
-                    {/* ── "DAWEN ARCADE" neon sign (far right, back wall cols 8-10) ── */}
-                    <Polygon points={bwPoly(8, 10, 0.06, 0.55)} fill="#0A0520" stroke="#9D4EDD" strokeWidth={1.5} />
+                    {/* ── "VIP LOUNGE" sign (far right, back wall cols 8-10) ── */}
+                    <Polygon points={bwPoly(8, 10, 0.06, 0.55)} fill="#0A0B12" stroke="#B8860B" strokeWidth={1.5} />
                     {(() => {
                       const cx = bwX(9);
                       const cy = bwYT(9) + WALL_H * 0.22;
                       const fs = Math.max(7, Math.min(ISO_TW * 0.28, WALL_H * 0.18));
                       return (
                         <>
-                          <SvgText x={cx} y={cy} fill="#9D4EDD" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.7}>DAWEN</SvgText>
-                          <SvgText x={cx} y={cy} fill="#E9D5FF" fontSize={fs} fontWeight="900" textAnchor="middle">DAWEN</SvgText>
-                          <SvgText x={cx} y={cy + fs * 1.3} fill="#E9D5FF" fontSize={fs} fontWeight="900" textAnchor="middle">ARCADE</SvgText>
+                          <SvgText x={cx} y={cy} fill="#B8860B" fontSize={fs + 2} fontWeight="900" textAnchor="middle" opacity={0.6}>VIP</SvgText>
+                          <SvgText x={cx} y={cy} fill="#F0D060" fontSize={fs} fontWeight="900" textAnchor="middle">VIP</SvgText>
+                          <SvgText x={cx} y={cy + fs * 1.3} fill="#F0D060" fontSize={fs} fontWeight="900" textAnchor="middle">LOUNGE</SvgText>
                         </>
                       );
                     })()}
 
                     {/* ── Shelving units along back wall (cols 0-2) ── */}
                     {(() => {
-                      const shelfX = bwX(0.3);
-                      const shelfY = bwYT(0.3) + WALL_H * 0.15;
-                      const sw = bwX(1.8) - bwX(0.3);
-                      const sh = WALL_H * 0.7;
-                      // Shelf box
                       return (
-                        <Polygon points={bwPoly(0.1, 1.9, 0.12, 0.88)} fill="#0E0A1A" stroke="#3B0764" strokeWidth={1} />
+                        <Polygon points={bwPoly(0.1, 1.9, 0.12, 0.88)} fill="#0C0E18" stroke="#1A2840" strokeWidth={1} />
                       );
                     })()}
 
                     {/* ── Purple rug on floor (center tiles 3-6, rows 2-5) ── */}
-                    <Polygon points={floorDiamond(3, 2, 6, 5)} fill="url(#rugGrad)" stroke="#7C3AED" strokeWidth={1.8} opacity={0.85} />
+                    <Polygon points={floorDiamond(3, 2, 6, 5)} fill="url(#rugGrad)" stroke="#C09030" strokeWidth={1.8} opacity={0.85} />
                     {/* Rug border inner */}
-                    <Polygon points={floorDiamond(3.5, 2.5, 5.5, 4.5)} fill="none" stroke="#9D4EDD" strokeWidth={1} strokeDasharray="3,2" opacity={0.6} />
+                    <Polygon points={floorDiamond(3.5, 2.5, 5.5, 4.5)} fill="none" stroke="#D4A830" strokeWidth={1} strokeDasharray="3,2" opacity={0.6} />
                     {/* Rug D logo */}
                     {(() => {
                       const center = isoToScreen(4.5, 3.5);
@@ -1092,8 +1109,8 @@ export function DawenWorldRoom({
                       const r = Math.min(ISO_TW * 0.3, ISO_TH * 1.2);
                       return (
                         <>
-                          <SvgCircle cx={cx} cy={cy} r={r} fill="#5B21B6" opacity={0.5} />
-                          <SvgText x={cx} y={cy + r * 0.35} fill="#C4B5FD" fontSize={r * 1.2} fontWeight="900" textAnchor="middle" fontFamily="monospace" opacity={0.7}>D</SvgText>
+                          <SvgCircle cx={cx} cy={cy} r={r} fill="#8B6820" opacity={0.5} />
+                          <SvgText x={cx} y={cy + r * 0.35} fill="#F0D060" fontSize={r * 1.2} fontWeight="900" textAnchor="middle" fontFamily="monospace" opacity={0.8}>D</SvgText>
                         </>
                       );
                     })()}
@@ -1106,8 +1123,8 @@ export function DawenWorldRoom({
                         return (
                           <Polygon key={`ck-${col}-${row}`}
                             points={tilePoly(col, row)}
-                            fill={isEvenCheck ? 'rgba(30,15,60,0.6)' : 'rgba(200,200,210,0.12)'}
-                            stroke="rgba(100,60,180,0.2)" strokeWidth={0.3} />
+                            fill={isEvenCheck ? 'rgba(20,20,30,0.7)' : 'rgba(200,185,120,0.1)'}
+                            stroke="rgba(160,130,50,0.2)" strokeWidth={0.3} />
                         );
                       })
                     )}
@@ -1121,18 +1138,27 @@ export function DawenWorldRoom({
                       return null; // Rendered as world items from DB
                     })()}
 
-                    {/* ── Arcade machine outline (right, col 8-9, row 1-2) ── */}
+                    {/* ── Luxury display / price ticker (right, col 8-9, row 1-2) ── */}
                     {(() => {
                       const p = isoToScreen(8.5, 1.5);
-                      const aw = ISO_TW * 0.7;
-                      const ah = WALL_H * 0.7;
+                      const aw = ISO_TW * 0.72;
+                      const ah = WALL_H * 0.65;
+                      const bx = p.x - aw / 2;
+                      const by = p.y - ah + ISO_TH / 4;
                       return (
-                        <SvgRect x={p.x - aw / 2} y={p.y - ah + ISO_TH / 4} width={aw} height={ah} fill="#0D0820" stroke="#9D4EDD" strokeWidth={1.5} rx={3} />
+                        <>
+                          <SvgRect x={bx} y={by} width={aw} height={ah} fill="#080D18" stroke="#C09030" strokeWidth={1.5} rx={4} />
+                          <SvgRect x={bx + 3} y={by + 3} width={aw - 6} height={ah - 14} rx={2} fill="#050A12" />
+                          <SvgText x={bx + aw / 2} y={by + 14} fill="#10B981" fontSize={Math.max(5, ISO_TW * 0.14)} fontWeight="800" textAnchor="middle">SOL $180.4</SvgText>
+                          <SvgText x={bx + aw / 2} y={by + 25} fill="#F59E0B" fontSize={Math.max(4, ISO_TW * 0.11)} fontWeight="700" textAnchor="middle">+2.4%</SvgText>
+                          <SvgRect x={bx + 4} y={by + ah - 10} width={aw - 8} height={6} rx={2} fill="#C09030" opacity={0.5} />
+                          <SvgText x={bx + aw / 2} y={by + ah - 5} fill="#F0D060" fontSize={Math.max(4, ISO_TW * 0.1)} fontWeight="700" textAnchor="middle">DAWEN</SvgText>
+                        </>
                       );
                     })()}
 
                     {/* ── Elevation tile glow under avatar spawn ── */}
-                    <Polygon points={tilePoly(5, 4)} fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" strokeWidth={1.5} />
+                    <Polygon points={tilePoly(5, 4)} fill="rgba(192,144,48,0.12)" stroke="#C09030" strokeWidth={1.5} />
                   </SvgG>
                 );
               })()}
@@ -1370,7 +1396,7 @@ function supabaseCleanup(...channels: any[]) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#060610' },
+  root: { flex: 1, backgroundColor: '#07080F' },
 
   // HUD
   hud: {

@@ -119,22 +119,10 @@ function aggregateToMonthly(dailyCandles: CandleData[]): CandleData[] {
   return result;
 }
 
-// Timeframe duration in ms — used to build synthetic candles
-const TF_MS: Record<TimeFrame, number> = {
-  '1m':  60_000,
-  '5m':  300_000,
-  '15m': 900_000,
-  '1H':  3_600_000,
-  '4H':  14_400_000,
-  '1D':  86_400_000,
-  '1W':  604_800_000,
-  '1M':  2_592_000_000,
-};
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 class ChartDataService {
   private cache     = new Map<string, { data: CandleData[]; timestamp: number }>();
-  private pairCache = new Map<string, { pairAddress: string; priceUsd: number; volume24h: number; timestamp: number }>();
+  private pairCache = new Map<string, { pairAddress: string; timestamp: number }>();
   private readonly CACHE_DURATION      = 60_000;       // 1 min for short TFs
   private readonly CACHE_DURATION_LONG = 10 * 60_000;  // 10 min for 1W / 1M
   private readonly PAIR_CACHE_DURATION = 10 * 60_000;
@@ -151,47 +139,12 @@ class ChartDataService {
       const pairs = (data.pairs || []).filter((p: any) => p.chainId === 'solana') as any[];
       if (pairs.length === 0) return null;
       pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-      const best = pairs[0];
-      const pairAddress = best.pairAddress;
-      const priceUsd = parseFloat(best.priceUsd || '0');
-      const volume24h = best.volume?.h24 || 0;
-      this.pairCache.set(tokenAddress, { pairAddress, priceUsd, volume24h, timestamp: Date.now() });
+      const pairAddress = pairs[0].pairAddress;
+      this.pairCache.set(tokenAddress, { pairAddress, timestamp: Date.now() });
       return pairAddress;
     } catch {
       return null;
     }
-  }
-
-  private buildSyntheticCandles(tokenAddress: string, timeFrame: TimeFrame, count: number): CandleData[] {
-    const cached = this.pairCache.get(tokenAddress);
-    if (!cached || cached.priceUsd <= 0) return [];
-
-    const { priceUsd, volume24h } = cached;
-    const intervalMs = TF_MS[timeFrame] ?? TF_MS['1H'];
-    const now = Date.now();
-    const startTime = Math.floor(now / intervalMs) * intervalMs - (count - 1) * intervalMs;
-
-    let price = priceUsd;
-    const prices: number[] = [price];
-    for (let i = 1; i < count; i++) {
-      const drift = (Math.random() - 0.48) * 0.004;
-      price = Math.max(price * (1 + drift), priceUsd * 0.5);
-      prices.unshift(price);
-    }
-
-    const perCandleVol = volume24h / Math.max(1, (86_400_000 / intervalMs));
-    return prices.map((close, i) => {
-      const open = i === 0 ? close : prices[i - 1];
-      const spread = Math.abs(close - open) * 0.3 + close * 0.001;
-      return {
-        timestamp: startTime + i * intervalMs,
-        open,
-        high: Math.max(open, close) + spread,
-        low:  Math.min(open, close) - spread,
-        close,
-        volume: perCandleVol * (0.5 + Math.random()),
-      };
-    });
   }
 
   async getOHLCVData(
@@ -219,17 +172,11 @@ class ChartDataService {
       const response = await fetch(url, {
         headers: { Accept: 'application/json;version=20230302' },
       });
-      if (!response.ok) {
-        const synth = this.buildSyntheticCandles(tokenAddress, timeFrame, effectiveLimit);
-        return synth;
-      }
+      if (!response.ok) return [];
 
       const data      = await response.json();
       const ohlcvList = data?.data?.attributes?.ohlcv_list;
-      if (!ohlcvList || ohlcvList.length === 0) {
-        const synth = this.buildSyntheticCandles(tokenAddress, timeFrame, effectiveLimit);
-        return synth;
-      }
+      if (!ohlcvList || ohlcvList.length === 0) return [];
 
       // Parse raw candles
       let candles: CandleData[] = ohlcvList.map((item: number[]) => ({
@@ -266,9 +213,7 @@ class ChartDataService {
       return candles;
     } catch (err) {
       console.error('[ChartDataService] Error fetching OHLCV:', err);
-      const { limit } = GECKO_TIMEFRAME_MAP[timeFrame];
-      const synth = this.buildSyntheticCandles(tokenAddress, timeFrame, limitOverride ?? limit);
-      return synth;
+      return [];
     }
   }
 
