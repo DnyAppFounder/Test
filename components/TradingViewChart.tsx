@@ -100,6 +100,21 @@ const BUCKET_MS: Record<string, number> = {
   'ALL': 86_400_000,
 };
 
+// Fixed number of visible buckets per timeframe — defines the x-axis window width.
+// Every slot in [now - VISIBLE_BUCKETS*bucketMs .. now] is always rendered,
+// with carry-forward fill for missing buckets so the chart never compresses.
+const VISIBLE_BUCKETS: Record<string, number> = {
+  '1m':  60,   // last 60 minutes
+  '5m':  72,   // last 6 hours
+  '15m': 48,   // last 12 hours
+  '1H':  48,   // last 2 days
+  '4H':  42,   // last 7 days
+  '1D':  30,   // last 30 days
+  '1W':  26,   // last ~6 months
+  '1M':  12,   // last 12 months
+  'ALL': 60,   // last 60 days
+};
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 /** Remove candles that have zero, NaN, Infinity, or structurally invalid prices.
@@ -114,6 +129,54 @@ function filterValidCandles(cs: CandleData[]): CandleData[] {
     if (c.high < c.low || c.high < c.open || c.high < c.close) return false;
     return true;
   });
+}
+
+/**
+ * Fill every bucket slot from startMs→endMs. Missing buckets become flat
+ * carry-forward candles (open=high=low=close=lastClose, volume=0).
+ * This guarantees the x-axis is evenly spaced and the line never jumps.
+ */
+function fillBuckets(
+  candles: CandleData[],
+  bucketMs: number,
+  startMs: number,
+  endMs: number,
+): CandleData[] {
+  if (candles.length === 0) return [];
+
+  const alignedStart = Math.floor(startMs / bucketMs) * bucketMs;
+  const alignedEnd   = Math.floor(endMs   / bucketMs) * bucketMs;
+
+  // Build lookup: bucket-aligned timestamp → best candle (highest volume wins)
+  const map = new Map<number, CandleData>();
+  for (const c of candles) {
+    if (!c || c.close <= 0 || !isFinite(c.timestamp)) continue;
+    const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
+    const ex  = map.get(key);
+    if (!ex || c.volume > ex.volume) {
+      map.set(key, { ...c, timestamp: key });
+    }
+  }
+
+  // Seed lastClose from candles that fall BEFORE the visible window
+  let lastClose = candles[0]?.close ?? 0;
+  for (const c of candles) {
+    const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
+    if (key < alignedStart && c.close > 0) lastClose = c.close;
+  }
+
+  const result: CandleData[] = [];
+  for (let ts = alignedStart; ts <= alignedEnd; ts += bucketMs) {
+    const real = map.get(ts);
+    if (real && real.close > 0) {
+      lastClose = real.close;
+      result.push(real);
+    } else if (lastClose > 0) {
+      // Carry-forward: flat candle, zero volume
+      result.push({ timestamp: ts, open: lastClose, high: lastClose, low: lastClose, close: lastClose, volume: 0 });
+    }
+  }
+  return result;
 }
 
 function fmtPrice(p: number): string {
@@ -448,53 +511,47 @@ export function TradingViewChart({
     ? _earlyMcap / _earlyPrice
     : 1;
 
-  const maxVisible = isMobile ? 40 : 80;
-  const totalCount = candles.length;
-  // panOffsetCandles=0 → show last maxVisible; increasing offset scrolls back in time
-  const clampedOffset   = Math.max(0, Math.min(panOffsetCandles, Math.max(0, totalCount - maxVisible)));
-  const endIdx          = Math.max(0, totalCount - clampedOffset);
-  const startIdx        = Math.max(0, endIdx - maxVisible);
-  const rawSlice        = filterValidCandles(candles.slice(startIdx, endIdx || totalCount));
-  const displayCandles  = mcapScale !== 1
-    ? rawSlice.map(c => ({
+  const plotW = chartWidth - PAD.left - PAD.right;
+  plotWRef.current = plotW;
+  const plotH = CHART_H - PAD.top - PAD.bottom;
+  const plotHRef = useRef(plotH);
+  plotHRef.current = plotH;
+
+  // ── Live time engine geometry ─────────────────────────────────────────────
+  // rightTime is always the current wall-clock time minus any historical scroll offset.
+  // visibleMs is FIXED per timeframe so the x-axis window is consistent.
+  const bucketMs       = BUCKET_MS[timeframe] ?? 3_600_000;
+  const visibleBuckets = VISIBLE_BUCKETS[timeframe] ?? 48;
+  const scrollOffsetMs = panOffsetCandles * bucketMs;
+  const rightTime      = rightTimeRef.current - scrollOffsetMs;
+  const visibleMs      = visibleBuckets * bucketMs;
+  const leftTime       = rightTime - visibleMs;
+
+  // Sync refs so stale closures (panResponder, crosshair) always see current values
+  bucketMsRef.current  = bucketMs;
+  visibleMsRef.current = visibleMs;
+  leftTimeRef.current  = leftTime;
+
+  // Build the complete time-bucketed candle array.
+  // fillBuckets ensures EVERY slot from leftTime→rightTime exists:
+  //   • real data where trades happened
+  //   • flat carry-forward (volume=0) for empty buckets
+  // This eliminates gaps in the line and removes 1W/1M spike artifacts.
+  const validRaw       = filterValidCandles(candles);
+  const filledRaw      = fillBuckets(validRaw, bucketMs, leftTime, rightTime);
+  const displayCandles = mcapScale !== 1
+    ? filledRaw.map(c => ({
         ...c,
         open:  c.open  * mcapScale,
         high:  c.high  * mcapScale,
         low:   c.low   * mcapScale,
         close: c.close * mcapScale,
       }))
-    : rawSlice;
+    : filledRaw;
+
   // Sync ref so the crosshair handler always sees the current visible set
   displayCandlesRef.current = displayCandles;
-
-  const plotW = chartWidth - PAD.left - PAD.right;
-  plotWRef.current = plotW;
-  const plotH = CHART_H - PAD.top - PAD.bottom;
-  const plotHRef = useRef(plotH);
-  plotHRef.current = plotH;
-  const n     = displayCandles.length;
-
-  // ── Live time engine geometry ─────────────────────────────────────────────
-  const bucketMs  = BUCKET_MS[timeframe] ?? 3_600_000;
-  const scrollOffsetMs = clampedOffset * bucketMs;
-  // When scrolled into history, anchor rightTime to the last visible candle's
-  // timestamp rather than current wall-clock time. This prevents historical
-  // candles from drifting rightward as the real-time clock advances.
-  const rightTime = clampedOffset > 0 && displayCandles.length > 0
-    ? displayCandles[displayCandles.length - 1].timestamp + bucketMs * 1.5
-    : rightTimeRef.current - scrollOffsetMs;
-  // Dynamic visible window: shrink to fit actual data when not scrolled so
-  // candles spread across the full chart instead of clustering on the right
-  const dataN = rawSlice.length;
-  const effectiveN = (clampedOffset > 0 || dataN === 0)
-    ? maxVisible
-    : Math.min(maxVisible, dataN + 2); // +2: live-edge slot + small right margin
-  const visibleMs = Math.max(bucketMs * 5, effectiveN * bucketMs);
-  const leftTime  = rightTime - visibleMs;
-  // Sync refs so stale closures (panResponder) can read current values
-  bucketMsRef.current  = bucketMs;
-  visibleMsRef.current = visibleMs;
-  leftTimeRef.current  = leftTime;
+  const n = displayCandles.length;
 
   // Convert a Unix-ms timestamp to a chart x-coordinate
   function tsToX(ts: number): number {
@@ -502,31 +559,29 @@ export function TradingViewChart({
   }
 
   // ── Stable price scale ───────────────────────────────────────────────────
-  // Key is stable across live-tick updates (only changes on new candle close or tf change)
-  // so the vertical axis doesn't jitter. After setting the base scale we do a separate
-  // in-place expansion pass for the live candle, so it can never clip beyond the plot area.
+  // Use only real candles (volume > 0) for scale bounds so carry-forward flat
+  // buckets don't incorrectly widen the y-axis.
   {
-    const stableLastIdx = Math.max(0, n - 2);
-    const key = `${timeframe}|${valueMode}|${n}|${displayCandles[0]?.timestamp ?? 0}|${displayCandles[stableLastIdx]?.timestamp ?? 0}`;
-    if (key !== priceScaleKeyRef.current && n > 0) {
+    const key = `${timeframe}|${valueMode}|${validRaw.length}|${validRaw[0]?.timestamp ?? 0}|${validRaw[validRaw.length - 1]?.timestamp ?? 0}`;
+    if (key !== priceScaleKeyRef.current && displayCandles.length > 0) {
       priceScaleKeyRef.current = key;
-      const allValid = filterValidCandles(displayCandles);
-      const scaleSource = allValid.length > 0 ? allValid : displayCandles;
-      const rMax = scaleSource.length > 0 ? Math.max(...scaleSource.map(c => c.high)) : 0;
-      const rMin = scaleSource.length > 0 ? Math.min(...scaleSource.map(c => c.low))  : 0;
+      const realCandles = displayCandles.filter(c => c.volume > 0);
+      const scaleSource = realCandles.length > 0 ? realCandles : displayCandles;
+      const rMax = Math.max(...scaleSource.map(c => c.high));
+      const rMin = Math.min(...scaleSource.map(c => c.low));
       const safeMax = isFinite(rMax) && rMax > 0 ? rMax : 1;
       const safeMin = isFinite(rMin) && rMin >= 0 ? rMin : 0;
       const range = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
       const pad   = range * 0.15;
+      const realVols = displayCandles.filter(c => c.volume > 0).map(c => c.volume);
       priceScaleRef.current = {
         maxP:       safeMax + pad,
         minP:       Math.max(0, safeMin - pad),
         priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
-        maxVol:     Math.max(...displayCandles.map(c => c.volume)) || 1,
+        maxVol:     realVols.length > 0 ? Math.max(...realVols) : 1,
       };
     }
-    // Expand scale in-place when the live candle exceeds current bounds.
-    // This prevents the newest candle from being clipped at the top/bottom.
+    // Expand scale in-place when the live candle exceeds current bounds
     const liveC = n > 0 ? displayCandles[n - 1] : null;
     if (liveC) {
       const { maxP: cMax, minP: cMin, maxVol } = priceScaleRef.current;
@@ -544,11 +599,11 @@ export function TradingViewChart({
     }
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
-  const pixelPerBucket = n > 0 ? (bucketMs / visibleMs) * plotW : plotW / maxVisible;
+  const pixelPerBucket = n > 0 ? (bucketMs / visibleMs) * plotW : plotW / visibleBuckets;
   const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
   const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
 
-  // candle center x — uses real timestamp so chart slides left as time passes
+  // candle center x — uses real bucket timestamp for time-exact placement
   function xOf(i: number): number {
     const c = displayCandles[i];
     if (!c) return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1));

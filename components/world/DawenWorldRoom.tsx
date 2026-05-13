@@ -61,74 +61,213 @@ interface AvatarCharProps {
   isPremium: boolean;
   size?: number;
   sitting?: boolean;
+  walking?: boolean;
 }
 
-function WorldAvatarChar({ config, username, isPremium, size = 34, sitting = false }: AvatarCharProps) {
-  const headSize = Math.round(size * 0.42);
-  const bodyW = Math.round(size * 0.38);
-  const bodyH = Math.round(size * 0.28);
-  const legW = Math.round(size * 0.15);
-  const legH = sitting ? Math.round(size * 0.1) : Math.round(size * 0.2);
-  const eyeSize = Math.max(2, Math.round(headSize * 0.2));
+function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = false, walking = false }: AvatarCharProps) {
+  const walkAnim = useRef(new Animated.Value(0)).current;
+  const walkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (walking && !sitting) {
+      walkLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(walkAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
+          Animated.timing(walkAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+        ])
+      );
+      walkLoopRef.current.start();
+    } else {
+      walkLoopRef.current?.stop();
+      walkLoopRef.current = null;
+      walkAnim.setValue(0);
+    }
+    return () => { walkLoopRef.current?.stop(); };
+  }, [walking, sitting]);
+
+  // Scale everything relative to size (base design at 56px)
+  const sc = Math.max(0.5, size / 56);
+  const s = (n: number) => Math.max(1, Math.round(n * sc));
+
+  const skinColor = config.bodyColor ?? '#F4C08A';
+  const outfitColor = config.outfitColor ?? '#3B82F6';
   const hairIdx = config.hairStyle ?? 0;
   const HairSprite = HAIR_SPRITES[hairIdx] ?? null;
-  const hairSize = Math.round(headSize * 0.85);
+  const hairSize = s(18);
+
+  // Leg alternation — opposite phases
+  const leg1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(4)] });
+  const leg2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [-s(4), 0] });
+  const arm1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, s(2)] });
+  const arm2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [s(2), 0] });
 
   return (
     <View style={ch.root}>
-      {/* Aura glow */}
+      {/* Aura glow ring */}
       {config.auraColor ? (
         <View style={[ch.aura, {
-          width: bodyW + 12,
-          height: headSize + bodyH + legH + 12,
-          borderRadius: (bodyW + 12) / 2,
+          width: s(30), height: s(50),
           borderColor: config.auraColor,
           shadowColor: config.auraColor,
         }]} />
       ) : null}
 
-      {/* Hair / hat sprite */}
-      {HairSprite ? (
-        <View style={{ height: hairSize, marginBottom: -2 }}>
-          <HairSprite size={hairSize} />
-        </View>
-      ) : (
-        <View style={{ height: 4 }} />
-      )}
-
-      {/* Crown for premium */}
+      {/* Premium crown */}
       {isPremium ? (
         <View style={ch.crownWrap}>
-          <Crown size={Math.round(headSize * 0.55)} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />
+          <Crown size={s(10)} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />
         </View>
       ) : null}
 
-      {/* Head */}
-      <View style={[ch.head, {
-        width: headSize, height: headSize,
-        borderRadius: headSize / 2,
-        backgroundColor: config.bodyColor,
-      }]}>
-        <View style={ch.eyes}>
-          <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
-          <View style={[ch.eye, { width: eyeSize, height: eyeSize, borderRadius: eyeSize / 2 }]} />
+      {/* Hair / hat */}
+      {HairSprite ? (
+        <View style={{ height: hairSize, marginBottom: -s(2) }}>
+          <HairSprite size={hairSize} />
         </View>
-        <View style={ch.smile} />
+      ) : (
+        <View style={{
+          width: s(20), height: s(9),
+          backgroundColor: '#5B3A1A',
+          borderTopLeftRadius: s(5), borderTopRightRadius: s(5),
+          marginBottom: -s(2),
+        }} />
+      )}
+
+      {/* Head — Habbo-style square with slight rounding */}
+      <View style={{
+        width: s(18), height: s(16),
+        backgroundColor: skinColor,
+        borderRadius: s(3),
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.25)',
+        justifyContent: 'flex-start',
+        alignItems: 'center',
+        overflow: 'hidden',
+      }}>
+        {/* Eyes — rectangular Habbo-style */}
+        <View style={{ flexDirection: 'row', gap: s(4), marginTop: s(4) }}>
+          <View style={{ width: s(3), height: s(4), backgroundColor: '#1A1A2E', borderRadius: 1 }} />
+          <View style={{ width: s(3), height: s(4), backgroundColor: '#1A1A2E', borderRadius: 1 }} />
+        </View>
+        {/* Smile line */}
+        <View style={{
+          width: s(7), height: 1,
+          borderBottomWidth: 1.5,
+          borderColor: 'rgba(0,0,0,0.35)',
+          borderBottomLeftRadius: s(2), borderBottomRightRadius: s(2),
+          marginTop: s(2),
+        }} />
       </View>
 
-      {/* Body */}
-      <View style={[ch.body, {
-        width: bodyW, height: bodyH,
-        backgroundColor: config.outfitColor,
-        marginTop: -2,
-      }]} />
+      {/* Neck */}
+      <View style={{ width: s(7), height: s(3), backgroundColor: skinColor }} />
 
-      {/* Legs — folded when sitting */}
-      <View style={[ch.legs, { marginTop: 1 }, sitting && ch.legsSitting]}>
-        <View style={[ch.leg, { width: sitting ? legW * 1.8 : legW, height: legH, backgroundColor: config.outfitColor, borderRadius: 2 }]} />
-        {!sitting && <View style={{ width: Math.max(2, legW * 0.3) }} />}
-        {!sitting && <View style={[ch.leg, { width: legW, height: legH, backgroundColor: config.outfitColor }]} />}
+      {/* Body row: left arm + torso + right arm */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        {/* Left arm */}
+        {sitting ? (
+          <View style={{
+            width: s(5), height: s(7),
+            backgroundColor: outfitColor,
+            borderTopLeftRadius: s(2), borderBottomLeftRadius: s(3),
+            marginTop: s(1),
+            transform: [{ rotate: '50deg' }, { translateX: s(2) }],
+          }} />
+        ) : (
+          <Animated.View style={{
+            width: s(5), height: s(12),
+            backgroundColor: outfitColor,
+            borderTopLeftRadius: s(2), borderBottomLeftRadius: s(3),
+            marginTop: s(1),
+            transform: [{ translateY: arm1Y }],
+          }} />
+        )}
+
+        {/* Torso */}
+        <View style={{
+          width: s(14), height: sitting ? s(10) : s(13),
+          backgroundColor: outfitColor,
+          borderTopLeftRadius: s(2), borderTopRightRadius: s(2),
+        }}>
+          {/* Shirt pocket detail */}
+          <View style={{
+            position: 'absolute',
+            width: s(4), height: s(4),
+            top: s(3), left: s(3),
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            borderRadius: 1,
+          }} />
+          {/* Belt line */}
+          <View style={{
+            position: 'absolute',
+            bottom: 0, left: 0, right: 0,
+            height: s(3),
+            backgroundColor: 'rgba(0,0,0,0.18)',
+          }} />
+        </View>
+
+        {/* Right arm */}
+        {sitting ? (
+          <View style={{
+            width: s(5), height: s(7),
+            backgroundColor: outfitColor,
+            borderTopRightRadius: s(2), borderBottomRightRadius: s(3),
+            marginTop: s(1),
+            transform: [{ rotate: '-50deg' }, { translateX: -s(2) }],
+          }} />
+        ) : (
+          <Animated.View style={{
+            width: s(5), height: s(12),
+            backgroundColor: outfitColor,
+            borderTopRightRadius: s(2), borderBottomRightRadius: s(3),
+            marginTop: s(1),
+            transform: [{ translateY: arm2Y }],
+          }} />
+        )}
       </View>
+
+      {/* Legs */}
+      {sitting ? (
+        // Sitting: legs extend horizontally forward
+        <View style={{ flexDirection: 'row', gap: s(2), marginTop: s(1) }}>
+          <View style={{
+            width: s(13), height: s(6),
+            backgroundColor: '#1A1A2E',
+            borderRadius: s(2),
+          }} />
+        </View>
+      ) : (
+        <View style={{ flexDirection: 'row', gap: s(2), marginTop: s(1) }}>
+          {/* Left leg */}
+          <Animated.View style={{
+            width: s(6), height: s(11),
+            backgroundColor: '#1C1C3A',
+            borderBottomLeftRadius: s(2),
+            transform: [{ translateY: leg1Y }],
+          }}>
+            <View style={{
+              position: 'absolute', bottom: 0, left: -s(1),
+              width: s(8), height: s(4),
+              backgroundColor: '#2C2020',
+              borderRadius: s(2),
+            }} />
+          </Animated.View>
+          {/* Right leg */}
+          <Animated.View style={{
+            width: s(6), height: s(11),
+            backgroundColor: '#1C1C3A',
+            borderBottomRightRadius: s(2),
+            transform: [{ translateY: leg2Y }],
+          }}>
+            <View style={{
+              position: 'absolute', bottom: 0, left: -s(1),
+              width: s(8), height: s(4),
+              backgroundColor: '#2C2020',
+              borderRadius: s(2),
+            }} />
+          </Animated.View>
+        </View>
+      )}
 
       {/* Name tag */}
       <View style={ch.nameTag}>
@@ -141,31 +280,14 @@ function WorldAvatarChar({ config, username, isPremium, size = 34, sitting = fal
 const ch = StyleSheet.create({
   root: { alignItems: 'center' },
   aura: {
-    position: 'absolute', top: 0, borderWidth: 1.5, opacity: 0.75,
+    position: 'absolute', top: 0, borderWidth: 1.5, opacity: 0.7,
+    borderRadius: 20,
     shadowRadius: 8, shadowOpacity: 0.7, elevation: 4,
   },
-  crownWrap: { position: 'absolute', top: 0, right: -3, zIndex: 10 },
-  head: {
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.3)',
-    justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
-  },
-  eyes: { flexDirection: 'row', gap: 3, marginTop: 3 },
-  eye: { backgroundColor: 'rgba(255,255,255,0.9)' },
-  smile: {
-    width: 8, height: 4, borderBottomLeftRadius: 4, borderBottomRightRadius: 4,
-    borderBottomWidth: 1.5, borderLeftWidth: 1, borderRightWidth: 1,
-    borderColor: 'rgba(255,255,255,0.6)', marginTop: 2,
-  },
-  body: {
-    borderTopLeftRadius: 3, borderTopRightRadius: 3,
-    borderBottomLeftRadius: 2, borderBottomRightRadius: 2,
-  },
-  legs: { flexDirection: 'row' },
-  legsSitting: { transform: [{ rotate: '90deg' }] },
-  leg: { borderRadius: 2 },
+  crownWrap: { position: 'absolute', top: -6, right: -2, zIndex: 10 },
   nameTag: {
-    backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 4, paddingVertical: 1,
-    borderRadius: 4, maxWidth: 60, marginTop: 3,
+    backgroundColor: 'rgba(0,0,0,0.78)', paddingHorizontal: 4, paddingVertical: 1,
+    borderRadius: 4, maxWidth: 64, marginTop: 3,
   },
   nameText: { fontSize: 9, color: '#fff', fontWeight: '700', textAlign: 'center' },
 });
@@ -260,6 +382,8 @@ export function DawenWorldRoom({
   const [selectedInvItem, setSelectedInvItem] = useState<WorldInventoryItem | null>(null);
   const [selectedRoomItem, setSelectedRoomItem] = useState<WorldRoomItem | null>(null);
   const [chatBubble, setChatBubble] = useState<string | null>(null);
+  const [isWalking, setIsWalking] = useState(false);
+  const walkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Smooth movement via Animated (in isometric screen coords) ─────────────
   const initScreen = isoToScreen(5, 4);
@@ -355,6 +479,7 @@ export function DawenWorldRoom({
     return () => {
       if (presenceRef.current) clearInterval(presenceRef.current);
       if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+      if (walkTimerRef.current) clearTimeout(walkTimerRef.current);
       leaveRoom(walletAddress, room.id);
       supabaseCleanup(msgCh, presCh, itemsCh, posCh);
       posChRef.current = null;
@@ -421,6 +546,10 @@ export function DawenWorldRoom({
     setMyX(col);
     setMyY(row);
     animateToTile(col, row);
+    // Walking animation
+    setIsWalking(true);
+    if (walkTimerRef.current) clearTimeout(walkTimerRef.current);
+    walkTimerRef.current = setTimeout(() => setIsWalking(false), 700);
     if (posChRef.current) {
       broadcastPosition(posChRef.current, { walletAddress, x: col, y: row, username, avatarConfig, isPremium });
     }
@@ -704,6 +833,7 @@ export function DawenWorldRoom({
                       isPremium={isPremium}
                       size={charSize}
                       sitting={sittingOnItemId !== null}
+                      walking={isWalking && sittingOnItemId === null}
                     />
                   </Animated.View>
                 ),
@@ -732,7 +862,7 @@ export function DawenWorldRoom({
             >
               <WorldSprite
                 emoji={inv.catalog_item?.icon_emoji ?? '📦'}
-                size={Math.round(tileSize * 0.72)}
+                size={Math.round(ISO_TW * 0.72)}
                 color={inv.catalog_item?.color_hex ?? '#8B5CF6'}
               />
               {inv.quantity > 1 && <Text style={styles.invBarQty}>×{inv.quantity}</Text>}
