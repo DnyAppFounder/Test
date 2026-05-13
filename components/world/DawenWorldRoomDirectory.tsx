@@ -4,7 +4,7 @@ import {
   TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Zap, Crown } from 'lucide-react-native';
+import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
 import {
   WorldRoom, SizeTier, SIZE_TIER_CONFIG,
   getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
@@ -29,14 +29,14 @@ const VISIBILITY_ICON: Record<string, any> = {
   public: Globe, private: Lock, invite_only: UserCheck,
 };
 const VISIBILITY_COLOR: Record<string, string> = {
-  connectedWalletId?: string | null;
-  internalAccountIndex?: number;
   public: '#10B981', private: '#EF4444', invite_only: '#F59E0B',
 };
 
 interface Props {
   walletAddress: string;
   username: string;
+  connectedWalletId?: string | null;
+  internalAccountIndex?: number;
   onJoinRoom: (room: WorldRoom) => void;
   onClose: () => void;
 }
@@ -59,15 +59,14 @@ export function DawenWorldRoomDirectory({
   const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
   const [editName, setEditName] = useState('');
   const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
-  // Room upgrade state
   const [pendingUpgradeTier, setPendingUpgradeTier] = useState<SizeTier | null>(null);
   const [upgrading, setUpgrading] = useState(false);
   const [solPrice, setSolPrice] = useState(0);
   const [saving, setSaving] = useState(false);
+
   useEffect(() => {
     new SolanaPriceService().getSOLPrice().then(p => setSolPrice(p)).catch(() => {});
   }, []);
-
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,12 +114,17 @@ export function DawenWorldRoomDirectory({
   const handleSaveEdit = async () => {
     if (!editRoom || saving) return;
     setSaving(true);
+    await updateRoom(editRoom.id, { name: editName.trim(), visibility: editVis });
+    setSaving(false);
+    setEditRoom(null);
+    await load();
+  };
+
   const handleUpgrade = async (tier: SizeTier) => {
     if (!editRoom || upgrading) return;
     setPendingUpgradeTier(tier);
     const cfg = SIZE_TIER_CONFIG[tier];
     if (cfg.solPrice === 0) {
-      // Free upgrade (standard tier)
       setUpgrading(true);
       try {
         await upgradeRoom(editRoom.id, walletAddress, tier, null, 0);
@@ -173,12 +177,6 @@ export function DawenWorldRoomDirectory({
     );
   };
 
-    await updateRoom(editRoom.id, { name: editName.trim(), visibility: editVis });
-    setSaving(false);
-    setEditRoom(null);
-    await load();
-  };
-
   const canAccess = (room: WorldRoom) => {
     if (room.visibility === 'public') return true;
     if (room.owner_wallet === walletAddress) return true;
@@ -218,7 +216,6 @@ export function DawenWorldRoomDirectory({
         <View style={styles.loader}><ActivityIndicator color={colors.primary} size="large" /></View>
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {/* Always show Plaza first in public */}
           {tab === 'public' && (() => {
             const plaza = publicRooms.find(r => r.id === PLAZA_ROOM_ID);
             if (!plaza) return null;
@@ -365,12 +362,15 @@ export function DawenWorldRoomDirectory({
             <LinearGradient colors={['#1A0A2E','#0D0D1A']} style={StyleSheet.absoluteFill} />
             <Text style={styles.modalTitle}>Edit Room</Text>
             <TextInput style={styles.input} placeholder="Room name…" placeholderTextColor="rgba(255,255,255,0.3)" value={editName} onChangeText={setEditName} maxLength={40} />
+
             <Text style={styles.inputLabel}>Visibility</Text>
             <View style={styles.visRow}>
               {(['public', 'private', 'invite_only'] as const).map(v => (
                 <TouchableOpacity key={v} style={[styles.visBtn, editVis === v && styles.visBtnActive]} onPress={() => setEditVis(v)}>
                   <Text style={[styles.visText, editVis === v && styles.visTextActive]}>{v.replace('_',' ')}</Text>
                 </TouchableOpacity>
+              ))}
+            </View>
 
             <Text style={styles.inputLabel}>Room Size</Text>
             {(['standard', 'large', 'mega'] as SizeTier[]).map(tier => {
@@ -408,8 +408,6 @@ export function DawenWorldRoomDirectory({
               );
             })}
 
-              ))}
-            </View>
             <View style={styles.modalBtns}>
               <TouchableOpacity style={[styles.createRoomBtn, saving && { opacity: 0.5 }]} onPress={handleSaveEdit} disabled={saving}>
                 {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Save</Text>}
@@ -463,7 +461,6 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', paddingVertical: 48, gap: 12 },
   emptyEmoji: { fontSize: 40 },
   emptyText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
-  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
   modal: { backgroundColor: '#1A0A2E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.xxl, gap: 12, overflow: 'hidden', borderTopWidth: 1, borderColor: 'rgba(139,92,246,0.3)' },
   modalTitle: { fontSize: fontSize.xl, fontWeight: '900', color: '#fff', marginBottom: 4 },
@@ -481,11 +478,12 @@ const styles = StyleSheet.create({
   visTextActive: { color: colors.primary },
   modalBtns: { gap: 8 },
   createRoomBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.lg, paddingVertical: spacing.md, alignItems: 'center' },
-  // Room name row with size badge
+  createRoomText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
+  cancelBtn: { alignItems: 'center', paddingVertical: spacing.sm },
+  cancelText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
   roomNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sizeBadge: { backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' },
   sizeBadgeText: { fontSize: 9, fontWeight: '700', color: colors.primary },
-  // Tier rows in edit modal
   tierRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: borderRadius.md,
@@ -501,7 +499,4 @@ const styles = StyleSheet.create({
   tierPriceText: { fontSize: 11, fontWeight: '800', color: '#F59E0B' },
   tierUsdText: { fontSize: 9, color: 'rgba(255,255,255,0.35)', fontWeight: '500' },
   tierFreeText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
-  createRoomText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
-  cancelBtn: { alignItems: 'center', paddingVertical: spacing.sm },
-  cancelText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
 });
