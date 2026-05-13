@@ -1,5 +1,10 @@
 const DEX_SCREENER_BASE = 'https://api.dexscreener.com';
-const CACHE_DURATION = 2 * 60 * 1000;
+// Individual token/pair lookups are used for live trading — keep short
+const CACHE_DURATION_TOKEN = 15_000;
+// Search results are less latency-sensitive
+const CACHE_DURATION_SEARCH = 60_000;
+// Trending/new lists can stay fresh for 2 minutes
+const CACHE_DURATION_LIST = 2 * 60 * 1000;
 
 export interface DexPair {
   chainId: string;
@@ -56,6 +61,7 @@ export interface DexPair {
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
+  ttl: number;
 }
 
 class DexScreenerService {
@@ -64,7 +70,7 @@ class DexScreenerService {
   private isCached(key: string): boolean {
     const entry = this.cache.get(key);
     if (!entry) return false;
-    return Date.now() - entry.timestamp < CACHE_DURATION;
+    return Date.now() - entry.timestamp < entry.ttl;
   }
 
   private getCache<T>(key: string): T | null {
@@ -72,8 +78,8 @@ class DexScreenerService {
     return this.cache.get(key)?.data || null;
   }
 
-  private setCache<T>(key: string, data: T) {
-    this.cache.set(key, { data, timestamp: Date.now() });
+  private setCache<T>(key: string, data: T, ttl: number) {
+    this.cache.set(key, { data, timestamp: Date.now(), ttl });
   }
 
   async searchTokens(query: string): Promise<DexPair[]> {
@@ -87,7 +93,7 @@ class DexScreenerService {
 
       const data = await response.json();
       const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
-      this.setCache(cacheKey, pairs);
+      this.setCache(cacheKey, pairs, CACHE_DURATION_SEARCH);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Search error:', error);
@@ -106,7 +112,7 @@ class DexScreenerService {
 
       const data = await response.json();
       const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
-      this.setCache(cacheKey, pairs);
+      this.setCache(cacheKey, pairs, CACHE_DURATION_TOKEN);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Token lookup error:', error);
@@ -125,7 +131,7 @@ class DexScreenerService {
 
       const data = await response.json();
       const pair = data.pair || data.pairs?.[0] || null;
-      if (pair) this.setCache(cacheKey, pair);
+      if (pair) this.setCache(cacheKey, pair, CACHE_DURATION_TOKEN);
       return pair;
     } catch (error) {
       console.error('[DexScreener] Pair lookup error:', error);
@@ -178,7 +184,7 @@ class DexScreenerService {
         }
       }
 
-      this.setCache(cacheKey, pairs);
+      this.setCache(cacheKey, pairs, CACHE_DURATION_LIST);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Trending error:', error);
@@ -223,7 +229,7 @@ class DexScreenerService {
 
       pairs.sort((a, b) => (b.pairCreatedAt || 0) - (a.pairCreatedAt || 0));
 
-      this.setCache(cacheKey, pairs);
+      this.setCache(cacheKey, pairs, CACHE_DURATION_LIST);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] New tokens error:', error);

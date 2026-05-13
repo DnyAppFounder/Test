@@ -55,6 +55,8 @@ const DEFAULT_THEME_VISUAL: ThemeVisual = {
 
 // ─── WorldAvatarChar ──────────────────────────────────────────────────────────
 
+type AvatarGesture = 'none' | 'wave' | 'dance';
+
 interface AvatarCharProps {
   config: AvatarConfig;
   username: string;
@@ -62,14 +64,20 @@ interface AvatarCharProps {
   size?: number;
   sitting?: boolean;
   walking?: boolean;
+  gesture?: AvatarGesture;
 }
 
-function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = false, walking = false }: AvatarCharProps) {
-  const walkAnim = useRef(new Animated.Value(0)).current;
-  const walkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = false, walking = false, gesture = 'none' }: AvatarCharProps) {
+  const walkAnim  = useRef(new Animated.Value(0)).current;
+  const waveAnim  = useRef(new Animated.Value(0)).current;
+  const danceAnim = useRef(new Animated.Value(0)).current;
+  const walkLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
+  const waveLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
+  const danceLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
+  // Walk loop — only when walking and no gesture active
   useEffect(() => {
-    if (walking && !sitting) {
+    if (walking && !sitting && gesture === 'none') {
       walkLoopRef.current = Animated.loop(
         Animated.sequence([
           Animated.timing(walkAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
@@ -83,7 +91,43 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
       walkAnim.setValue(0);
     }
     return () => { walkLoopRef.current?.stop(); };
-  }, [walking, sitting]);
+  }, [walking, sitting, gesture]);
+
+  // Wave loop
+  useEffect(() => {
+    if (gesture === 'wave') {
+      waveLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(waveAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+          Animated.timing(waveAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
+        ])
+      );
+      waveLoopRef.current.start();
+    } else {
+      waveLoopRef.current?.stop();
+      waveLoopRef.current = null;
+      waveAnim.setValue(0);
+    }
+    return () => { waveLoopRef.current?.stop(); };
+  }, [gesture]);
+
+  // Dance loop
+  useEffect(() => {
+    if (gesture === 'dance') {
+      danceLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(danceAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
+          Animated.timing(danceAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+        ])
+      );
+      danceLoopRef.current.start();
+    } else {
+      danceLoopRef.current?.stop();
+      danceLoopRef.current = null;
+      danceAnim.setValue(0);
+    }
+    return () => { danceLoopRef.current?.stop(); };
+  }, [gesture]);
 
   // Scale everything relative to size (base design at 56px)
   const sc = Math.max(0.5, size / 56);
@@ -95,14 +139,29 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
   const HairSprite = HAIR_SPRITES[hairIdx] ?? null;
   const hairSize = s(18);
 
-  // Leg alternation — opposite phases
+  // Walk — leg/arm alternation
   const leg1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(4)] });
   const leg2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [-s(4), 0] });
   const arm1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, s(2)] });
   const arm2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [s(2), 0] });
 
+  // Wave — right arm raises up
+  const waveArmRot = waveAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-70deg'] });
+  const waveArmTY  = waveAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(8)] });
+
+  // Dance — body bounce + arms spread
+  const danceBodyY  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(5)] });
+  const danceArm1R  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '40deg'] });
+  const danceArm2R  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-40deg'] });
+
+  // Compute arm transforms based on active gesture
+  const leftArmTransform  = gesture === 'dance' ? [{ rotate: danceArm1R }] : [{ translateY: arm1Y }];
+  const rightArmTransform = gesture === 'wave'
+    ? [{ rotate: waveArmRot }, { translateY: waveArmTY }]
+    : gesture === 'dance' ? [{ rotate: danceArm2R }] : [{ translateY: arm2Y }];
+
   return (
-    <View style={ch.root}>
+    <Animated.View style={[ch.root, gesture === 'dance' && { transform: [{ translateY: danceBodyY }] }]}>
       {/* Aura glow ring */}
       {config.auraColor ? (
         <View style={[ch.aura, {
@@ -179,7 +238,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
             backgroundColor: outfitColor,
             borderTopLeftRadius: s(2), borderBottomLeftRadius: s(3),
             marginTop: s(1),
-            transform: [{ translateY: arm1Y }],
+            transform: leftArmTransform as any,
           }} />
         )}
 
@@ -221,7 +280,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
             backgroundColor: outfitColor,
             borderTopRightRadius: s(2), borderBottomRightRadius: s(3),
             marginTop: s(1),
-            transform: [{ translateY: arm2Y }],
+            transform: rightArmTransform as any,
           }} />
         )}
       </View>
@@ -273,7 +332,7 @@ function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = fal
       <View style={ch.nameTag}>
         <Text style={ch.nameText} numberOfLines={1}>{username || '???'}</Text>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -383,7 +442,9 @@ export function DawenWorldRoom({
   const [selectedRoomItem, setSelectedRoomItem] = useState<WorldRoomItem | null>(null);
   const [chatBubble, setChatBubble] = useState<string | null>(null);
   const [isWalking, setIsWalking] = useState(false);
-  const walkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [myGesture, setMyGesture] = useState<AvatarGesture>('none');
+  const walkTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Smooth movement via Animated (in isometric screen coords) ─────────────
   const initScreen = isoToScreen(5, 4);
@@ -480,6 +541,7 @@ export function DawenWorldRoom({
       if (presenceRef.current) clearInterval(presenceRef.current);
       if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
       if (walkTimerRef.current) clearTimeout(walkTimerRef.current);
+      if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current);
       leaveRoom(walletAddress, room.id);
       supabaseCleanup(msgCh, presCh, itemsCh, posCh);
       posChRef.current = null;
@@ -553,6 +615,17 @@ export function DawenWorldRoom({
     if (posChRef.current) {
       broadcastPosition(posChRef.current, { walletAddress, x: col, y: row, username, avatarConfig, isPremium });
     }
+  };
+
+  const triggerGesture = (g: AvatarGesture) => {
+    if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current);
+    if (g === 'none' || myGesture === g) {
+      setMyGesture('none');
+      return;
+    }
+    setMyGesture(g);
+    // Auto-clear after 6 seconds
+    gestureTimerRef.current = setTimeout(() => setMyGesture('none'), 6000);
   };
 
   const handleRemoveRoomItem = async () => {
@@ -833,7 +906,8 @@ export function DawenWorldRoom({
                       isPremium={isPremium}
                       size={charSize}
                       sitting={sittingOnItemId !== null}
-                      walking={isWalking && sittingOnItemId === null}
+                      walking={isWalking && sittingOnItemId === null && myGesture === 'none'}
+                      gesture={myGesture}
                     />
                   </Animated.View>
                 ),
@@ -895,6 +969,32 @@ export function DawenWorldRoom({
             <Text style={styles.chatEmpty}>Say hello to the room!</Text>
           )}
         </ScrollView>
+        {/* Gesture bar */}
+        <View style={styles.gestureBar}>
+          {(['wave', 'dance', 'sit'] as const).map((g) => {
+            const labels: Record<string, string> = { wave: '👋 Wave', dance: '🕺 Dance', sit: '🪑 Sit' };
+            const isActive = g === 'sit' ? sittingOnItemId !== null : myGesture === g;
+            return (
+              <TouchableOpacity
+                key={g}
+                style={[styles.gestureBtn, isActive && styles.gestureBtnActive]}
+                onPress={() => {
+                  if (g === 'sit') {
+                    if (sittingOnItemId !== null) setSittingOnItemId(null);
+                  } else {
+                    triggerGesture(g as AvatarGesture);
+                  }
+                }}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.gestureBtnText, isActive && styles.gestureBtnTextActive]}>
+                  {labels[g]}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         <View style={styles.chatInputRow}>
           <TextInput
             style={styles.chatInput}
@@ -1130,6 +1230,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   sendBtnText: { fontSize: 16, color: '#fff', fontWeight: '700' },
+  gestureBar: {
+    flexDirection: 'row', gap: 6,
+    paddingHorizontal: spacing.md, paddingVertical: 5,
+    borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.08)',
+  },
+  gestureBtn: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)',
+  },
+  gestureBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.22)', borderColor: colors.primary,
+  },
+  gestureBtnText: { fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: '600' },
+  gestureBtnTextActive: { color: colors.primary },
 
   // Bottom nav
   bottomNav: {

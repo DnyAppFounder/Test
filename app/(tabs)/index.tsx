@@ -50,10 +50,109 @@ import { PortfolioChart } from '@/components/PortfolioChart';
 import { NFTService, NFT } from '@/services/nftService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import SparklineChart from '@/components/SparklineChart';
+import { useLiveToken } from '@/hooks/useLiveToken';
 
 type TabKey = 'market' | 'assets' | 'watchlist';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
 type AssetSubTab = 'tokens' | 'nfts';
+
+function DiscoverTokenRow({
+  token,
+  isLast,
+  onPress,
+}: {
+  token: LiveToken;
+  isLast: boolean;
+  onPress: () => void;
+}) {
+  const live = useLiveToken(token.address);
+  const price = (live?.price && live.price > 0) ? live.price : token.price;
+  const change = live?.priceChange24h ?? token.priceChange24h;
+  const changePositive = change >= 0;
+  return (
+    <TouchableOpacity
+      style={[styles.assetRow, !isLast && styles.assetRowBorder]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      {token.image ? (
+        <Image source={{ uri: token.image }} style={styles.assetLogo} />
+      ) : (
+        <View style={styles.assetLogoPlaceholder}>
+          <Text style={styles.assetLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={styles.assetInfo}>
+        <Text style={styles.assetName} numberOfLines={1}>{token.name}</Text>
+        <Text style={styles.assetSymbol}>{token.symbol?.toUpperCase()}</Text>
+      </View>
+      <View style={styles.assetRight}>
+        <Text style={styles.assetValueText}>{liveMarketService.formatPrice(price)}</Text>
+        <Text style={[styles.assetChangeText, { color: changePositive ? colors.success : colors.error }]}>
+          {liveMarketService.formatChange(change)}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function WatchlistTokenRow({
+  item,
+  baseData,
+  isLast,
+  onPress,
+  onRemove,
+}: {
+  item: WatchlistToken;
+  baseData: LiveToken | undefined;
+  isLast: boolean;
+  onPress: () => void;
+  onRemove: () => void;
+}) {
+  const live = useLiveToken(item.token_address);
+  const price = (live?.price && live.price > 0) ? live.price : (baseData?.price ?? 0);
+  const change = live?.priceChange24h ?? baseData?.priceChange24h ?? 0;
+  const marketCap = live?.marketCap ?? baseData?.marketCap;
+  const isUp = change >= 0;
+  const image = baseData?.image;
+  const sparkData = baseData?.sparkline && baseData.sparkline.length >= 2 ? baseData.sparkline :
+    Array.from({ length: 10 }, (_, i) => 1 + Math.sin(i * 0.5 + (isUp ? 0 : Math.PI)) * 0.5 * Math.abs(change || 1));
+
+  return (
+    <TouchableOpacity
+      style={[styles.watchlistRow, !isLast && styles.assetRowBorder]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      {image ? (
+        <Image source={{ uri: image }} style={styles.assetLogo} />
+      ) : (
+        <View style={styles.assetLogoPlaceholder}>
+          <Text style={styles.assetLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={styles.assetInfo}>
+        <Text style={styles.assetName} numberOfLines={1}>{item.token_name}</Text>
+        <Text style={styles.assetSymbol}>{item.token_symbol?.toUpperCase()}</Text>
+      </View>
+      <View style={{ marginHorizontal: 8 }}>
+        <SparklineChart data={sparkData} width={56} height={28} color={isUp ? '#10b981' : '#ef4444'} />
+        <Text style={[styles.watchlistChange, { color: isUp ? '#10b981' : '#ef4444' }]}>
+          {isUp ? '+' : ''}{change.toFixed(2)}%
+        </Text>
+      </View>
+      <View style={styles.watchlistPriceCol}>
+        <Text style={styles.watchlistPrice}>{liveMarketService.formatPrice(price)}</Text>
+        {marketCap ? (
+          <Text style={styles.watchlistMcap}>MC {liveMarketService.formatMarketCap(marketCap)}</Text>
+        ) : null}
+      </View>
+      <TouchableOpacity style={[styles.starBtn, { marginLeft: 4 }]} onPress={onRemove}>
+        <Star size={18} color={colors.warning} fill={colors.warning} strokeWidth={2} />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+}
 
 const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
   { key: 'all', label: 'All', icon: Coins },
@@ -608,35 +707,14 @@ export default function WalletHome() {
             </View>
           ) : (
             <View style={styles.assetsSectionCard}>
-              {filteredTokens.map((token, idx) => {
-                const changePositive = token.priceChange24h >= 0;
-                return (
-                  <TouchableOpacity
-                    key={token.address}
-                    style={[styles.assetRow, idx < filteredTokens.length - 1 && styles.assetRowBorder]}
-                    onPress={() => router.push(`/token-detail/${token.address}` as any)}
-                    activeOpacity={0.8}
-                  >
-                    {token.image ? (
-                      <Image source={{ uri: token.image }} style={styles.assetLogo} />
-                    ) : (
-                      <View style={styles.assetLogoPlaceholder}>
-                        <Text style={styles.assetLogoText}>{(token.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
-                      </View>
-                    )}
-                    <View style={styles.assetInfo}>
-                      <Text style={styles.assetName} numberOfLines={1}>{token.name}</Text>
-                      <Text style={styles.assetSymbol}>{token.symbol?.toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.assetRight}>
-                      <Text style={styles.assetValueText}>{liveMarketService.formatPrice(token.price)}</Text>
-                      <Text style={[styles.assetChangeText, { color: changePositive ? colors.success : colors.error }]}>
-                        {liveMarketService.formatChange(token.priceChange24h)}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
+              {filteredTokens.map((token, idx) => (
+                <DiscoverTokenRow
+                  key={token.address}
+                  token={token}
+                  isLast={idx === filteredTokens.length - 1}
+                  onPress={() => router.push(`/token-detail/${token.address}` as any)}
+                />
+              ))}
               {filteredTokens.length === 0 && (
                 <View style={styles.inlineEmpty}>
                   <Text style={styles.inlineEmptyText}>{error || 'No tokens found'}</Text>
@@ -657,73 +735,19 @@ export default function WalletHome() {
               <Text style={styles.inlineEmptySub}>Star tokens from token details to track them here</Text>
             </View>
           ) : (
-            watchlist.map((item, idx) => {
-              const live = watchlistEnriched.get(item.token_address);
-              const change = live?.priceChange24h ?? 0;
-              const isUp = change >= 0;
-              const sparkData = live?.sparkline && live.sparkline.length >= 2 ? live.sparkline :
-                Array.from({ length: 10 }, (_, i) => 1 + Math.sin(i * 0.5 + (isUp ? 0 : Math.PI)) * 0.5 * Math.abs(change || 1));
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[styles.watchlistRow, idx < watchlist.length - 1 && styles.assetRowBorder]}
-                  onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
-                  activeOpacity={0.8}
-                >
-                  {/* Logo */}
-                  {live?.image ? (
-                    <Image source={{ uri: live.image }} style={styles.assetLogo} />
-                  ) : (
-                    <View style={styles.assetLogoPlaceholder}>
-                      <Text style={styles.assetLogoText}>{item.token_symbol?.substring(0, 2).toUpperCase()}</Text>
-                    </View>
-                  )}
-
-                  {/* Name + symbol */}
-                  <View style={styles.assetInfo}>
-                    <Text style={styles.assetName} numberOfLines={1}>{item.token_name}</Text>
-                    <Text style={styles.assetSymbol}>{item.token_symbol?.toUpperCase()}</Text>
-                  </View>
-
-                  {/* Sparkline */}
-                  <View style={{ marginHorizontal: 8 }}>
-                    <SparklineChart
-                      data={sparkData}
-                      width={56}
-                      height={28}
-                      color={isUp ? '#10b981' : '#ef4444'}
-                    />
-                    <Text style={[styles.watchlistChange, { color: isUp ? '#10b981' : '#ef4444' }]}>
-                      {isUp ? '+' : ''}{change.toFixed(2)}%
-                    </Text>
-                  </View>
-
-                  {/* Price + mcap */}
-                  <View style={styles.watchlistPriceCol}>
-                    <Text style={styles.watchlistPrice}>
-                      {live ? liveMarketService.formatPrice(live.price) : '—'}
-                    </Text>
-                    {live?.marketCap ? (
-                      <Text style={styles.watchlistMcap}>
-                        MC {liveMarketService.formatMarketCap(live.marketCap)}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  {/* Star remove */}
-                  <TouchableOpacity
-                    style={[styles.starBtn, { marginLeft: 4 }]}
-                    onPress={async (e) => {
-                      e.stopPropagation();
-                      if (profile?.id) await watchlistService.removeFromWatchlist(item.token_address, profile.id);
-                      await loadWatchlist();
-                    }}
-                  >
-                    <Star size={18} color={colors.warning} fill={colors.warning} strokeWidth={2} />
-                  </TouchableOpacity>
-                </TouchableOpacity>
-              );
-            })
+            watchlist.map((item, idx) => (
+              <WatchlistTokenRow
+                key={item.id}
+                item={item}
+                baseData={watchlistEnriched.get(item.token_address)}
+                isLast={idx === watchlist.length - 1}
+                onPress={() => router.push(`/token-detail/${item.token_address}` as any)}
+                onRemove={async () => {
+                  if (profile?.id) await watchlistService.removeFromWatchlist(item.token_address, profile.id);
+                  await loadWatchlist();
+                }}
+              />
+            ))
           )}
         </View>
       )}

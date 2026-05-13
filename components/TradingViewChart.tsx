@@ -39,6 +39,7 @@ import {
 } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
+import { liveTokenStore } from '@/services/liveTokenStore';
 
 export type ChartMode = 'line' | 'area' | 'candlestick' | 'bonding' | 'bar' | 'mountain';
 type ValueMode = 'mcap' | 'price';
@@ -374,13 +375,14 @@ export function TradingViewChart({
     }
   }, [tokenMint]);
 
-  // Apply a live price update to state — updates last candle in-place
+  // Apply a live price update to state — updates last candle in-place and pushes to shared store
   const applyLivePrice = useCallback((price: number) => {
     if (!price || price <= 0) return;
     const prev = livePriceRef.current;
     if (prev === price) return;
     livePriceRef.current = price;
     setLivePrice(price);
+    if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
     setCandles(cs => {
       if (!cs.length) return cs;
       const last = cs[cs.length - 1];
@@ -394,7 +396,7 @@ export function TradingViewChart({
       };
       return updated;
     });
-  }, []);
+  }, [tokenMint]);
 
   const connectWebSocket = useCallback((pairAddr: string) => {
     if (typeof WebSocket === 'undefined') return;
@@ -979,7 +981,7 @@ export function TradingViewChart({
 
   // Time labels — generated from leftTime→rightTime at regular bucket intervals
   // Aim for ~5-6 labels; step = multiple of bucketMs so labels land on clean boundaries
-  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(effectiveN / 6));
+  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(visibleBuckets / 6));
   const firstLabelTs    = Math.ceil(leftTime / timeLabelStepMs) * timeLabelStepMs;
   const timeLabels: { ts: number; x: number }[] = [];
   for (let ts = firstLabelTs; ts <= rightTime; ts += timeLabelStepMs) {

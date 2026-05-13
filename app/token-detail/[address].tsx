@@ -32,6 +32,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
+import { useLiveToken } from '@/hooks/useLiveToken';
 import { SolanaConnectionService } from '@/services/solana/connectionService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { TradingViewChart, TokenInfo } from '@/components/TradingViewChart';
@@ -83,25 +84,31 @@ export default function TokenDetailScreen() {
   const [totalSupply, setTotalSupply] = useState<number>(0);
   const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
 
-  // Silently refresh only price/volume numbers every 30s — no full token replace,
-  // no loading state, no visual disruption.
-  const priceRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Live token state from shared store (10s poll + Supabase realtime candles)
+  const liveData = useLiveToken(address ?? null);
+
+  // Merge live data into token state whenever the store fires an update
   useEffect(() => {
-    if (!address) return;
-    const refresh = async () => {
-      try {
-        const data = await liveMarketService.getTokenDetail(address);
-        if (!data) return;
-        setToken(prev => {
-          if (!prev) return prev;
-          if (prev.price === data.price && prev.priceChange24h === data.priceChange24h) return prev;
-          return { ...prev, price: data.price, priceChange24h: data.priceChange24h, volume24h: data.volume24h, liquidity: data.liquidity };
-        });
-      } catch {}
-    };
-    priceRefreshRef.current = setInterval(refresh, 30_000);
-    return () => { if (priceRefreshRef.current) clearInterval(priceRefreshRef.current); };
-  }, [address]);
+    if (!liveData || !liveData.isLive) return;
+    setToken(prev => {
+      if (!prev) return prev;
+      const changed =
+        (liveData.price > 0 && prev.price !== liveData.price) ||
+        (liveData.marketCap != null && prev.marketCap !== liveData.marketCap) ||
+        prev.volume24h !== liveData.volume24h ||
+        prev.liquidity !== liveData.liquidity;
+      if (!changed) return prev;
+      console.log('[TokenDetail] live update — price:', liveData.price, 'mcap:', liveData.marketCap);
+      return {
+        ...prev,
+        price:         liveData.price > 0       ? liveData.price          : prev.price,
+        priceChange24h: liveData.priceChange24h ?? prev.priceChange24h,
+        volume24h:     liveData.volume24h > 0   ? liveData.volume24h      : prev.volume24h,
+        liquidity:     liveData.liquidity > 0   ? liveData.liquidity      : prev.liquidity,
+        marketCap:     liveData.marketCap != null ? liveData.marketCap    : prev.marketCap,
+      };
+    });
+  }, [liveData]);
 
   useEffect(() => {
     if (address) {

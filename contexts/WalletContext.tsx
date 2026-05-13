@@ -363,7 +363,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (activeAddress) {
       refreshIntervalRef.current = setInterval(() => {
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
-      }, 45000);
+      }, 10_000);
     }
     return () => {
       if (refreshIntervalRef.current) {
@@ -383,6 +383,19 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
     const sub = AppState.addEventListener('change', handleAppState);
     return () => sub.remove();
+  }, [activeAddress, applyPortfolioResult]);
+
+  // Refresh when the browser tab becomes visible again (web / Safari)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const handleVisibility = () => {
+      if (!document.hidden && activeAddress) {
+        console.log('[WalletContext] Tab visible, refreshing assets for:', activeAddress.slice(0, 8));
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [activeAddress, applyPortfolioResult]);
 
   return (

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from 'react
 import { useRouter } from 'expo-router';
 import { TrendingUp, TrendingDown, ExternalLink } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
-import { dexScreenerService, DexPair } from '@/services/dexscreener/tokenDiscoveryService';
+import { useLiveToken } from '@/hooks/useLiveToken';
 
 interface PostTokenCardProps {
   tokenAddress: string;
@@ -80,51 +80,34 @@ export default function PostTokenCard({
   storedChange24h,
 }: PostTokenCardProps) {
   const router = useRouter();
-  const [pair, setPair] = useState<DexPair | null>(null);
-  const [loading, setLoading] = useState(true);
+  const live = useLiveToken(tokenAddress);
   const [logoError, setLogoError] = useState(false);
   const glowAnim = useRef(new Animated.Value(0.4)).current;
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      if (!tokenAddress) { setLoading(false); return; }
-      try {
-        const pairs = await dexScreenerService.getTokenByAddress(tokenAddress);
-        if (!cancelled && pairs.length > 0) {
-          const best = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-          setPair(best);
-        }
-      } catch {}
-      if (!cancelled) setLoading(false);
-    };
-    load();
-    // Refresh every 30s
-    const interval = setInterval(load, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [tokenAddress]);
-
   // Pulse glow animation
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(glowAnim, { toValue: 0.8, duration: 2000, useNativeDriver: false }),
         Animated.timing(glowAnim, { toValue: 0.4, duration: 2000, useNativeDriver: false }),
       ])
-    ).start();
+    );
+    loop.start();
+    return () => loop.stop();
   }, [glowAnim]);
 
-  const price = pair?.priceUsd ? parseFloat(pair.priceUsd) : storedPrice ?? null;
-  const change24h = pair?.priceChange?.h24 ?? storedChange24h ?? null;
-  const mcap = pair?.marketCap ?? pair?.fdv ?? null;
-  const liquidity = pair?.liquidity?.usd ?? null;
-  const volume24h = pair?.volume?.h24 ?? null;
+  // Use live data first, fall back to stored snapshot while loading
+  const price = (live?.price && live.price > 0) ? live.price : storedPrice ?? null;
+  const change24h = live?.priceChange24h ?? storedChange24h ?? null;
+  const mcap = live?.marketCap ?? null;
+  const liquidity = live?.liquidity ?? null;
+  const volume24h = live?.volume24h ?? null;
   const isPositive = (change24h ?? 0) >= 0;
   const changeColor = isPositive ? colors.success : colors.error;
 
-  const logoUri = tokenLogoUri || pair?.info?.imageUrl || null;
-  const name = tokenName || pair?.baseToken?.name || tokenSymbol;
-  const symbol = tokenSymbol || pair?.baseToken?.symbol || '???';
+  const logoUri = tokenLogoUri || null;
+  const name = tokenName || tokenSymbol;
+  const symbol = tokenSymbol || '???';
 
   const handlePress = () => {
     router.push(`/token-detail/${tokenAddress}` as any);
