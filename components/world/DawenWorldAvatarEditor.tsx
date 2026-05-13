@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { AvatarConfig, DEFAULT_AVATAR } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { HAIR_SPRITES } from './WorldSprite';
 
 interface Props {
   initial: AvatarConfig | null;
@@ -12,7 +13,7 @@ interface Props {
 
 const BODY_COLORS  = ['#8B5CF6','#EC4899','#3B82F6','#10B981','#F59E0B','#EF4444','#06B6D4','#F97316'];
 const OUTFIT_COLORS = ['#EC4899','#8B5CF6','#10B981','#3B82F6','#F59E0B','#EF4444','#A78BFA','#6EE7B7'];
-const HAIR_STYLES  = ['✂️','🌀','💈','🎩','👒','⭐'];
+const HAIR_LABELS  = ['None','Spiky','Streaks','Top Hat','Wide Hat','Halo'];
 const AURA_COLORS  = [null,'#8B5CF6','#EC4899','#F59E0B','#3B82F6','#10B981','#EF4444'];
 
 export function AvatarPreview({ config, username, isPremium, size = 60 }: {
@@ -68,11 +69,25 @@ export function DawenWorldAvatarEditor({ initial, username, onSave }: Props) {
 
         <Section label="Hair Style">
           <View style={styles.emojiRow}>
-            {HAIR_STYLES.map((h, i) => (
-              <TouchableOpacity key={i} style={[styles.emojiBtn, cfg.hairStyle === i && styles.emojiBtnActive]} onPress={() => setCfg(p => ({ ...p, hairStyle: i }))}>
-                <Text style={styles.emojiText}>{h}</Text>
-              </TouchableOpacity>
-            ))}
+            {HAIR_LABELS.map((label, i) => {
+              const HairSprite = HAIR_SPRITES[i];
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[styles.emojiBtn, cfg.hairStyle === i && styles.emojiBtnActive]}
+                  onPress={() => setCfg(p => ({ ...p, hairStyle: i }))}
+                >
+                  {HairSprite ? (
+                    <HairSprite size={28} />
+                  ) : (
+                    <Text style={styles.hairNoneText}>–</Text>
+                  )}
+                  <Text style={[styles.hairLabel, cfg.hairStyle === i && styles.hairLabelActive]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </Section>
 
@@ -140,10 +155,12 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   colorSwatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: 'transparent' },
   colorSwatchActive: { borderColor: '#fff', transform: [{ scale: 1.15 }] },
-  emojiRow: { flexDirection: 'row', gap: 8 },
-  emojiBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'transparent' },
+  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  emojiBtn: { width: 52, minHeight: 52, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'transparent', paddingVertical: 4, gap: 2 },
   emojiBtnActive: { borderColor: colors.primary, backgroundColor: colors.primaryMuted },
-  emojiText: { fontSize: 22 },
+  hairNoneText: { fontSize: 20, color: 'rgba(255,255,255,0.3)', fontWeight: '300' },
+  hairLabel: { fontSize: 8, color: 'rgba(255,255,255,0.4)', fontWeight: '600', textAlign: 'center' },
+  hairLabelActive: { color: colors.primary },
   saveBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.lg, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.lg },
   saveBtnText: { fontSize: fontSize.lg, fontWeight: '900', color: '#fff' },
 });

@@ -19,13 +19,13 @@ import {
   subscribeToPositionBroadcasts, broadcastPosition,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { WorldSprite, HAIR_SPRITES } from './WorldSprite';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRESENCE_INTERVAL = 8000;
 const WALL_H = 68;
 const BUBBLE_DURATION = 3200;
-const HAIR_EMOJIS = ['', '✨', '💫', '🎩', '👒', '⭐'];
 
 interface ThemeVisual {
   wallGradient: readonly [string, string, string];
@@ -68,7 +68,9 @@ function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharP
   const legW = Math.round(size * 0.15);
   const legH = Math.round(size * 0.2);
   const eyeSize = Math.max(2, Math.round(headSize * 0.2));
-  const hair = HAIR_EMOJIS[config.hairStyle ?? 0] ?? '';
+  const hairIdx = config.hairStyle ?? 0;
+  const HairSprite = HAIR_SPRITES[hairIdx] ?? null;
+  const hairSize = Math.round(headSize * 0.85);
 
   return (
     <View style={ch.root}>
@@ -83,9 +85,11 @@ function WorldAvatarChar({ config, username, isPremium, size = 34 }: AvatarCharP
         }]} />
       ) : null}
 
-      {/* Hair */}
-      {hair ? (
-        <Text style={[ch.hair, { fontSize: Math.round(headSize * 0.6) }]}>{hair}</Text>
+      {/* Hair / hat sprite */}
+      {HairSprite ? (
+        <View style={{ height: hairSize, marginBottom: -2 }}>
+          <HairSprite size={hairSize} />
+        </View>
       ) : (
         <View style={{ height: 4 }} />
       )}
@@ -139,7 +143,6 @@ const ch = StyleSheet.create({
     position: 'absolute', top: 0, borderWidth: 1.5, opacity: 0.75,
     shadowRadius: 8, shadowOpacity: 0.7, elevation: 4,
   },
-  hair: { lineHeight: 16, marginBottom: -2, zIndex: 2 },
   crownWrap: { position: 'absolute', top: 0, right: -3, zIndex: 10 },
   head: {
     borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.3)',
@@ -525,6 +528,7 @@ export function DawenWorldRoom({
             {roomItems.map(ri => {
               const color = ri.catalog_item?.color_hex ?? '#8B5CF6';
               const isSelectedItem = ri.id === selectedRoomItem?.id;
+              const spriteSize = tileSize - 8;
               return (
                 <View key={ri.id} style={[
                   styles.roomItem,
@@ -538,9 +542,11 @@ export function DawenWorldRoom({
                     shadowColor: color,
                   },
                 ]}>
-                  <Text style={[styles.roomItemEmoji, { fontSize: Math.round(tileSize * 0.52) }]}>
-                    {ri.catalog_item?.icon_emoji ?? '📦'}
-                  </Text>
+                  <WorldSprite
+                    emoji={ri.catalog_item?.icon_emoji ?? '📦'}
+                    size={spriteSize}
+                    color={color}
+                  />
                 </View>
               );
             })}
@@ -598,9 +604,11 @@ export function DawenWorldRoom({
               style={[styles.invBarItem, selectedInvItem?.id === inv.id && styles.invBarItemActive]}
               onPress={() => setSelectedInvItem(prev => prev?.id === inv.id ? null : inv)}
             >
-              <Text style={[styles.invBarEmoji, { fontSize: Math.round(tileSize * 0.55) }]}>
-                {inv.catalog_item?.icon_emoji ?? '📦'}
-              </Text>
+              <WorldSprite
+                emoji={inv.catalog_item?.icon_emoji ?? '📦'}
+                size={Math.round(tileSize * 0.72)}
+                color={inv.catalog_item?.color_hex ?? '#8B5CF6'}
+              />
               {inv.quantity > 1 && <Text style={styles.invBarQty}>×{inv.quantity}</Text>}
             </TouchableOpacity>
           ))}

@@ -9,6 +9,7 @@ import {
   WorldCatalogItem, WorldInventoryItem, purchaseWorldItem, getCatalog,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { WorldSprite } from './WorldSprite';
 
 const CATEGORIES = ['All','Chairs','Tables','Sofas','Beds','Lamps','Rugs','Wall Items',
   'Plants','Tech Items','Gaming Items','Luxury Items','DAWEN Specials','Solana Items','VIP / Premium'];
@@ -115,7 +116,7 @@ export function DawenWorldShop({
                 activeOpacity={0.8}
               >
                 <View style={[styles.itemIconBg, { backgroundColor: item.color_hex + '22' }]}>
-                  <Text style={styles.itemEmoji}>{item.icon_emoji}</Text>
+                  <WorldSprite emoji={item.icon_emoji} size={44} color={item.color_hex} />
                 </View>
                 <Text style={styles.itemName} numberOfLines={2}>{item.item_name}</Text>
                 <View style={[styles.rarityBadge, { backgroundColor: RARITY_COLOR[item.rarity] + '33' }]}>
@@ -143,7 +144,7 @@ export function DawenWorldShop({
             {buyItem && (
               <>
                 <View style={[styles.modalIcon, { backgroundColor: buyItem.color_hex + '22' }]}>
-                  <Text style={{ fontSize: 48 }}>{buyItem.icon_emoji}</Text>
+                  <WorldSprite emoji={buyItem.icon_emoji} size={64} color={buyItem.color_hex} />
                 </View>
                 <Text style={styles.modalName}>{buyItem.item_name}</Text>
                 <View style={[styles.rarityBadge, { backgroundColor: RARITY_COLOR[buyItem.rarity] + '33', marginBottom: spacing.md }]}>

@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Package } from 'lucide-react-native';
 import { WorldInventoryItem } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { WorldSprite } from './WorldSprite';
 
 const RARITY_COLOR: Record<string, string> = {
   common: '#6B7280', uncommon: '#10B981', rare: '#3B82F6', epic: '#8B5CF6', legendary: '#F59E0B',
@@ -39,7 +40,7 @@ export function DawenWorldInventory({ inventory, onClose }: Props) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {sorted.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={styles.emptyEmoji}>📦</Text>
+            <WorldSprite emoji="📦" size={56} color="#8B5CF6" />
             <Text style={styles.emptyTitle}>No items yet</Text>
             <Text style={styles.emptySub}>Visit the World Shop to get furniture and decorations for your room.</Text>
           </View>
@@ -51,7 +52,7 @@ export function DawenWorldInventory({ inventory, onClose }: Props) {
             return (
               <View key={inv.id} style={styles.row}>
                 <View style={[styles.iconBg, { backgroundColor: item.color_hex + '22' }]}>
-                  <Text style={styles.emoji}>{item.icon_emoji}</Text>
+                  <WorldSprite emoji={item.icon_emoji} size={36} color={item.color_hex} />
                 </View>
                 <View style={styles.info}>
                   <Text style={styles.name}>{item.item_name}</Text>
