@@ -497,7 +497,7 @@ export default function BuyScreen() {
               value={inputAmount}
               onChangeText={handleAmountChange}
               keyboardType="decimal-pad"
-              editable={!isProcessing}
+              editable={status !== 'quoting'}
             />
             <Text style={styles.amountUsd}>
               {payUsd || (inputUsdPrice === 0 ? 'Loading price...' : '')}
