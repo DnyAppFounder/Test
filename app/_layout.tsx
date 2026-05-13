@@ -12,9 +12,16 @@ import { SecurityProvider } from '@/contexts/SecurityContext';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
+import { NotificationBanner } from '@/components/NotificationBanner';
+import { useProfile } from '@/contexts/ProfileContext';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync().catch(() => {});
+}
+
+function InAppNotifications() {
+  const { profile } = useProfile();
+  return <NotificationBanner userId={profile?.id ?? null} />;
 }
 
 export default function RootLayout() {
@@ -85,6 +92,7 @@ export default function RootLayout() {
                 <Stack.Screen name="settings" />
                 <Stack.Screen name="+not-found" />
               </Stack>
+              <InAppNotifications />
               <StatusBar style="light" />
             </ProfileProvider>
           </SecurityProvider>

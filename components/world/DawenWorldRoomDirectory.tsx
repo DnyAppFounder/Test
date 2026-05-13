@@ -11,9 +11,15 @@ import {
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
-const THEMES = [
-  'DAWEN Neon Room','Purple Lounge','Trading Room','Crew Room',
-  'Cyber Apartment','Solana Studio','Royal Purple Suite','Empty Grid Room',
+const THEMES: { name: string; emoji: string }[] = [
+  { name: 'DAWEN Neon Room',    emoji: '🌐' },
+  { name: 'Purple Lounge',      emoji: '💜' },
+  { name: 'Trading Room',       emoji: '📈' },
+  { name: 'Crew Room',          emoji: '👥' },
+  { name: 'Cyber Apartment',    emoji: '🏙️' },
+  { name: 'Solana Studio',      emoji: '⚡' },
+  { name: 'Royal Purple Suite', emoji: '👑' },
+  { name: 'Empty Grid Room',    emoji: '⬜' },
 ];
 
 const VISIBILITY_ICON: Record<string, any> = {
@@ -37,7 +43,8 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
   const [tab, setTab] = useState<'public' | 'mine'>('public');
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newTheme, setNewTheme] = useState(THEMES[0]);
+  const [newTheme, setNewTheme] = useState(THEMES[0].name);
+  const [nameError, setNameError] = useState('');
   const [newVis, setNewVis] = useState<'public' | 'private' | 'invite_only'>('public');
   const [creating, setCreating] = useState(false);
   const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
@@ -62,16 +69,21 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
   useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
-    if (!newName.trim() || creating) return;
+    const trimmed = newName.trim();
+    if (trimmed.length < 3) { setNameError('Name must be at least 3 characters.'); return; }
+    if (trimmed.length > 40) { setNameError('Name must be 40 characters or less.'); return; }
+    if (creating) return;
+    setNameError('');
     setCreating(true);
     try {
-      const room = await createRoom({ walletAddress, name: newName.trim(), theme: newTheme, visibility: newVis });
+      await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis });
       setCreateOpen(false);
       setNewName('');
       await load();
       setTab('mine');
     } catch (e) {
       console.warn('[DawenWorldRoomDirectory] create error', e);
+      setNameError('Failed to create room. Please try again.');
     } finally {
       setCreating(false);
     }
@@ -227,16 +239,18 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
             <Text style={styles.modalTitle}>Create Room</Text>
 
             <TextInput
-              style={styles.input} placeholder="Room name…"
+              style={styles.input} placeholder="Room name (3–40 chars)…"
               placeholderTextColor="rgba(255,255,255,0.3)" value={newName}
-              onChangeText={setNewName} maxLength={40}
+              onChangeText={t => { setNewName(t); if (nameError) setNameError(''); }} maxLength={40}
             />
+            {nameError ? <Text style={styles.nameError}>{nameError}</Text> : null}
 
             <Text style={styles.inputLabel}>Theme</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 44 }} contentContainerStyle={{ flexDirection: 'row', gap: 6 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 50 }} contentContainerStyle={{ flexDirection: 'row', gap: 6 }}>
               {THEMES.map(t => (
-                <TouchableOpacity key={t} style={[styles.themeChip, newTheme === t && styles.themeChipActive]} onPress={() => setNewTheme(t)}>
-                  <Text style={[styles.themeText, newTheme === t && styles.themeTextActive]}>{t}</Text>
+                <TouchableOpacity key={t.name} style={[styles.themeChip, newTheme === t.name && styles.themeChipActive]} onPress={() => setNewTheme(t.name)}>
+                  <Text style={{ fontSize: 14, marginBottom: 1 }}>{t.emoji}</Text>
+                  <Text style={[styles.themeText, newTheme === t.name && styles.themeTextActive]}>{t.name.split(' ')[0]}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -251,7 +265,7 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
             </View>
 
             <View style={styles.modalBtns}>
-              <TouchableOpacity style={[styles.createRoomBtn, (!newName.trim() || creating) && { opacity: 0.5 }]} onPress={handleCreate} disabled={!newName.trim() || creating}>
+              <TouchableOpacity style={[styles.createRoomBtn, (newName.trim().length < 3 || creating) && { opacity: 0.5 }]} onPress={handleCreate} disabled={newName.trim().length < 3 || creating}>
                 {creating ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Create Room</Text>}
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setCreateOpen(false)} style={styles.cancelBtn}>
@@ -336,10 +350,11 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: fontSize.xl, fontWeight: '900', color: '#fff', marginBottom: 4 },
   input: { backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: 12, fontSize: 14, color: '#fff', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
   inputLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  themeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'transparent' },
+  themeChip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'transparent', alignItems: 'center', gap: 2 },
   themeChipActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },
-  themeText: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.5)' },
+  themeText: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.5)' },
   themeTextActive: { color: colors.primary },
+  nameError: { fontSize: 11, color: '#EF4444', fontWeight: '600', marginTop: -4 },
   visRow: { flexDirection: 'row', gap: 8 },
   visBtn: { flex: 1, paddingVertical: 8, borderRadius: borderRadius.md, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', borderWidth: 1, borderColor: 'transparent' },
   visBtnActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },

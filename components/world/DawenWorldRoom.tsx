@@ -26,6 +26,31 @@ const WALL_H = 68;
 const BUBBLE_DURATION = 3200;
 const HAIR_EMOJIS = ['', '✨', '💫', '🎩', '👒', '⭐'];
 
+interface ThemeVisual {
+  wallGradient: readonly [string, string, string];
+  floorEven: string;
+  floorOdd: string;
+  dividerColor: string;
+}
+
+const THEME_VISUALS: Record<string, ThemeVisual> = {
+  'DAWEN Neon Room':      { wallGradient: ['#0A0520','#130830','#0D0920'], floorEven: 'rgba(100,50,220,0.07)', floorOdd: 'rgba(70,30,160,0.11)', dividerColor: '#8B5CF6' },
+  'Purple Lounge':        { wallGradient: ['#120530','#1E0840','#120530'], floorEven: 'rgba(120,60,240,0.08)', floorOdd: 'rgba(90,40,200,0.13)', dividerColor: '#9D4EDD' },
+  'Trading Room':         { wallGradient: ['#051005','#0A1F0A','#051005'], floorEven: 'rgba(16,185,129,0.07)', floorOdd: 'rgba(10,120,80,0.11)', dividerColor: '#10B981' },
+  'Crew Room':            { wallGradient: ['#0A0A1A','#131328','#0A0A1A'], floorEven: 'rgba(59,130,246,0.07)', floorOdd: 'rgba(37,99,235,0.11)', dividerColor: '#3B82F6' },
+  'Cyber Apartment':      { wallGradient: ['#050A15','#0A1525','#050A15'], floorEven: 'rgba(6,182,212,0.07)', floorOdd: 'rgba(8,145,178,0.11)', dividerColor: '#06B6D4' },
+  'Solana Studio':        { wallGradient: ['#0A0A05','#141410','#0A0A05'], floorEven: 'rgba(245,158,11,0.06)', floorOdd: 'rgba(217,119,6,0.10)', dividerColor: '#F59E0B' },
+  'Royal Purple Suite':   { wallGradient: ['#1A0A30','#260F4A','#1A0A30'], floorEven: 'rgba(167,139,250,0.09)', floorOdd: 'rgba(139,92,246,0.14)', dividerColor: '#A78BFA' },
+  'Empty Grid Room':      { wallGradient: ['#080808','#101010','#080808'], floorEven: 'rgba(255,255,255,0.025)', floorOdd: 'rgba(255,255,255,0.04)', dividerColor: 'rgba(255,255,255,0.2)' },
+};
+
+const DEFAULT_THEME_VISUAL: ThemeVisual = {
+  wallGradient: ['#080812','#0D0D1A','#080812'],
+  floorEven: 'rgba(80,60,180,0.05)',
+  floorOdd: 'rgba(50,35,130,0.09)',
+  dividerColor: 'rgba(139,92,246,0.35)',
+};
+
 // ─── WorldAvatarChar ──────────────────────────────────────────────────────────
 
 interface AvatarCharProps {
@@ -167,6 +192,9 @@ export function DawenWorldRoom({
 
   const isPlaza = room.id === PLAZA_ROOM_ID;
   const isOwner = room.type !== 'official' && room.owner_wallet === walletAddress;
+  const themeVis = isPlaza
+    ? THEME_VISUALS['DAWEN Neon Room']
+    : (THEME_VISUALS[room.theme] ?? DEFAULT_THEME_VISUAL);
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [presence, setPresence] = useState<WorldPresence[]>([]);
@@ -204,6 +232,17 @@ export function DawenWorldRoom({
   const chatRef = useRef<ScrollView>(null);
   const presenceRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const otherAnimsRef = useRef<Map<string, { x: Animated.Value; y: Animated.Value }>>(new Map());
+
+  const getOtherAnim = useCallback((wallet: string, startX: number, startY: number) => {
+    if (!otherAnimsRef.current.has(wallet)) {
+      otherAnimsRef.current.set(wallet, {
+        x: new Animated.Value(startX * tileSize),
+        y: new Animated.Value(startY * tileSize),
+      });
+    }
+    return otherAnimsRef.current.get(wallet)!;
+  }, [tileSize]);
 
   // ── Load initial data ─────────────────────────────────────────────────────
   const loadPresence = useCallback(async () => {
@@ -233,7 +272,10 @@ export function DawenWorldRoom({
     }, PRESENCE_INTERVAL);
 
     const msgCh = subscribeToRoomMessages(room.id, (msg) => {
-      setMessages(prev => [...prev.slice(-60), msg]);
+      setMessages(prev => {
+        if (prev.some(m => m.id === msg.id)) return prev;
+        return [...prev.slice(-60), msg];
+      });
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
     });
     const presCh = subscribeToRoomPresence(room.id, loadPresence);
@@ -250,6 +292,17 @@ export function DawenWorldRoom({
   useEffect(() => {
     upsertPresence({ walletAddress, roomId: room.id, x: myX, y: myY, username, avatarConfig, isPremium });
   }, [myX, myY]); // eslint-disable-line
+
+  // Animate other users to their new positions when presence updates
+  useEffect(() => {
+    presence.filter(p => p.wallet_address !== walletAddress).forEach(p => {
+      const anim = getOtherAnim(p.wallet_address, p.x, p.y);
+      Animated.parallel([
+        Animated.spring(anim.x, { toValue: p.x * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+        Animated.spring(anim.y, { toValue: p.y * tileSize, useNativeDriver: false, tension: 160, friction: 16 }),
+      ]).start();
+    });
+  }, [presence]); // eslint-disable-line
 
   // ── Tile tap ──────────────────────────────────────────────────────────────
   const handleTileTap = async (col: number, row: number) => {
@@ -386,9 +439,7 @@ export function DawenWorldRoom({
           {/* ── Wall area ── */}
           <View style={[styles.wall, { width: Math.max(gridW, screenW - 8) }]}>
             <LinearGradient
-              colors={isPlaza
-                ? ['#0A0520', '#130830', '#0D0920']
-                : ['#080812', '#0D0D1A', '#080812']}
+              colors={themeVis.wallGradient}
               style={StyleSheet.absoluteFill}
             />
 
@@ -410,16 +461,14 @@ export function DawenWorldRoom({
             )}
 
             {/* Floor/wall divider line */}
-            <View style={styles.wallDivider} />
+            <View style={[styles.wallDivider, { backgroundColor: themeVis.dividerColor + '88', shadowColor: themeVis.dividerColor }]} />
           </View>
 
           {/* ── Floor grid ── */}
           <View style={[styles.gridContainer, { width: Math.max(gridW, screenW - 8), height: gridH }]}>
             {/* Floor background gradient */}
             <LinearGradient
-              colors={isPlaza
-                ? ['rgba(70,30,160,0.15)', 'rgba(40,10,100,0.08)', 'rgba(20,5,60,0.04)']
-                : ['rgba(30,20,80,0.12)', 'rgba(15,10,40,0.06)', 'rgba(5,5,20,0.03)']}
+              colors={[themeVis.floorOdd, themeVis.floorEven, 'rgba(0,0,0,0.02)']}
               style={StyleSheet.absoluteFill}
             />
 
@@ -428,7 +477,7 @@ export function DawenWorldRoom({
               Array.from({ length: GRID_W }, (_, col) => {
                 const isEven = (col + row) % 2 === 0;
                 const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
-                const rowFade = 1 - (row / GRID_H) * 0.3;
+                const tileOpacity = 1 - (row / GRID_H) * 0.3;
 
                 return (
                   <TouchableOpacity
@@ -438,9 +487,8 @@ export function DawenWorldRoom({
                       {
                         left: col * tileSize, top: row * tileSize,
                         width: tileSize, height: tileSize,
-                        backgroundColor: isPlaza
-                          ? isEven ? `rgba(100,50,220,${0.07 * rowFade})` : `rgba(70,30,160,${0.11 * rowFade})`
-                          : isEven ? `rgba(80,60,180,${0.05 * rowFade})` : `rgba(50,35,130,${0.09 * rowFade})`,
+                        backgroundColor: isEven ? themeVis.floorEven : themeVis.floorOdd,
+                        opacity: isSelected ? 1 : tileOpacity,
                       },
                       isSelected && styles.tileSelected,
                     ]}
@@ -475,13 +523,14 @@ export function DawenWorldRoom({
               );
             })}
 
-            {/* Other users' avatars */}
+            {/* Other users' avatars (animated positions) */}
             {otherPresence.map(p => {
               const cfg = p.avatar_config ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null };
+              const anim = getOtherAnim(p.wallet_address, p.x, p.y);
               return (
-                <View
+                <Animated.View
                   key={p.wallet_address}
-                  style={[styles.avatarWrap, { left: p.x * tileSize, top: p.y * tileSize }]}
+                  style={[styles.avatarWrap, { left: anim.x, top: anim.y }]}
                 >
                   <WorldAvatarChar
                     config={cfg}
@@ -489,7 +538,7 @@ export function DawenWorldRoom({
                     isPremium={p.is_premium}
                     size={charSize}
                   />
-                </View>
+                </Animated.View>
               );
             })}
 
@@ -669,7 +718,7 @@ const styles = StyleSheet.create({
   wallDivider: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: 2,
     backgroundColor: 'rgba(139,92,246,0.35)',
-    shadowColor: '#8B5CF6', shadowOpacity: 0.8, shadowRadius: 6,
+    shadowOpacity: 0.8, shadowRadius: 6,
   },
   plazaSign: {
     position: 'absolute', alignSelf: 'center', top: 10,

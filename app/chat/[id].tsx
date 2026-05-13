@@ -18,6 +18,7 @@ import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send,
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, Message, UserProfile } from '@/services/socialService';
+import { supabase } from '@/lib/supabase';
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -51,6 +52,36 @@ export default function ChatScreen() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Realtime: subscribe to new messages between these two users
+  useEffect(() => {
+    if (!profile?.id || !otherId) return;
+
+    const channel = supabase
+      .channel(`chat:${[profile.id, otherId].sort().join(':')}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `receiver_id=eq.${profile.id}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as Message;
+          if (newMsg.sender_id !== otherId) return;
+          setMessages(prev => {
+            if (prev.some(m => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
+          setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+          SocialService.markMessagesRead(otherId, profile.id).catch(() => {});
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id, otherId]);
 
   const send = async () => {
     const text = input.trim();

@@ -94,7 +94,7 @@ export default function CreatePostScreen() {
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string }[]>([]);
   const [gifSearching, setGifSearching] = useState(false);
-  const TENOR_KEY = process.env.EXPO_PUBLIC_TENOR_API_KEY ?? '';
+  const GIPHY_KEY = process.env.EXPO_PUBLIC_GIPHY_API_KEY ?? '';
 
   // Poll
   const [showPoll, setShowPoll] = useState(false);
@@ -280,17 +280,17 @@ export default function CreatePostScreen() {
   // ── GIF search ────────────────────────────────────────────────────────────
   const searchGifs = useCallback(async (query: string) => {
     setGifQuery(query);
-    if (!TENOR_KEY) return;
+    if (!GIPHY_KEY) return;
     if (!query.trim()) { setGifResults([]); return; }
     setGifSearching(true);
     try {
-      const url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=20&media_filter=gif`;
+      const url = `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(query)}&limit=20&rating=g&lang=en`;
       const res = await fetch(url);
       const json = await res.json();
-      const results = (json.results || []).map((item: any) => ({
+      const results = (json.data || []).map((item: any) => ({
         id: item.id,
-        url: item.media_formats?.gif?.url ?? '',
-        preview: item.media_formats?.tinygif?.url ?? item.media_formats?.gif?.url ?? '',
+        url: item.images?.original?.url ?? item.images?.fixed_height?.url ?? '',
+        preview: item.images?.fixed_height_small?.url ?? item.images?.fixed_height?.url ?? '',
       })).filter((g: any) => g.url);
       setGifResults(results);
     } catch {
@@ -298,7 +298,7 @@ export default function CreatePostScreen() {
     } finally {
       setGifSearching(false);
     }
-  }, [TENOR_KEY]);
+  }, [GIPHY_KEY]);
 
   const openGifPicker = () => {
     setGifQuery('');
@@ -624,9 +624,9 @@ export default function CreatePostScreen() {
             </View>
           )}
 
-          {/* Token cards (up to 2) */}
+          {/* Token cards (up to 2, stacked vertically) */}
           {attachedTokens.length > 0 && (
-            <View style={attachedTokens.length === 2 ? styles.tokenCardsRow : undefined}>
+            <View>
               {attachedTokens.map(renderTokenCard)}
             </View>
           )}
@@ -1035,10 +1035,10 @@ export default function CreatePostScreen() {
             </TouchableOpacity>
           </View>
 
-          {!TENOR_KEY ? (
+          {!GIPHY_KEY ? (
             <View style={styles.gifNoKeyWrap}>
               <Text style={styles.gifNoKeyText}>GIF search is not configured yet.</Text>
-              <Text style={styles.gifNoKeySub}>Add EXPO_PUBLIC_TENOR_API_KEY to your .env file.</Text>
+              <Text style={styles.gifNoKeySub}>Add EXPO_PUBLIC_GIPHY_API_KEY to your .env file.</Text>
             </View>
           ) : (
             <>
@@ -1201,7 +1201,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
 
-  tokenCardsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
   tokenCard: {
     flex: 1, backgroundColor: '#12121E', borderRadius: 16, padding: spacing.md,
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)', minHeight: 170, overflow: 'hidden',

@@ -81,6 +81,7 @@ export default function TokenDetailScreen() {
   const [holders, setHolders] = useState<{ address: string; amount: number; uiAmount: number }[]>([]);
   const [holdersLoading, setHoldersLoading] = useState(false);
   const [totalSupply, setTotalSupply] = useState<number>(0);
+  const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
 
   // Silently refresh only price/volume numbers every 30s — no full token replace,
   // no loading state, no visual disruption.
@@ -370,8 +371,27 @@ export default function TokenDetailScreen() {
               : <Copy size={11} color="rgba(255,255,255,0.35)" strokeWidth={2} />}
           </TouchableOpacity>
         </View>
-        <View style={styles.tokenInfoPriceCol}>
-          <Text style={styles.tokenInfoPrice}>{fmtTokenPrice(displayPrice)}</Text>
+        <TouchableOpacity
+          style={styles.tokenInfoPriceCol}
+          onPress={() => setPriceMode(m => m === 'price' ? 'mcap' : 'price')}
+          activeOpacity={0.75}
+        >
+          <View style={styles.priceModeRow}>
+            <Text style={styles.priceModeLabel}>{priceMode === 'price' ? 'PRICE' : 'MCAP'}</Text>
+          </View>
+          <Text style={styles.tokenInfoPrice}>
+            {priceMode === 'price'
+              ? `$${fmtTokenPrice(displayPrice)}`
+              : token.marketCap
+                ? token.marketCap >= 1e9
+                  ? `$${(token.marketCap / 1e9).toFixed(2)}B`
+                  : token.marketCap >= 1e6
+                    ? `$${(token.marketCap / 1e6).toFixed(2)}M`
+                    : token.marketCap >= 1e3
+                      ? `$${(token.marketCap / 1e3).toFixed(1)}K`
+                      : `$${token.marketCap.toFixed(0)}`
+                : '—'}
+          </Text>
           <View style={styles.tokenInfoChangeRow}>
             {isUp
               ? <TrendingUp size={11} color={changeColor} strokeWidth={2.5} />
@@ -380,7 +400,7 @@ export default function TokenDetailScreen() {
               {isUp ? '+' : ''}{(token.priceChange24h ?? 0).toFixed(2)}%
             </Text>
           </View>
-        </View>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -686,10 +706,21 @@ const styles = StyleSheet.create({
   },
   tokenInfoPriceCol: {
     alignItems: 'flex-end',
-    gap: 4,
+    gap: 2,
+  },
+  priceModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  priceModeLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: 'rgba(167,139,250,0.7)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   tokenInfoPrice: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
     color: '#fff',
     letterSpacing: -0.5,
