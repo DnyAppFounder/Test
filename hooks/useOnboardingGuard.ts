@@ -11,6 +11,7 @@ import { useWallet } from '@/contexts/WalletContext';
 export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boolean } {
   const {
     isLoaded,
+    loadedForAddr,
     pinHash,
     walletType,
     seedBackupConfirmed,
@@ -20,9 +21,10 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
     onboardingComplete,
   } = useSecurity();
   const { profile, loading: profileLoading } = useProfile();
-  const { activeWallet, isInitialized } = useWallet();
+  const { activeWallet, isInitialized, activeAddress } = useWallet();
 
-  const isReady = isLoaded && isInitialized && !profileLoading;
+  const expectedAddr = (activeAddress ?? '').toLowerCase().trim();
+  const isReady = isLoaded && isInitialized && !profileLoading && loadedForAddr === expectedAddr;
 
   const nextStep = useMemo<OnboardingStep>(() => {
     if (!isReady || !activeWallet) return null;
@@ -58,6 +60,8 @@ export function useOnboardingGuard(): { nextStep: OnboardingStep; isReady: boole
     importBackupConfirmed,
     externalWarningAccepted,
     biometricOffered,
+    loadedForAddr,
+    expectedAddr,
   ]);
 
   return { nextStep, isReady };

@@ -520,7 +520,11 @@ export function DawenWorldRoom({
       });
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
     });
-    const presCh = subscribeToRoomPresence(room.id, loadPresence);
+    // Only reload full presence on INSERT/DELETE (user joins/leaves).
+    // UPDATE (position changes) are handled via instant broadcast channel below.
+    const presCh = subscribeToRoomPresence(room.id, (eventType) => {
+      if (eventType === 'INSERT' || eventType === 'DELETE') loadPresence();
+    });
     const itemsCh = subscribeToRoomItems(room.id, loadRoomItems);
 
     // Subscribe to instant position broadcasts so avatar movement is smooth

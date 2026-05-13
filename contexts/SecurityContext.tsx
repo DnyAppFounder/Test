@@ -41,9 +41,10 @@ interface SecurityState {
   externalWarningAccepted: boolean;
   onboardingComplete: boolean;
   isLoaded: boolean;
+  loadedForAddr: string;
 }
 
-interface SecurityContextValue extends SecurityState {
+export interface SecurityContextValue extends SecurityState {
   savePin: (pin: string, profileId?: string) => Promise<void>;
   changePin: (currentPin: string, newPin: string) => Promise<{ success: boolean; error?: string }>;
   setWalletType: (type: WalletSecurityType) => Promise<void>;
@@ -108,6 +109,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
     externalWarningAccepted: false,
     onboardingComplete: false,
     isLoaded: false,
+    loadedForAddr: '',
   });
 
   // Reload security state whenever the active wallet address changes
@@ -172,6 +174,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
             externalWarningAccepted:  externalWarningVal === 'true',
             onboardingComplete:       onboardingCompleteVal === 'true',
             isLoaded: true,
+            loadedForAddr: addr,
           });
         }
       } catch {

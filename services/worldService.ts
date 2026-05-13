@@ -491,7 +491,7 @@ export function subscribeToRoomMessages(roomId: string, onMessage: (msg: WorldMe
     .subscribe();
 }
 
-export function subscribeToRoomPresence(roomId: string, onUpdate: () => void) {
+export function subscribeToRoomPresence(roomId: string, onUpdate: (eventType: string) => void) {
   return supabase
     .channel(`world_presence_${roomId}`)
     .on('postgres_changes', {
@@ -499,7 +499,7 @@ export function subscribeToRoomPresence(roomId: string, onUpdate: () => void) {
       schema: 'public',
       table: 'world_presence',
       filter: `room_id=eq.${roomId}`,
-    }, () => onUpdate())
+    }, (payload) => onUpdate(payload.eventType))
     .subscribe();
 }
 

@@ -23,6 +23,7 @@ import Svg, {
   Stop,
   G,
   Circle,
+  ClipPath,
 } from 'react-native-svg';
 import * as Clipboard from 'expo-clipboard';
 import {
@@ -83,7 +84,7 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
   { key: 'candlestick', icon: CandlestickChart, label: 'Candles' },
   { key: 'bar',         icon: BarChart2,        label: 'Bars' },
   { key: 'mountain',    icon: Activity,         label: 'Mountain' },
-  { key: 'bonding',     icon: TrendingUp,       label: 'Bonding' },
+  { key: 'bonding',     icon: TrendingUp,       label: 'Live' },
 ];
 
 const TIME_H = 18;
@@ -616,11 +617,8 @@ export function TradingViewChart({
     return Math.max(PAD.top, Math.min(PAD.top + plotH, raw));
   }
   function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
-  function bondingX(i: number) {
-    if (n <= 1) return PAD.left + plotW / 2;
-    return PAD.left + Math.sqrt(i / (n - 1)) * plotW;
-  }
-  const xFn = mode === 'bonding' ? bondingX : xOf;
+  // All modes use time-based x positioning — no index-based bonding curve
+  const xFn = xOf;
 
   const totalH = CHART_H + VOL_H + TIME_H;
 
@@ -960,17 +958,6 @@ export function TradingViewChart({
   const bottomY = (PAD.top + plotH).toFixed(1);
   const areaPath = `${linePts} L${xFn(n-1).toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
 
-  const bondingPath = displayCandles.map((c, i) => {
-    const x  = bondingX(i).toFixed(1);
-    const y  = yOf(c.close).toFixed(1);
-    if (i === 0) return `M${x},${y}`;
-    const px = bondingX(i - 1);
-    const py = yOf(displayCandles[i - 1].close);
-    const cx = ((px + parseFloat(x)) / 2).toFixed(1);
-    return `C${cx},${py.toFixed(1)} ${cx},${y} ${x},${y}`;
-  }).join(' ');
-  const bondingArea = `${bondingPath} L${bondingX(n-1).toFixed(1)},${bottomY} L${bondingX(0).toFixed(1)},${bottomY} Z`;
-
   // Grid
   const gridLevels = 5;
   const priceGridLines = Array.from({ length: gridLevels }, (_, i) => {
@@ -1091,6 +1078,9 @@ export function TradingViewChart({
               <Stop offset="0%"   stopColor="#EC4899" stopOpacity="0.8" />
               <Stop offset="100%" stopColor="#EC4899" stopOpacity="0.25" />
             </SvgLinearGradient>
+            <ClipPath id="chartClip">
+              <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} />
+            </ClipPath>
           </Defs>
 
           {/* ── Chart area background ──────────────────────────────────────── */}
@@ -1123,6 +1113,9 @@ export function TradingViewChart({
           {/* ── Bottom border of chart area ───────────────────────────────── */}
           <Line x1={PAD.left} y1={PAD.top + plotH} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
             stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+
+          {/* ── Chart data clipped to plot area ───────────────────────────── */}
+          <G clipPath="url(#chartClip)">
 
           {/* ── AREA ──────────────────────────────────────────────────────── */}
           {mode === 'area' && (
@@ -1161,23 +1154,14 @@ export function TradingViewChart({
             </>
           )}
 
-          {/* ── BONDING ───────────────────────────────────────────────────── */}
+          {/* ── BONDING (Live Line) ───────────────────────────────────────── */}
           {mode === 'bonding' && (
             <>
-              <Path d={bondingArea} fill="url(#bondingGrad)" />
-              <Path d={bondingPath} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d={bondingPath} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              {[0, Math.floor(n * 0.33), Math.floor(n * 0.66), n - 1].map(i => {
-                if (i >= n) return null;
-                const isLast = i === n - 1;
-                return (
-                  <Circle key={`bd${i}`}
-                    cx={bondingX(i)} cy={yOf(displayCandles[i].close)}
-                    r={isLast ? 5 : 3}
-                    fill={isLast ? '#A78BFA' : 'rgba(167,139,250,0.5)'}
-                    stroke={isLast ? '#fff' : 'none'} strokeWidth={isLast ? 1 : 0} />
-                );
-              })}
+              <Path d={areaPath} fill="url(#bondingGrad)" />
+              <Path d={linePts} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d={linePts} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Circle cx={lastX} cy={lastY} r={6} fill="#A78BFA" opacity={0.18} />
+              <Circle cx={lastX} cy={lastY} r={3.5} fill="#A78BFA" stroke="#fff" strokeWidth={1} />
             </>
           )}
 
@@ -1212,6 +1196,8 @@ export function TradingViewChart({
               </G>
             );
           })}
+
+          </G>{/* end chartClip */}
 
           {/* ── Visual time continuation (flat line from last close → now) ── */}
           {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
