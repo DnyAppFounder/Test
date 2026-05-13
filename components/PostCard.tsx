@@ -291,30 +291,23 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         </Pressable>
       </Modal>
 
-      {/* Token cards: dual comparison or single */}
+      {/* Token cards: dual stacked or single */}
       {hasDualToken ? (
-        <View style={styles.dualTokenRow}>
-          <View style={styles.dualTokenCard}>
-            <PostTokenCard
-              tokenAddress={post.token_address!}
-              tokenSymbol={post.token_symbol!}
-              tokenLogoUri={post.token_logo_uri}
-              storedPrice={post.token_price}
-              storedChange24h={post.token_change_24h}
-            />
-          </View>
-          <View style={styles.dualTokenVs}>
-            <Text style={styles.dualTokenVsText}>VS</Text>
-          </View>
-          <View style={styles.dualTokenCard}>
-            <PostTokenCard
-              tokenAddress={post.token_address_2!}
-              tokenSymbol={post.token_symbol_2!}
-              tokenLogoUri={post.token_logo_uri_2}
-              storedPrice={post.token_price_2}
-              storedChange24h={post.token_change_24h_2}
-            />
-          </View>
+        <View style={styles.dualTokenStack}>
+          <PostTokenCard
+            tokenAddress={post.token_address!}
+            tokenSymbol={post.token_symbol!}
+            tokenLogoUri={post.token_logo_uri}
+            storedPrice={post.token_price}
+            storedChange24h={post.token_change_24h}
+          />
+          <PostTokenCard
+            tokenAddress={post.token_address_2!}
+            tokenSymbol={post.token_symbol_2!}
+            tokenLogoUri={post.token_logo_uri_2}
+            storedPrice={post.token_price_2}
+            storedChange24h={post.token_change_24h_2}
+          />
         </View>
       ) : post.token_symbol && post.token_address ? (
         <PostTokenCard
@@ -540,30 +533,9 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
   },
-  dualTokenRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  dualTokenStack: {
+    gap: 0,
     marginBottom: spacing.md,
-  },
-  dualTokenCard: {
-    flex: 1,
-  },
-  dualTokenVs: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(139,92,246,0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  dualTokenVsText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#A78BFA',
   },
 
   // GIF

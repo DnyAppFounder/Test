@@ -183,6 +183,8 @@ export function DawenWorldPage({
         <DawenWorldRoomDirectory
           walletAddress={walletAddress}
           username={username}
+          connectedWalletId={connectedWalletId}
+          internalAccountIndex={internalAccountIndex}
           onJoinRoom={handleJoinRoom}
           onClose={() => setScreen('room')}
         />

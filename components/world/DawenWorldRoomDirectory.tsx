@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
-  TextInput,
+  TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
+import { ArrowLeft, Map, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Zap, Crown } from 'lucide-react-native';
 import {
-  WorldRoom, getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
-  createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
+  WorldRoom, SizeTier, SIZE_TIER_CONFIG,
+  getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
+  createRoom, deleteRoom, updateRoom, upgradeRoom, PLAZA_ROOM_ID,
 } from '@/services/worldService';
+import { payToTreasury } from '@/services/treasuryService';
+import { SolanaPriceService } from '@/services/solana/priceService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
 const THEMES: { name: string; emoji: string }[] = [
@@ -26,6 +29,8 @@ const VISIBILITY_ICON: Record<string, any> = {
   public: Globe, private: Lock, invite_only: UserCheck,
 };
 const VISIBILITY_COLOR: Record<string, string> = {
+  connectedWalletId?: string | null;
+  internalAccountIndex?: number;
   public: '#10B981', private: '#EF4444', invite_only: '#F59E0B',
 };
 
@@ -36,7 +41,11 @@ interface Props {
   onClose: () => void;
 }
 
-export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, onClose }: Props) {
+export function DawenWorldRoomDirectory({
+  walletAddress, username,
+  connectedWalletId, internalAccountIndex,
+  onJoinRoom, onClose,
+}: Props) {
   const [publicRooms, setPublicRooms] = useState<WorldRoom[]>([]);
   const [myRooms, setMyRooms] = useState<WorldRoom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +59,15 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
   const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
   const [editName, setEditName] = useState('');
   const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
+  // Room upgrade state
+  const [pendingUpgradeTier, setPendingUpgradeTier] = useState<SizeTier | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
+  const [solPrice, setSolPrice] = useState(0);
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    new SolanaPriceService().getSOLPrice().then(p => setSolPrice(p)).catch(() => {});
+  }, []);
+
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +115,64 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
   const handleSaveEdit = async () => {
     if (!editRoom || saving) return;
     setSaving(true);
+  const handleUpgrade = async (tier: SizeTier) => {
+    if (!editRoom || upgrading) return;
+    setPendingUpgradeTier(tier);
+    const cfg = SIZE_TIER_CONFIG[tier];
+    if (cfg.solPrice === 0) {
+      // Free upgrade (standard tier)
+      setUpgrading(true);
+      try {
+        await upgradeRoom(editRoom.id, walletAddress, tier, null, 0);
+        setEditRoom(null);
+        setPendingUpgradeTier(null);
+        await load();
+      } catch {
+        Alert.alert('Error', 'Failed to upgrade room. Please try again.');
+      } finally {
+        setUpgrading(false);
+        setPendingUpgradeTier(null);
+      }
+      return;
+    }
+
+    Alert.alert(
+      `Upgrade to ${cfg.label}`,
+      `This costs ${cfg.solPrice} SOL${solPrice > 0 ? ` (~$${(cfg.solPrice * solPrice).toFixed(2)})` : ''}.\n\nRoom size: ${cfg.width}×${cfg.height} tiles, up to ${cfg.maxPlayers} players.\n\nProceed?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pay & Upgrade',
+          onPress: async () => {
+            setUpgrading(true);
+            try {
+              const result = await payToTreasury({
+                fromAddress: walletAddress,
+                amountSol: cfg.solPrice,
+                connectedWalletId,
+                internalAccountIndex,
+              });
+              if (!result.success) {
+                Alert.alert('Payment Failed', result.error ?? 'Transaction rejected.');
+                return;
+              }
+              await upgradeRoom(editRoom.id, walletAddress, tier, result.signature ?? null, cfg.solPrice);
+              setEditRoom(null);
+              setPendingUpgradeTier(null);
+              await load();
+              Alert.alert('Upgraded!', `Your room is now ${cfg.label}.`);
+            } catch (e: any) {
+              Alert.alert('Error', e?.message ?? 'Upgrade failed.');
+            } finally {
+              setUpgrading(false);
+              setPendingUpgradeTier(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
     await updateRoom(editRoom.id, { name: editName.trim(), visibility: editVis });
     setSaving(false);
     setEditRoom(null);
@@ -178,7 +253,14 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
                   <Text style={{ fontSize: 24 }}>{room.type === 'personal' ? '🏠' : '🏢'}</Text>
                 </View>
                 <View style={styles.roomInfo}>
-                  <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
+                  <View style={styles.roomNameRow}>
+                    <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
+                    {room.size_tier && room.size_tier !== 'standard' && (
+                      <View style={styles.sizeBadge}>
+                        <Text style={styles.sizeBadgeText}>{SIZE_TIER_CONFIG[room.size_tier as SizeTier]?.emoji} {SIZE_TIER_CONFIG[room.size_tier as SizeTier]?.label}</Text>
+                      </View>
+                    )}
+                  </View>
                   <Text style={styles.roomTheme} numberOfLines={1}>{room.theme}</Text>
                   <View style={styles.roomMeta}>
                     <VisIcon size={10} color={visColor} strokeWidth={2.5} />
@@ -289,6 +371,43 @@ export function DawenWorldRoomDirectory({ walletAddress, username, onJoinRoom, o
                 <TouchableOpacity key={v} style={[styles.visBtn, editVis === v && styles.visBtnActive]} onPress={() => setEditVis(v)}>
                   <Text style={[styles.visText, editVis === v && styles.visTextActive]}>{v.replace('_',' ')}</Text>
                 </TouchableOpacity>
+
+            <Text style={styles.inputLabel}>Room Size</Text>
+            {(['standard', 'large', 'mega'] as SizeTier[]).map(tier => {
+              const cfg = SIZE_TIER_CONFIG[tier];
+              const currentTier = (editRoom?.size_tier ?? 'standard') as SizeTier;
+              const isCurrent = currentTier === tier;
+              const isDowngrade = ['standard', 'large', 'mega'].indexOf(tier) < ['standard', 'large', 'mega'].indexOf(currentTier);
+              return (
+                <TouchableOpacity
+                  key={tier}
+                  style={[styles.tierRow, isCurrent && styles.tierRowActive, isDowngrade && { opacity: 0.4 }]}
+                  onPress={() => !isDowngrade && !isCurrent && !upgrading && handleUpgrade(tier)}
+                  disabled={isCurrent || isDowngrade || upgrading}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.tierEmoji}>{cfg.emoji}</Text>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.tierLabel}>{cfg.label}</Text>
+                    <Text style={styles.tierDesc}>{cfg.width}×{cfg.height} tiles · max {cfg.maxPlayers} players</Text>
+                  </View>
+                  {isCurrent ? (
+                    <View style={styles.tierCurrentBadge}><Text style={styles.tierCurrentText}>Current</Text></View>
+                  ) : isDowngrade ? (
+                    <Text style={styles.tierPriceText}>—</Text>
+                  ) : cfg.solPrice === 0 ? (
+                    <Text style={styles.tierFreeText}>Free</Text>
+                  ) : (
+                    <View style={styles.tierPriceCol}>
+                      <Text style={styles.tierPriceText}>{cfg.solPrice} SOL</Text>
+                      {solPrice > 0 && <Text style={styles.tierUsdText}>${(cfg.solPrice * solPrice).toFixed(2)}</Text>}
+                    </View>
+                  )}
+                  {upgrading && pendingUpgradeTier === tier && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 6 }} />}
+                </TouchableOpacity>
+              );
+            })}
+
               ))}
             </View>
             <View style={styles.modalBtns}>
@@ -362,6 +481,26 @@ const styles = StyleSheet.create({
   visTextActive: { color: colors.primary },
   modalBtns: { gap: 8 },
   createRoomBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.lg, paddingVertical: spacing.md, alignItems: 'center' },
+  // Room name row with size badge
+  roomNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sizeBadge: { backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' },
+  sizeBadgeText: { fontSize: 9, fontWeight: '700', color: colors.primary },
+  // Tier rows in edit modal
+  tierRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: borderRadius.md,
+    padding: spacing.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  tierRowActive: { borderColor: colors.primary, backgroundColor: 'rgba(139,92,246,0.12)' },
+  tierEmoji: { fontSize: 22 },
+  tierLabel: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
+  tierDesc: { fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: '500' },
+  tierCurrentBadge: { backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  tierCurrentText: { fontSize: 9, fontWeight: '800', color: '#fff' },
+  tierPriceCol: { alignItems: 'flex-end', gap: 1 },
+  tierPriceText: { fontSize: 11, fontWeight: '800', color: '#F59E0B' },
+  tierUsdText: { fontSize: 9, color: 'rgba(255,255,255,0.35)', fontWeight: '500' },
+  tierFreeText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
   createRoomText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
   cancelBtn: { alignItems: 'center', paddingVertical: spacing.sm },
   cancelText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },

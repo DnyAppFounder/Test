@@ -30,8 +30,23 @@ export interface WorldRoom {
   visibility: 'public' | 'private' | 'invite_only';
   theme: string;
   is_default_personal_room: boolean;
+  size_tier?: 'standard' | 'large' | 'mega';
+  room_width?: number;
+  room_height?: number;
+  max_players?: number;
   online_count?: number;
 }
+
+export type SizeTier = 'standard' | 'large' | 'mega';
+
+export const SIZE_TIER_CONFIG: Record<SizeTier, {
+  label: string; emoji: string; width: number; height: number;
+  maxPlayers: number; solPrice: number; description: string;
+}> = {
+  standard: { label: 'Standard',   emoji: '🏠', width: 10, height: 8,  maxPlayers: 20, solPrice: 0,    description: 'Free — 10×8 grid, up to 20 players' },
+  large:    { label: 'Large Room', emoji: '🏢', width: 14, height: 10, maxPlayers: 40, solPrice: 0.05, description: '14×10 grid, up to 40 players' },
+  mega:     { label: 'Mega Room',  emoji: '🏰', width: 20, height: 14, maxPlayers: 80, solPrice: 0.15, description: '20×14 grid, up to 80 players' },
+};
 
 export interface WorldPresence {
   id: string;
@@ -192,6 +207,30 @@ export async function updateRoom(roomId: string, params: Partial<Pick<WorldRoom,
 
 export async function deleteRoom(roomId: string): Promise<void> {
   await supabase.from('world_rooms').delete().eq('id', roomId).neq('id', PLAZA_ROOM_ID);
+}
+
+export async function upgradeRoom(
+  roomId: string,
+  walletAddress: string,
+  tier: SizeTier,
+  txSignature: string,
+  solPaid: number,
+): Promise<void> {
+  const cfg = SIZE_TIER_CONFIG[tier];
+  await supabase.from('world_rooms').update({
+    size_tier: tier,
+    room_width: cfg.width,
+    room_height: cfg.height,
+    max_players: cfg.maxPlayers,
+    updated_at: new Date().toISOString(),
+  }).eq('id', roomId);
+  await supabase.from('world_room_upgrades').insert({
+    room_id: roomId,
+    wallet_address: walletAddress,
+    tier,
+    sol_paid: solPaid,
+    tx_signature: txSignature,
+  });
 }
 
 // ─── Presence ─────────────────────────────────────────────────────────────────
@@ -474,6 +513,28 @@ export function subscribeToRoomItems(roomId: string, onUpdate: () => void) {
       filter: `room_id=eq.${roomId}`,
     }, () => onUpdate())
     .subscribe();
+}
+
+// ─── Realtime broadcast for immediate position updates ────────────────────────
+
+export interface PositionBroadcast {
+  walletAddress: string;
+  x: number;
+  y: number;
+  username: string;
+  avatarConfig: AvatarConfig;
+  isPremium: boolean;
+}
+
+export function createPositionChannel(roomId: string) {
+  return supabase.channel(`world_pos_${roomId}`);
+}
+
+export function broadcastPosition(
+  channel: ReturnType<typeof createPositionChannel>,
+  data: PositionBroadcast
+) {
+  channel.send({ type: 'broadcast', event: 'move', payload: data }).catch(() => {});
 }
 
 // ─── Room online count helper ─────────────────────────────────────────────────

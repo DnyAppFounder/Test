@@ -28,6 +28,8 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import PostCard, { timeAgo } from '@/components/PostCard';
 import VerificationBadge from '@/components/VerificationBadge';
+import NotificationBanner from '@/components/NotificationBanner';
+import { supabase } from '@/lib/supabase';
 
 type TopTab = 'feed' | 'profile' | 'messages' | 'notifications';
 type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
@@ -108,6 +110,9 @@ export default function CommunityScreen() {
     return () => { cancelled = true; };
   }, []);
   const usdToSol = (usd: number): number | null => solUsdPrice > 0 ? usd / solUsdPrice : null;
+
+  // In-app notification banner
+  const [bannerNotif, setBannerNotif] = useState<Notification | null>(null);
 
   // Timestamp set when notifications are cleared — hides older notifications locally
   const [notifClearedAt, setNotifClearedAt] = useState<string | null>(null);
@@ -214,6 +219,30 @@ export default function CommunityScreen() {
   }, [profile?.id]);
 
   useEffect(() => { loadInitialFeed(); }, [loadInitialFeed]);
+
+  // Realtime subscription for live notifications
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`community_notifs_${profile.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${profile.id}` },
+        (payload) => {
+          const n = payload.new as Notification;
+          setNotifications(prev => {
+            if (prev.find(x => x.id === n.id)) return prev;
+            return [n, ...prev];
+          });
+          setUnreadNotifCount(c => c + 1);
+          if (activeTabRef.current !== 'notifications') {
+            setBannerNotif(n);
+          }
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id]);
 
   // Reload feed + conversations when screen regains focus (e.g. after returning from chat/profile)
   const activeTabRef = useRef(activeTab);
@@ -926,6 +955,13 @@ export default function CommunityScreen() {
 
   return (
     <View style={styles.container}>
+      {/* In-app notification banner */}
+      <NotificationBanner
+        notification={bannerNotif}
+        onDismiss={() => setBannerNotif(null)}
+        onPress={() => { setBannerNotif(null); setActiveTab('notifications'); }}
+      />
+
       {/* Nebula background gradient */}
       <LinearGradient
         colors={['#0D0618', '#130A24', '#0A0A14', '#0D0618']}
