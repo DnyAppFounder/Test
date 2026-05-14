@@ -17,7 +17,7 @@ import {
   Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap } from 'lucide-react-native';
+import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap, Users } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
@@ -78,6 +78,16 @@ export default function CommunityScreen() {
   const [composeSearch, setComposeSearch] = useState('');
   const [composeResults, setComposeResults] = useState<any[]>([]);
   const [composeSearching, setComposeSearching] = useState(false);
+
+  // Group chat creation
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupMemberSearch, setGroupMemberSearch] = useState('');
+  const [groupMemberResults, setGroupMemberResults] = useState<any[]>([]);
+  const [groupMemberSearching, setGroupMemberSearching] = useState(false);
+  const [groupSelectedMembers, setGroupSelectedMembers] = useState<any[]>([]);
+  const [groupCreating, setGroupCreating] = useState(false);
+  const [groupCreateError, setGroupCreateError] = useState('');
 
   // Profile tab posts
   const [profilePosts, setProfilePosts] = useState<Post[]>([]);
@@ -366,6 +376,41 @@ export default function CommunityScreen() {
       setComposeResults(results.filter((u: any) => u.id !== profile?.id));
     } finally {
       setComposeSearching(false);
+    }
+  };
+
+  const handleGroupMemberSearch = async (q: string) => {
+    setGroupMemberSearch(q);
+    if (!q.trim()) { setGroupMemberResults([]); return; }
+    setGroupMemberSearching(true);
+    try {
+      const results = await SocialService.searchUsers(q.trim());
+      setGroupMemberResults(results.filter((u: any) => u.id !== profile?.id && !groupSelectedMembers.find((m: any) => m.id === u.id)));
+    } finally {
+      setGroupMemberSearching(false);
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!profile || !groupName.trim() || groupSelectedMembers.length === 0) {
+      setGroupCreateError('Add a group name and at least one member.');
+      return;
+    }
+    setGroupCreating(true);
+    setGroupCreateError('');
+    try {
+      const memberIds = groupSelectedMembers.map((m: any) => m.id);
+      const groupId = await SocialService.createGroupConversation(profile.id, groupName.trim(), memberIds);
+      if (!groupId) throw new Error('Failed to create group');
+      setShowGroupModal(false);
+      setGroupName('');
+      setGroupSelectedMembers([]);
+      setGroupMemberSearch('');
+      setGroupMemberResults([]);
+    } catch (e: any) {
+      setGroupCreateError(e?.message || 'Failed to create group. Please try again.');
+    } finally {
+      setGroupCreating(false);
     }
   };
 
@@ -708,7 +753,7 @@ export default function CommunityScreen() {
     }
     if (notif.type === 'follow' && notif.actor?.id) {
       router.push(`/profile/${notif.actor.id}` as any);
-    } else if (notif.post_id && (notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention')) {
+    } else if (notif.post_id && (notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention' || notif.type === 'promote')) {
       openCommentsModal(notif.post_id);
     } else if (notif.type === 'message' && notif.actor?.id) {
       router.push(`/chat/${notif.actor.id}` as any);
@@ -1100,6 +1145,7 @@ export default function CommunityScreen() {
     if (type === 'mention') return <AtSign size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'repost') return <Repeat2 size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'message') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
+    if (type === 'promote') return <Zap size={18} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />;
     return <Bell size={18} color={colors.primary} />;
   };
 
@@ -1214,13 +1260,22 @@ export default function CommunityScreen() {
       {activeTab === 'messages' ? (
         <View style={styles.msgHeader}>
           <Text style={styles.msgHeaderTitle}>Messages</Text>
-          <TouchableOpacity
-            style={styles.composeBtn}
-            activeOpacity={0.85}
-            onPress={() => { setComposeSearch(''); setComposeResults([]); setShowComposeModal(true); }}
-          >
-            <Send size={18} color={colors.white} strokeWidth={2.5} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              style={[styles.composeBtn, { backgroundColor: 'rgba(139,92,246,0.2)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' }]}
+              activeOpacity={0.85}
+              onPress={() => { setGroupName(''); setGroupSelectedMembers([]); setGroupMemberSearch(''); setGroupMemberResults([]); setGroupCreateError(''); setShowGroupModal(true); }}
+            >
+              <Users size={17} color={colors.primary} strokeWidth={2.5} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.composeBtn}
+              activeOpacity={0.85}
+              onPress={() => { setComposeSearch(''); setComposeResults([]); setShowComposeModal(true); }}
+            >
+              <Send size={18} color={colors.white} strokeWidth={2.5} />
+            </TouchableOpacity>
+          </View>
         </View>
       ) : activeTab === 'notifications' ? (
         <View style={styles.msgHeader}>
@@ -1433,6 +1488,91 @@ export default function CommunityScreen() {
                 })
               )}
             </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Create Group Chat Modal */}
+      <Modal visible={showGroupModal} animationType="slide" transparent>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalSheet, { maxHeight: '80%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>New Group Chat</Text>
+              <TouchableOpacity onPress={() => setShowGroupModal(false)}>
+                <X size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={[styles.msgSearchInput, { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, color: colors.textPrimary, fontSize: fontSize.md }]}
+              placeholder="Group name..."
+              placeholderTextColor={colors.textMuted}
+              value={groupName}
+              onChangeText={setGroupName}
+              maxLength={40}
+            />
+
+            {groupSelectedMembers.length > 0 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 48, marginHorizontal: spacing.lg, marginBottom: spacing.sm }} contentContainerStyle={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                {groupSelectedMembers.map((m: any) => (
+                  <TouchableOpacity key={m.id} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, gap: 4 }}
+                    onPress={() => setGroupSelectedMembers(prev => prev.filter((x: any) => x.id !== m.id))}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary }}>{m.username || m.wallet_address?.slice(0,6)}</Text>
+                    <X size={10} color={colors.primary} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={[styles.msgSearchWrap, { marginHorizontal: spacing.lg, marginBottom: 0 }]}>
+              <Search size={17} color={colors.textMuted} strokeWidth={2} />
+              <TextInput
+                style={styles.msgSearchInput}
+                placeholder="Add members..."
+                placeholderTextColor={colors.textMuted}
+                value={groupMemberSearch}
+                onChangeText={handleGroupMemberSearch}
+                autoCapitalize="none"
+              />
+              {groupMemberSearching && <ActivityIndicator size="small" color={colors.primary} />}
+            </View>
+
+            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+              {groupMemberResults.map((user: any, idx: number) => {
+                const name = user.username || `${user.wallet_address?.slice(0, 6)}...`;
+                return (
+                  <TouchableOpacity key={user.id} style={[styles.convRow, idx < groupMemberResults.length - 1 && styles.convRowBorder]}
+                    activeOpacity={0.75}
+                    onPress={() => { setGroupSelectedMembers(prev => [...prev, user]); setGroupMemberSearch(''); setGroupMemberResults([]); }}>
+                    <View style={styles.convAvatarWrap}>
+                      {user.avatar_url
+                        ? <Image source={{ uri: user.avatar_url }} style={styles.convAvatar} />
+                        : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>}
+                    </View>
+                    <View style={styles.convBody}>
+                      <Text style={styles.convUsername}>{name}</Text>
+                      {user.bio ? <Text style={styles.convLastMsg} numberOfLines={1}>{user.bio}</Text> : null}
+                    </View>
+                    <Plus size={18} color={colors.primary} strokeWidth={2.5} />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {groupCreateError ? <Text style={{ color: '#EF4444', fontSize: fontSize.sm, textAlign: 'center', marginBottom: spacing.sm }}>{groupCreateError}</Text> : null}
+
+            <TouchableOpacity
+              style={[styles.composeBtn, { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: borderRadius.lg, paddingVertical: spacing.md, justifyContent: 'center', width: 'auto', opacity: groupCreating ? 0.6 : 1 }]}
+              onPress={handleCreateGroup}
+              disabled={groupCreating}
+              activeOpacity={0.85}
+            >
+              {groupCreating
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={{ fontSize: fontSize.md, fontWeight: '800', color: '#fff' }}>Create Group</Text>
+              }
+            </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       </Modal>
