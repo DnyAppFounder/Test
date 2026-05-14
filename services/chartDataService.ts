@@ -213,7 +213,8 @@ class ChartDataService {
       return candles;
     } catch (err) {
       console.error('[ChartDataService] Error fetching OHLCV:', err);
-      return [];
+      // Return stale cached data if available rather than an empty array
+      return this.cache.get(cacheKey)?.data ?? [];
     }
   }
 

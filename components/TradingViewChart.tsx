@@ -160,11 +160,16 @@ function fillBuckets(
     }
   }
 
-  // Seed lastClose from candles that fall BEFORE the visible window
-  let lastClose = candles[0]?.close ?? 0;
-  for (const c of candles) {
-    const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
-    if (key < alignedStart && c.close > 0) lastClose = c.close;
+  // Only seed lastClose from pre-window candles WHEN real in-window candles exist.
+  // Without this gate, inactive tokens (last trade before the visible window) get
+  // fake flat carry-forward filling the entire visible window with a phantom line.
+  const hasInWindowCandles = Array.from(map.keys()).some(k => k >= alignedStart && k <= alignedEnd);
+  let lastClose = 0;
+  if (hasInWindowCandles) {
+    for (const c of candles) {
+      const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
+      if (key < alignedStart && c.close > 0) lastClose = c.close;
+    }
   }
 
   const result: CandleData[] = [];
@@ -280,6 +285,12 @@ export function TradingViewChart({
   const candlesRef        = useRef<CandleData[]>([]);
   const displayCandlesRef = useRef<CandleData[]>([]);
   const pairAddrRef   = useRef<string | null>(pairAddress ?? null);
+  // Request ID — incremented on every loadData call; stale responses are discarded.
+  const reqIdRef      = useRef(0);
+  // Track previous mint to detect token changes (vs timeframe changes).
+  const prevMintRef   = useRef<string | undefined>(undefined);
+  // Prevents duplicate auto-scroll; reset on every token or timeframe change.
+  const hasAutoScrolledRef = useRef(false);
 
   // Live time engine refs — updated every second to slide chart forward in real time
   const [clockTick, setClockTick] = useState(0);
@@ -345,12 +356,15 @@ export function TradingViewChart({
   }, []);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
-    if (!tokenMint) { setLoading(false); return; }
+    if (!tokenMint) { if (!silent) setLoading(false); return; }
+    const myId = ++reqIdRef.current;
     if (!silent) setLoading(true);
     try {
       const effectiveTf: TimeFrame = tf === 'ALL' ? '1D' : tf;
       const limitOverride = tf === 'ALL' ? 365 : undefined;
       const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
+      // Discard stale results — a newer request (different token or timeframe) is already in flight.
+      if (myId !== reqIdRef.current) return;
       if (data && data.length > 0) {
         setCandles(prev => {
           if (!silent) return data;
@@ -367,12 +381,19 @@ export function TradingViewChart({
         });
         setHasData(true);
       } else {
-        if (!silent) setHasData(false);
+        if (!silent) {
+          setHasData(false);
+          setCandles([]);
+        }
       }
     } catch {
-      if (!silent) setHasData(false);
+      if (myId !== reqIdRef.current) return;
+      if (!silent) {
+        setHasData(false);
+        // On error, keep existing candles so we don't wipe a working chart
+      }
     } finally {
-      if (!silent) setLoading(false);
+      if (myId === reqIdRef.current && !silent) setLoading(false);
     }
   }, [tokenMint]);
 
@@ -444,13 +465,25 @@ export function TradingViewChart({
     } catch { setWsConnected(false); }
   }, [applyLivePrice]);
 
+  // When the token mint changes, clear candle state immediately so the new token
+  // starts with a blank chart (first-load spinner) rather than flashing the old token's data.
+  // Timeframe changes do NOT clear candles — old data stays visible under the loading overlay.
+  useEffect(() => {
+    if (prevMintRef.current === tokenMint) return;
+    prevMintRef.current = tokenMint;
+    setCandles([]);
+    setHasData(false);
+    setLivePrice(null);
+    hasAutoScrolledRef.current = false;
+  }, [tokenMint]);
+
   useEffect(() => {
     console.log(`[TradingViewChart] Timeframe → ${timeframe}  mint=${tokenMint?.slice(0, 8) ?? 'none'}`);
-    setLivePrice(null);
     setCrosshair(null);
     setPanOffsetCandles(0);
     panOffsetRef.current = 0;
-    priceScaleKeyRef.current = ''; // force scale recalculation for new timeframe/token
+    priceScaleKeyRef.current = '';
+    hasAutoScrolledRef.current = false;
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
@@ -503,6 +536,28 @@ export function TradingViewChart({
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, [tokenMint, applyLivePrice]);
+
+  // Auto-scroll: after first data load, if all candles fall before the current
+  // visible window (token hasn't traded recently), pan back so the last real
+  // candle lands near the right edge rather than showing an empty chart.
+  useEffect(() => {
+    if (!hasData || candles.length === 0) return;
+    if (hasAutoScrolledRef.current) return;
+    hasAutoScrolledRef.current = true;
+    const bMs   = BUCKET_MS[timeframe] ?? 3_600_000;
+    const visMs = (VISIBLE_BUCKETS[timeframe] ?? 48) * bMs;
+    const now   = Date.now();
+    const lastRealTs = candles[candles.length - 1].timestamp;
+    if (lastRealTs > 0 && lastRealTs < now - visMs - bMs) {
+      // Last real candle is before the left edge of the current window.
+      // Scroll back so the last real candle sits ~90% from the left edge.
+      const targetRight = lastRealTs + visMs * 0.1;
+      const msBack      = now - targetRight;
+      const bucketsBack = Math.max(0, Math.round(msBack / bMs));
+      panOffsetRef.current = bucketsBack;
+      setPanOffsetCandles(bucketsBack);
+    }
+  }, [hasData, candles, timeframe]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
   // MCAP scale factor — converts USD price candles to market-cap values when
@@ -921,7 +976,14 @@ export function TradingViewChart({
     </View>
   );
 
-  if (loading) {
+  // When candles loaded but none fall in the current window yet (auto-scroll
+  // hasn't fired), keep the spinner so the chart doesn't flash "No data".
+  const autoScrollPending = !hasAutoScrolledRef.current && candles.length > 0 && displayCandles.length === 0;
+  // Show blank spinner only on first load (no candles yet) OR while waiting for
+  // auto-scroll to position the window at the last real candle.
+  const isFirstLoad = (loading && candles.length === 0) || autoScrollPending;
+
+  if (isFirstLoad) {
     return (
       <View style={styles.container}>
         {header}
@@ -933,7 +995,7 @@ export function TradingViewChart({
     );
   }
 
-  if (!hasData || candles.length < 2) {
+  if (!hasData && candles.length === 0) {
     return (
       <View style={styles.container}>
         {header}
@@ -941,7 +1003,7 @@ export function TradingViewChart({
           {displayPriceVal > 0 ? (
             <>
               <Text style={styles.priceFallback}>{fmtValue(displayPriceVal * mcapScale, valueMode)}</Text>
-              <Text style={styles.unavailableText}>Chart data loading…</Text>
+              <Text style={styles.unavailableText}>No historical data available</Text>
             </>
           ) : (
             <Text style={styles.unavailableText}>Chart data unavailable</Text>
@@ -1032,6 +1094,14 @@ export function TradingViewChart({
         >
           <Text style={styles.returnLiveText}>▶ Return to Live</Text>
         </TouchableOpacity>
+      )}
+
+      <View style={styles.chartArea}>
+      {/* Timeframe-switch overlay — chart stays visible while new data loads */}
+      {loading && candles.length > 0 && (
+        <View style={[styles.loadingOverlay, { height: CHART_H }]} pointerEvents="none">
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
       )}
 
       <View
@@ -1319,6 +1389,7 @@ export function TradingViewChart({
           />
         )}
       </View>
+      </View>{/* end chartArea */}
     </View>
   );
 }
@@ -1433,8 +1504,10 @@ const styles = StyleSheet.create({
   crosshairClose: { padding: 4 },
   crosshairCloseText: { fontSize: 11, color: colors.textMuted },
   // Chart SVG wrapper
+  chartArea: { position: 'relative' },
   svgWrap: { paddingTop: 4, paddingBottom: 2, position: 'relative', overflow: 'hidden' },
   // Loading / unavailable
+  loadingOverlay:  { position: 'absolute', left: 0, right: 0, top: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.25)', zIndex: 10 },
   loadingWrap:     { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
   loadingSubText:  { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
   unavailableWrap: { height: 160, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },

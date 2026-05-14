@@ -1,19 +1,24 @@
-import { Text, Linking, TextStyle } from 'react-native';
+import { Text, Linking, TextStyle, StyleProp } from 'react-native';
 
 // Regex: matches http(s):// URLs and bare domain.tld/... patterns
 const URL_REGEX = /(?:https?:\/\/[^\s]+|(?<!\w)(?:[a-zA-Z0-9-]+\.)+(?:com|io|org|net|app|xyz|gg|co|dev|info|me|tv|finance|money|crypto|sol|trade|exchange)(?:\/[^\s]*)?)/g;
 
+// Regex: matches $CASHTAG patterns (uppercase letters and digits, 1-10 chars after $)
+const CASHTAG_REGEX = /^\$[A-Z0-9]{1,10}$/;
+
 interface Props {
   text: string;
-  style?: TextStyle;
+  style?: StyleProp<TextStyle>;
   linkStyle?: TextStyle;
   onMentionPress?: (username: string) => void;
   mentionStyle?: TextStyle;
+  onCashtagPress?: (symbol: string) => void;
+  isPremiumAuthor?: boolean;
 }
 
-export default function LinkText({ text, style, linkStyle, onMentionPress, mentionStyle }: Props) {
-  // Split by @mentions AND urls
-  const parts = text.split(/(@\w+)/g);
+export default function LinkText({ text, style, linkStyle, onMentionPress, mentionStyle, onCashtagPress, isPremiumAuthor }: Props) {
+  // Split by @mentions AND $CASHTAGS
+  const parts = text.split(/(@\w+|\$[A-Z0-9]{1,10})/g);
 
   return (
     <Text style={style}>
@@ -29,6 +34,23 @@ export default function LinkText({ text, style, linkStyle, onMentionPress, menti
               {part}
             </Text>
           );
+        }
+
+        // $CASHTAG
+        if (CASHTAG_REGEX.test(part)) {
+          if (isPremiumAuthor && onCashtagPress) {
+            return (
+              <Text
+                key={i}
+                style={{ color: '#10B981', fontWeight: '700' }}
+                onPress={() => onCashtagPress(part.slice(1))}
+              >
+                {part}
+              </Text>
+            );
+          }
+          // Not premium or no handler — render as plain gray text
+          return <Text key={i}>{part}</Text>;
         }
 
         // Check for URLs inside plain text segments

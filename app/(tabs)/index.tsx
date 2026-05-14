@@ -165,7 +165,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 
 export default function WalletHome() {
   const router = useRouter();
-  const { activeAddress, activeWallet } = useWallet();
+  const { activeAddress, activeWallet, isInitialized } = useWallet();
   const { profile } = useProfile();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
@@ -269,7 +269,7 @@ export default function WalletHome() {
       setWatchlistEnriched(enriched);
     } catch (error) {
       console.error('Error loading watchlist:', error);
-      setWatchlist([]);
+      // Keep existing watchlist data rather than clearing on error
     }
   }, [profile?.id]);
 
@@ -395,7 +395,8 @@ export default function WalletHome() {
 
   // Only show static placeholder when no wallet connected AND not loading
   const hasWallet = !!activeAddress;
-  const showStaticFallback = !hasWallet && !assetsLoading;
+  // Only show "connect wallet" after wallet context has fully initialized to avoid the brief flash
+  const showStaticFallback = !hasWallet && !assetsLoading && isInitialized;
 
   const shortAddr = activeWallet
     ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`

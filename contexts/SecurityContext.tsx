@@ -131,7 +131,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
           externalWarningVal,
           onboardingCompleteVal,
         ] = await Promise.all([
-          readKey(addr, 'pin_hash',                 G.pinHash),
+          readKeyWalletOnly(addr, 'pin_hash'),
           readKey(addr, 'wallet_type',              G.walletType),
           readKeyWalletOnly(addr, 'biometric_enabled'),
           readKeyWalletOnly(addr, 'biometric_offered'),
@@ -189,7 +189,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
   // ── savePin ──────────────────────────────────────────────────────────────
   const savePin = useCallback(async (pin: string, profileId?: string) => {
     const hash = hashPin(pin);
-    await writeKey(addr, 'pin_hash', G.pinHash, hash);
+    await writeKeyWalletOnly(addr, 'pin_hash', hash);
     setState(s => ({ ...s, pinHash: hash }));
 
     // Durable server backup keyed by wallet address
@@ -221,7 +221,7 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
       return { success: false, error: 'New PIN must be 4–6 digits.' };
     }
     const hash = hashPin(newPin);
-    await writeKey(addr, 'pin_hash', G.pinHash, hash);
+    await writeKeyWalletOnly(addr, 'pin_hash', hash);
     setState(s => ({ ...s, pinHash: hash }));
 
     if (addr) {

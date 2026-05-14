@@ -385,15 +385,19 @@ class RealtimeChartService {
     const sub = this.subs.get(key);
     if (!sub) return;
 
-    await supabase
-      .from('token_candles')
-      .delete()
-      .eq('token_mint', mint)
-      .eq('timeframe', timeframe)
-      .eq('is_live', false);
-
+    // Load new candles first; only evict stale DB rows if the fetch succeeded
     const candles = await this.loadHistorical(mint, timeframe);
-    sub.candles = candles;
+    if (candles.length > 0) {
+      await supabase
+        .from('token_candles')
+        .delete()
+        .eq('token_mint', mint)
+        .eq('timeframe', timeframe)
+        .eq('is_live', false);
+    }
+    if (candles.length > 0 || sub.candles.length === 0) {
+      sub.candles = candles;
+    }
     this.notify(sub);
   }
 }

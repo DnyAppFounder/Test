@@ -35,6 +35,7 @@ export interface UserProfile {
   twitter_url?: string | null;
   telegram_url?: string | null;
   discord_url?: string | null;
+  name_color?: string | null;
 }
 
 export interface Post {
@@ -81,6 +82,8 @@ export interface Post {
   reposted_by?: UserProfile;
   is_repost?: boolean;
   quote_post?: Post | null;
+  post_animated?: boolean;
+  text_color?: string | null;
 }
 
 export interface Notification {
@@ -1250,5 +1253,154 @@ export class SocialService {
       .eq('voter_wallet', voterWallet)
       .maybeSingle();
     return data?.option_index ?? null;
+  }
+
+  // ─── Search ────────────────────────────────────────────────────────────────
+
+  static async searchPosts(query: string, limit = 20): Promise<Post[]> {
+    if (!query.trim()) return [];
+    try {
+      const { data, error } = await supabase
+        .from('posts')
+        .select(`*, author:user_profiles!author_id(*)`)
+        .ilike('content', `%${query.trim()}%`)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) return [];
+      return (data as any[]) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  // ─── User Blocking ─────────────────────────────────────────────────────────
+
+  static async blockUser(blockerId: string, blockedId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('user_blocks')
+        .upsert({ blocker_id: blockerId, blocked_id: blockedId }, { onConflict: 'blocker_id,blocked_id' });
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  static async unblockUser(blockerId: string, blockedId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('user_blocks')
+        .delete()
+        .eq('blocker_id', blockerId)
+        .eq('blocked_id', blockedId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  static async isBlocked(viewerId: string, targetId: string): Promise<boolean> {
+    try {
+      const { data } = await supabase
+        .from('user_blocks')
+        .select('id')
+        .eq('blocker_id', viewerId)
+        .eq('blocked_id', targetId)
+        .maybeSingle();
+      return !!data;
+    } catch {
+      return false;
+    }
+  }
+
+  static async getBlockedUsers(userId: string): Promise<string[]> {
+    try {
+      const { data } = await supabase
+        .from('user_blocks')
+        .select('blocked_id')
+        .eq('blocker_id', userId);
+      return (data || []).map((r: any) => r.blocked_id);
+    } catch {
+      return [];
+    }
+  }
+
+  // ─── Conversation Preferences ──────────────────────────────────────────────
+
+  static async setConversationPreference(
+    userId: string,
+    partnerId: string,
+    updates: { is_archived?: boolean; is_hidden?: boolean; is_deleted?: boolean }
+  ): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('conversation_preferences')
+        .upsert(
+          { user_id: userId, partner_id: partnerId, ...updates, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id,partner_id' }
+        );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  static async getConversationPreferences(userId: string): Promise<Map<string, { is_archived: boolean; is_hidden: boolean; is_deleted: boolean }>> {
+    try {
+      const { data } = await supabase
+        .from('conversation_preferences')
+        .select('partner_id, is_archived, is_hidden, is_deleted')
+        .eq('user_id', userId);
+      const map = new Map<string, { is_archived: boolean; is_hidden: boolean; is_deleted: boolean }>();
+      for (const row of (data || [])) {
+        map.set(row.partner_id, { is_archived: row.is_archived, is_hidden: row.is_hidden, is_deleted: row.is_deleted });
+      }
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  // ─── Group Conversations ───────────────────────────────────────────────────
+
+  static async createGroupConversation(creatorId: string, name: string, memberIds: string[]): Promise<string | null> {
+    try {
+      const { data: group, error } = await supabase
+        .from('group_conversations')
+        .insert({ creator_id: creatorId, name })
+        .select('id')
+        .maybeSingle();
+      if (error || !group) return null;
+      const allMembers = Array.from(new Set([creatorId, ...memberIds]));
+      await supabase.from('group_members').insert(
+        allMembers.map(uid => ({ group_id: group.id, user_id: uid }))
+      );
+      return group.id;
+    } catch {
+      return null;
+    }
+  }
+
+  static async getGroupConversations(userId: string): Promise<any[]> {
+    try {
+      const { data } = await supabase
+        .from('group_members')
+        .select('group_id, group_conversations(id, name, avatar_url, created_at)')
+        .eq('user_id', userId);
+      return (data || []).map((r: any) => r.group_conversations).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  static async sendGroupMessage(groupId: string, senderId: string, content: string): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('group_messages')
+        .insert({ group_id: groupId, sender_id: senderId, content });
+      return !error;
+    } catch {
+      return false;
+    }
   }
 }

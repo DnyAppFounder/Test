@@ -128,8 +128,8 @@ export default function TokenDetailScreen() {
     }
   }, [activeBottomTab]);
 
-  const loadTokenDetail = async (addr: string) => {
-    setLoading(true);
+  const loadTokenDetail = async (addr: string, isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
     try {
       // Primary: DexScreener live data
       let data = await liveMarketService.getTokenDetail(addr);
@@ -156,17 +156,33 @@ export default function TokenDetailScreen() {
         }
       }
 
-      setToken(data);
+      // On refresh, only update if we got valid data — don't clear existing token on failure.
+      if (!isRefresh) {
+        setToken(data);
+      } else if (data) {
+        setToken(prev => {
+          if (!prev) return data;
+          return {
+            ...prev,
+            price:          data!.price          > 0   ? data!.price          : prev.price,
+            priceChange24h: data!.priceChange24h  ?? prev.priceChange24h,
+            volume24h:      data!.volume24h       > 0   ? data!.volume24h      : prev.volume24h,
+            liquidity:      data!.liquidity       > 0   ? data!.liquidity      : prev.liquidity,
+            marketCap:      data!.marketCap       != null ? data!.marketCap    : prev.marketCap,
+            pairAddress:    data!.pairAddress     ?? prev.pairAddress,
+          };
+        });
+      }
     } catch (e) {
       console.warn('[TokenDetail] loadTokenDetail error:', e);
     } finally {
-      setLoading(false);
+      if (!isRefresh) setLoading(false);
     }
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    if (address) await loadTokenDetail(address);
+    if (address) await loadTokenDetail(address, true);
     setRefreshing(false);
   };
 
@@ -258,7 +274,7 @@ export default function TokenDetailScreen() {
       }));
     } catch (e) {
       console.warn('[Holders] Failed to load holders:', e);
-      setHolders([]);
+      // Keep existing holders rather than clearing on network error
     } finally {
       setHoldersLoading(false);
     }

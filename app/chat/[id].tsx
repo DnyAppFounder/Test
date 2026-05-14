@@ -184,7 +184,7 @@ export default function ChatScreen() {
             <ArrowLeft size={22} color={colors.textPrimary} strokeWidth={2.5} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.topBarUser} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.topBarUser} activeOpacity={0.8} onPress={() => otherId && router.push(`/profile/${otherId}` as any)}>
             <View style={styles.topAvatar}>
               {otherUser?.avatar_url ? (
                 <Image source={{ uri: otherUser.avatar_url }} style={styles.topAvatarImg} />

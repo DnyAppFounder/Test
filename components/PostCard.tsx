@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform, ActivityIndicator } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform, ActivityIndicator, Animated } from 'react-native';
 import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2, X, Megaphone, ChartBar as BarChart2 } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
@@ -39,6 +39,20 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
   const [avatarError, setAvatarError] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+
+  const isPremiumAuthor = !!(post.author?.is_premium && (post.author?.premium_expires_at == null || new Date(post.author.premium_expires_at) > new Date()));
+
+  const glowAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!post.post_animated || !isPremiumAuthor) return;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(glowAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      Animated.timing(glowAnim, { toValue: 0, duration: 1500, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [post.post_animated]);
 
   // Poll state
   const hasPoll = !!(post.poll_options && post.poll_options.length >= 2);
@@ -107,8 +121,11 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
 
   const hasDualToken = !!(post.token_symbol && post.token_address && post.token_symbol_2 && post.token_address_2);
 
-  return (
-    <View style={[styles.card, post.is_promoted && styles.cardPromoted]}>
+  const cardStyle = [styles.card, post.is_promoted && styles.cardPromoted];
+  const animatedOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+
+  const cardInner = (
+    <>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.8}>
@@ -127,7 +144,7 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
 
         <TouchableOpacity style={styles.authorInfo} onPress={handleProfilePress} activeOpacity={0.8}>
           <View style={styles.nameRow}>
-            <Text style={styles.name}>{authorName}</Text>
+            <Text style={[styles.name, isPremiumAuthor && post.author?.name_color ? { color: post.author.name_color } : undefined]}>{authorName}</Text>
             {post.author && <VerificationBadge profile={post.author} size="sm" />}
           </View>
           <View style={styles.subRow}>
@@ -167,11 +184,15 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       {/* Content */}
       <LinkText
         text={post.content}
-        style={styles.content}
+        style={isPremiumAuthor && post.text_color ? [styles.content, { color: post.text_color }] : styles.content}
         onMentionPress={(username) => {
           SocialService.searchUsers(username).then(results => {
             if (results[0]?.id) router.push(`/profile/${results[0].id}` as any);
           }).catch(() => {});
+        }}
+        isPremiumAuthor={isPremiumAuthor}
+        onCashtagPress={(sym) => {
+          router.push(('/discover?q=$' + sym) as any);
         }}
       />
 
@@ -353,6 +374,20 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
           <Share2 size={18} color={colors.textMuted} strokeWidth={2} />
         </TouchableOpacity>
       </View>
+    </>
+  );
+
+  if (post.post_animated && isPremiumAuthor) {
+    return (
+      <Animated.View style={[cardStyle, { opacity: animatedOpacity }]}>
+        {cardInner}
+      </Animated.View>
+    );
+  }
+
+  return (
+    <View style={cardStyle}>
+      {cardInner}
     </View>
   );
 }

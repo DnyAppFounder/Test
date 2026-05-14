@@ -353,7 +353,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeAddress, applyPortfolioResult]);
 
-  // Auto-refresh every 45 seconds while a wallet is connected
+  // Track last background-refresh timestamp to prevent hammering on rapid visibility changes
+  const lastBgRefreshRef = useRef<number>(0);
+
+  // Auto-refresh every 60 seconds while a wallet is connected (silent — no loading spinner)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (refreshIntervalRef.current) {
@@ -362,8 +365,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
     if (activeAddress) {
       refreshIntervalRef.current = setInterval(() => {
+        lastBgRefreshRef.current = Date.now();
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
-      }, 10_000);
+      }, 60_000);
     }
     return () => {
       if (refreshIntervalRef.current) {
@@ -372,11 +376,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeAddress, applyPortfolioResult]);
 
-  // Refresh when app returns to foreground (native only)
+  // Refresh when app returns to foreground (native only) — throttled to once per 60s
   useEffect(() => {
     if (Platform.OS === 'web') return;
     const handleAppState = (nextState: AppStateStatus) => {
-      if (nextState === 'active' && activeAddress) {
+      if (nextState === 'active' && activeAddress && Date.now() - lastBgRefreshRef.current > 60_000) {
+        lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] App foregrounded, refreshing assets');
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
       }
@@ -385,11 +390,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [activeAddress, applyPortfolioResult]);
 
-  // Refresh when the browser tab becomes visible again (web / Safari)
+  // Refresh when the browser tab becomes visible — throttled to once per 60s
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     const handleVisibility = () => {
-      if (!document.hidden && activeAddress) {
+      if (!document.hidden && activeAddress && Date.now() - lastBgRefreshRef.current > 60_000) {
+        lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] Tab visible, refreshing assets for:', activeAddress.slice(0, 8));
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
       }

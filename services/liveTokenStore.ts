@@ -178,18 +178,23 @@ class LiveTokenStoreService {
         (b.liquidity?.usd || 0) > (a.liquidity?.usd || 0) ? b : a
       );
 
-      const price = parseFloat(best.priceUsd) || 0;
-      const marketCap = best.marketCap ?? best.fdv ?? null;
+      const rawPrice   = parseFloat(best.priceUsd) || 0;
+      const rawMcap    = best.marketCap ?? best.fdv ?? null;
+      const prevState  = entry.state;
+
+      // Never overwrite a valid price with 0 — keep previous if new fetch is bad.
+      const safePrice  = rawPrice  > 0 ? rawPrice  : prevState.price;
+      const safeMcap   = rawMcap   != null ? rawMcap  : prevState.marketCap;
 
       entry.state = {
         mint,
-        price,
-        priceChange24h: best.priceChange?.h24 ?? 0,
-        priceChange1h: best.priceChange?.h1 ?? 0,
-        marketCap,
-        liquidity: best.liquidity?.usd ?? 0,
-        volume24h: best.volume?.h24 ?? 0,
-        lastUpdatedAt: Date.now(),
+        price:          safePrice,
+        priceChange24h: best.priceChange?.h24 ?? prevState.priceChange24h,
+        priceChange1h:  best.priceChange?.h1  ?? prevState.priceChange1h,
+        marketCap:      safeMcap,
+        liquidity:      (best.liquidity?.usd ?? 0) > 0 ? best.liquidity.usd : prevState.liquidity,
+        volume24h:      (best.volume?.h24 ?? 0) > 0 ? best.volume.h24 : prevState.volume24h,
+        lastUpdatedAt:  Date.now(),
         source: 'dexscreener',
         isLive: true,
       };

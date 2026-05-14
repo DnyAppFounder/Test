@@ -37,7 +37,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
-  const { profile, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
+  const { profile, loading: profileLoading, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,6 +69,9 @@ export default function CommunityScreen() {
   const [msgSearch, setMsgSearch] = useState('');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [convsLoading, setConvsLoading] = useState(false);
+  const [swipeOpenId, setSwipeOpenId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
 
   // Compose new message
   const [showComposeModal, setShowComposeModal] = useState(false);
@@ -91,6 +94,13 @@ export default function CommunityScreen() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Feed search
+  const [feedSearchActive, setFeedSearchActive] = useState(false);
+  const [feedSearchQuery, setFeedSearchQuery] = useState('');
+  const [feedSearchResults, setFeedSearchResults] = useState<{ users: any[]; posts: any[] }>({ users: [], posts: [] });
+  const [feedSearchLoading, setFeedSearchLoading] = useState(false);
+  const feedSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // SOL/USD price for promotion tier conversion
   const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
@@ -359,6 +369,30 @@ export default function CommunityScreen() {
     }
   };
 
+  const handleFeedSearch = async (q: string) => {
+    setFeedSearchQuery(q);
+    if (feedSearchDebounce.current) clearTimeout(feedSearchDebounce.current);
+    if (!q.trim()) {
+      setFeedSearchResults({ users: [], posts: [] });
+      setFeedSearchLoading(false);
+      return;
+    }
+    setFeedSearchLoading(true);
+    feedSearchDebounce.current = setTimeout(async () => {
+      try {
+        const [users, posts] = await Promise.all([
+          SocialService.searchUsers(q.trim()),
+          SocialService.searchPosts(q.trim(), 15),
+        ]);
+        setFeedSearchResults({ users: users.slice(0, 5), posts: posts.slice(0, 15) });
+      } catch {
+        setFeedSearchResults({ users: [], posts: [] });
+      } finally {
+        setFeedSearchLoading(false);
+      }
+    }, 350);
+  };
+
   // Handle @mention in comment input
   const handleCommentTextChange = async (text: string) => {
     setNewCommentContent(text);
@@ -470,6 +504,23 @@ export default function CommunityScreen() {
 
   const requestDeletePost = (postId: string) => {
     setDeleteConfirmId(postId);
+  };
+
+  const handleArchiveConversation = async (partnerId: string) => {
+    if (!profile) return;
+    setArchivingId(partnerId);
+    await SocialService.setConversationPreference(profile.id, partnerId, { is_archived: true });
+    setConversations(prev => prev.filter(c => c.otherUser.id !== partnerId));
+    setArchivingId(null);
+    setSwipeOpenId(null);
+  };
+
+  const handleDeleteConversation = async (partnerId: string) => {
+    if (!profile) return;
+    await SocialService.setConversationPreference(profile.id, partnerId, { is_deleted: true });
+    setConversations(prev => prev.filter(c => c.otherUser.id !== partnerId));
+    setDeletingConvId(null);
+    setSwipeOpenId(null);
   };
 
   const confirmDeletePost = async () => {
@@ -678,7 +729,7 @@ export default function CommunityScreen() {
   ];
 
   const renderFeedTab = () => {
-    if (loading) {
+    if (loading && !feedSearchActive) {
       return (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -686,6 +737,90 @@ export default function CommunityScreen() {
       );
     }
 
+    // Search active: show search bar + results
+    if (feedSearchActive) {
+      const hasResults = feedSearchResults.users.length > 0 || feedSearchResults.posts.length > 0;
+      return (
+        <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {/* Search bar */}
+          <View style={styles.feedSearchBar}>
+            <Search size={16} color={colors.textMuted} strokeWidth={2} />
+            <TextInput
+              style={styles.feedSearchInput}
+              placeholder="Search users, posts, tokens..."
+              placeholderTextColor={colors.textMuted}
+              value={feedSearchQuery}
+              onChangeText={handleFeedSearch}
+              autoFocus
+              returnKeyType="search"
+            />
+            <TouchableOpacity onPress={() => { setFeedSearchActive(false); setFeedSearchQuery(''); setFeedSearchResults({ users: [], posts: [] }); }} activeOpacity={0.7}>
+              <X size={18} color={colors.textMuted} strokeWidth={2} />
+            </TouchableOpacity>
+          </View>
+
+          {feedSearchLoading && (
+            <View style={{ alignItems: 'center', paddingTop: 32 }}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          )}
+
+          {!feedSearchLoading && feedSearchQuery.trim() !== '' && !hasResults && (
+            <View style={{ alignItems: 'center', paddingTop: 48, paddingHorizontal: 24 }}>
+              <Text style={{ color: colors.textMuted, fontSize: 14, fontWeight: '600' }}>No results for "{feedSearchQuery}"</Text>
+            </View>
+          )}
+
+          {feedSearchResults.users.length > 0 && (
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.searchSectionTitle}>People</Text>
+              {feedSearchResults.users.map((user: any) => (
+                <TouchableOpacity
+                  key={user.id}
+                  style={styles.searchUserRow}
+                  activeOpacity={0.75}
+                  onPress={() => { setFeedSearchActive(false); setFeedSearchQuery(''); router.push(`/profile/${user.id}` as any); }}
+                >
+                  <View style={styles.searchUserAvatar}>
+                    {user.avatar_url
+                      ? <Image source={{ uri: user.avatar_url }} style={styles.searchUserAvatarImg} />
+                      : <User size={20} color={colors.textMuted} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.searchUserName}>{user.username || user.wallet_address?.slice(0, 8)}</Text>
+                    {user.wallet_address && (
+                      <Text style={styles.searchUserAddr}>{user.wallet_address.slice(0, 6)}...{user.wallet_address.slice(-4)}</Text>
+                    )}
+                  </View>
+                  <VerificationBadge profile={user} size="sm" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {feedSearchResults.posts.length > 0 && (
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.searchSectionTitle}>Posts</Text>
+              {feedSearchResults.posts.map((post: any) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentProfile={profile}
+                  onLike={handleLike}
+                  onComment={openCommentsModal}
+                  onRepost={handleRepost}
+                  onPromote={post.author_id === profile?.id ? openPromoteModal : undefined}
+                  onDelete={post.author_id === profile?.id ? requestDeletePost : undefined}
+                />
+              ))}
+            </View>
+          )}
+        </ScrollView>
+      );
+    }
+
+    // Normal feed
     return (
       <FlatList
         data={posts}
@@ -722,6 +857,14 @@ export default function CommunityScreen() {
 
   const renderProfileTab = () => {
     if (!profile) {
+      // Show spinner while profile is loading for a connected wallet
+      if (profileLoading || activeAddress) {
+        return (
+          <View style={[styles.emptyState, { justifyContent: 'center' }]}>
+            <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        );
+      }
       return (
         <View style={styles.emptyState}>
           <View style={styles.emptyIconWrap}>
@@ -867,36 +1010,68 @@ export default function CommunityScreen() {
             const otherUser = conv.otherUser;
             const displayName = otherUser.username || `${otherUser.wallet_address?.slice(0, 6)}...`;
             const msgTime = timeAgo(conv.lastMessage.created_at);
+            const isOpen = swipeOpenId === otherUser.id;
             return (
-              <TouchableOpacity
-                key={otherUser.id}
-                style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder]}
-                activeOpacity={0.75}
-                onPress={() => router.push(`/chat/${otherUser.id}` as any)}
-              >
-                <View style={styles.convAvatarWrap}>
-                  {otherUser.avatar_url
-                    ? <Image source={{ uri: otherUser.avatar_url }} style={styles.convAvatar} />
-                    : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>
-                  }
-                </View>
-                <View style={styles.convBody}>
-                  <View style={styles.convNameRow}>
-                    <Text style={styles.convUsername}>{displayName}</Text>
-                    <VerificationBadge profile={otherUser} size="sm" />
+              <View key={otherUser.id} style={{ overflow: 'hidden' }}>
+                {/* Swipe action buttons (revealed behind the row) */}
+                {isOpen && (
+                  <View style={styles.convSwipeActions}>
+                    <TouchableOpacity
+                      style={[styles.convSwipeBtn, styles.convSwipeBtnArchive]}
+                      onPress={() => handleArchiveConversation(otherUser.id)}
+                      activeOpacity={0.8}
+                    >
+                      {archivingId === otherUser.id
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={styles.convSwipeBtnText}>Archive</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.convSwipeBtn, styles.convSwipeBtnDelete]}
+                      onPress={() => setDeletingConvId(otherUser.id)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.convSwipeBtnText}>Delete</Text>
+                    </TouchableOpacity>
                   </View>
-                  {otherUser.username && otherUser.wallet_address ? (
-                    <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'SpaceMono-Regular', marginBottom: 1 }}>
-                      {otherUser.wallet_address.slice(0, 4)}...{otherUser.wallet_address.slice(-4)}
-                    </Text>
-                  ) : null}
-                  <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMessage.content}</Text>
-                </View>
-                <View style={styles.convMeta}>
-                  <Text style={styles.convTime}>{msgTime}</Text>
-                  {conv.unreadCount > 0 && <View style={styles.unreadDot} />}
-                </View>
-              </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.convRow, idx < filteredConvos.length - 1 && styles.convRowBorder, isOpen && { opacity: 0.7 }]}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    if (isOpen) { setSwipeOpenId(null); return; }
+                    router.push(`/chat/${otherUser.id}` as any);
+                  }}
+                  onLongPress={() => setSwipeOpenId(isOpen ? null : otherUser.id)}
+                >
+                  <TouchableOpacity
+                    style={styles.convAvatarWrap}
+                    onPress={() => router.push(`/profile/${otherUser.id}` as any)}
+                    activeOpacity={0.8}
+                  >
+                    {otherUser.avatar_url
+                      ? <Image source={{ uri: otherUser.avatar_url }} style={styles.convAvatar} />
+                      : <View style={[styles.convAvatar, styles.convAvatarFallback]}><User size={22} color={colors.textMuted} /></View>
+                    }
+                  </TouchableOpacity>
+                  <View style={styles.convBody}>
+                    <View style={styles.convNameRow}>
+                      <Text style={styles.convUsername}>{displayName}</Text>
+                      <VerificationBadge profile={otherUser} size="sm" />
+                    </View>
+                    {otherUser.username && otherUser.wallet_address ? (
+                      <Text style={{ fontSize: 10, color: colors.textMuted, fontFamily: 'SpaceMono-Regular', marginBottom: 1 }}>
+                        {otherUser.wallet_address.slice(0, 4)}...{otherUser.wallet_address.slice(-4)}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.convLastMsg} numberOfLines={1}>{conv.lastMessage.content}</Text>
+                  </View>
+                  <View style={styles.convMeta}>
+                    <Text style={styles.convTime}>{msgTime}</Text>
+                    {conv.unreadCount > 0 && <View style={styles.unreadDot} />}
+                  </View>
+                </TouchableOpacity>
+              </View>
             );
           })}
         </View>
@@ -1068,9 +1243,14 @@ export default function CommunityScreen() {
               <Text style={styles.headerSubtitle}>Connect with traders worldwide</Text>
             </View>
             {activeTab === 'feed' && (
-              <TouchableOpacity style={styles.composeBtn} onPress={() => router.push('/create-post')} activeOpacity={0.85}>
-                <Send size={18} color={colors.white} strokeWidth={2.5} />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <TouchableOpacity style={[styles.composeBtn, { backgroundColor: 'rgba(139,92,246,0.3)' }]} onPress={() => setFeedSearchActive(true)} activeOpacity={0.85}>
+                  <Search size={18} color={colors.white} strokeWidth={2.5} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.composeBtn} onPress={() => router.push('/create-post')} activeOpacity={0.85}>
+                  <Send size={18} color={colors.white} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </View>
@@ -1700,6 +1880,26 @@ export default function CommunityScreen() {
         }}
         isExternalWallet={activeWallet?.type === 'connected'}
       />
+
+      {/* Delete conversation confirmation */}
+      <Modal visible={!!deletingConvId} transparent animationType="fade" onRequestClose={() => setDeletingConvId(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { maxHeight: 220, justifyContent: 'center' }]}>
+            <Text style={[styles.modalTitle, { textAlign: 'center', marginBottom: 12 }]}>Delete Conversation?</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 14, textAlign: 'center', marginBottom: 24, lineHeight: 20 }}>
+              This removes the conversation from your inbox. The other person's copy is not affected.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity style={[styles.postBtn, { flex: 1, backgroundColor: 'rgba(255,255,255,0.08)' }]} onPress={() => setDeletingConvId(null)} activeOpacity={0.8}>
+                <Text style={[styles.postBtnText, { color: colors.textMuted }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.postBtn, { flex: 1, backgroundColor: '#ef4444' }]} onPress={() => deletingConvId && handleDeleteConversation(deletingConvId)} activeOpacity={0.8}>
+                <Text style={styles.postBtnText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Followers / Following List Modal */}
       <Modal visible={followListType !== null} animationType="slide" transparent>
@@ -3310,5 +3510,98 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
     letterSpacing: 0.5,
+  },
+
+  // ── Feed search ──
+  feedSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    gap: 10,
+  },
+  feedSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '500',
+  },
+  searchSectionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(196,196,212,0.5)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 6,
+  },
+  searchUserRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  searchUserAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  searchUserAvatarImg: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  searchUserName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  searchUserAddr: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.35)',
+    fontFamily: 'SpaceMono-Regular',
+  },
+
+  // ── Conversation swipe actions ──
+  convSwipeActions: {
+    flexDirection: 'row',
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    gap: 2,
+  },
+  convSwipeBtn: {
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  convSwipeBtnArchive: {
+    backgroundColor: '#F59E0B',
+  },
+  convSwipeBtnDelete: {
+    backgroundColor: '#EF4444',
+  },
+  convSwipeBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
