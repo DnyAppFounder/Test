@@ -66,10 +66,20 @@ async function _doFetchJupiterPrices(mints: string[]): Promise<Map<string, Token
 
   let res: Response;
   try {
-    res = await fetch(url, { headers: proxyHeaders() });
+    res = await fetch(url, {
+      headers: proxyHeaders(),
+      signal: AbortSignal.timeout(8000),
+    });
   } catch (err: any) {
-    console.error('[PriceService] Network error fetching prices:', err?.message);
-    return new Map();
+    const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    console.error(`[PriceService] ${isTimeout ? 'Timeout' : 'Network error'} fetching prices @ ${Date.now()}:`, err?.message);
+    // Return stale cache if available
+    const staleResult = new Map<string, TokenPrice>();
+    for (const mint of mints) {
+      const stale = globalPriceCache.get(mint);
+      if (stale) staleResult.set(mint, stale);
+    }
+    return staleResult;
   }
 
   if (!res.ok) {

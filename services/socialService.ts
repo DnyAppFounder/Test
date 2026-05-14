@@ -90,7 +90,7 @@ export interface Notification {
   id: string;
   user_id: string;
   actor_id: string | null;
-  type: 'like' | 'comment' | 'follow' | 'mention' | 'repost' | 'message';
+  type: 'like' | 'comment' | 'follow' | 'mention' | 'repost' | 'message' | 'promote';
   post_id: string | null;
   message: string;
   read: boolean;
@@ -770,7 +770,52 @@ export class SocialService {
       })
       .eq('id', postId);
 
-    return !error;
+    if (error) return false;
+
+    // Notify followers of the post author (fire-and-forget)
+    this.sendPromoteNotifications(postId, tierKey).catch(() => {});
+    return true;
+  }
+
+  private static async sendPromoteNotifications(postId: string, tierKey: string): Promise<void> {
+    try {
+      // Get post details
+      const { data: post } = await supabase
+        .from('posts')
+        .select('author_id, content')
+        .eq('id', postId)
+        .maybeSingle();
+      if (!post?.author_id) return;
+
+      // Get author's followers (up to 200)
+      const { data: follows } = await supabase
+        .from('follows')
+        .select('follower_id')
+        .eq('following_id', post.author_id)
+        .limit(200);
+      if (!follows || follows.length === 0) return;
+
+      const preview = (post.content || '').slice(0, 60);
+      const message = `Promoted post: "${preview}${preview.length === 60 ? '...' : ''}"`;
+
+      // Bulk insert notifications
+      const rows = follows
+        .map((f: any) => f.follower_id as string)
+        .filter((uid: string) => uid !== post.author_id)
+        .map((uid: string) => ({
+          user_id: uid,
+          actor_id: post.author_id,
+          type: 'promote' as const,
+          post_id: postId,
+          message,
+        }));
+
+      if (rows.length > 0) {
+        await supabase.from('notifications').insert(rows);
+      }
+    } catch {
+      // Best-effort, never crash
+    }
   }
 
   static async getFollowerCount(profileId: string): Promise<number> {
