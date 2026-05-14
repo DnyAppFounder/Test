@@ -78,6 +78,10 @@ class DexScreenerService {
     return this.cache.get(key)?.data || null;
   }
 
+  private getStaleCache<T>(key: string): T | null {
+    return (this.cache.get(key)?.data as T) ?? null;
+  }
+
   private setCache<T>(key: string, data: T, ttl: number) {
     this.cache.set(key, { data, timestamp: Date.now(), ttl });
   }
@@ -88,8 +92,11 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/search?q=${encodeURIComponent(query)}`);
-      if (!response.ok) return [];
+      const response = await fetch(
+        `${DEX_SCREENER_BASE}/latest/dex/search?q=${encodeURIComponent(query)}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) return this.getStaleCache<DexPair[]>(cacheKey) ?? [];
 
       const data = await response.json();
       const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
@@ -97,7 +104,7 @@ class DexScreenerService {
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Search error:', error);
-      return [];
+      return this.getStaleCache<DexPair[]>(cacheKey) ?? [];
     }
   }
 
@@ -107,8 +114,11 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/tokens/${tokenAddress}`);
-      if (!response.ok) return [];
+      const response = await fetch(
+        `${DEX_SCREENER_BASE}/latest/dex/tokens/${tokenAddress}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) return this.getStaleCache<DexPair[]>(cacheKey) ?? [];
 
       const data = await response.json();
       const pairs: DexPair[] = (data.pairs || []).filter((p: DexPair) => p.chainId === 'solana');
@@ -116,7 +126,7 @@ class DexScreenerService {
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Token lookup error:', error);
-      return [];
+      return this.getStaleCache<DexPair[]>(cacheKey) ?? [];
     }
   }
 
@@ -126,8 +136,11 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/latest/dex/pairs/solana/${pairAddress}`);
-      if (!response.ok) return null;
+      const response = await fetch(
+        `${DEX_SCREENER_BASE}/latest/dex/pairs/solana/${pairAddress}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) return this.getStaleCache<DexPair>(cacheKey);
 
       const data = await response.json();
       const pair = data.pair || data.pairs?.[0] || null;
@@ -135,7 +148,7 @@ class DexScreenerService {
       return pair;
     } catch (error) {
       console.error('[DexScreener] Pair lookup error:', error);
-      return null;
+      return this.getStaleCache<DexPair>(cacheKey);
     }
   }
 
@@ -159,15 +172,24 @@ class DexScreenerService {
     try {
       // token-boosts returns [{chainId, tokenAddress, amount, totalAmount, ...}]
       // We need to resolve these to actual pair data
-      const response = await fetch(`${DEX_SCREENER_BASE}/token-boosts/top/v1`);
-      if (!response.ok) return this.getTopSolanaTokensBySearch();
+      const response = await fetch(
+        `${DEX_SCREENER_BASE}/token-boosts/top/v1`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
 
       const boosts: any[] = await response.json();
       const solanaBoosts = (boosts || [])
         .filter((item: any) => item.chainId === 'solana')
         .slice(0, 20);
 
-      if (solanaBoosts.length === 0) return this.getTopSolanaTokensBySearch();
+      if (solanaBoosts.length === 0) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
 
       // Fetch actual pair data for each boosted token
       const pairPromises = solanaBoosts.map((boost: any) =>
@@ -184,11 +206,17 @@ class DexScreenerService {
         }
       }
 
+      if (pairs.length === 0) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
+
       this.setCache(cacheKey, pairs, CACHE_DURATION_LIST);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] Trending error:', error);
-      return this.getTopSolanaTokensBySearch();
+      const stale = this.getStaleCache<DexPair[]>(cacheKey);
+      return stale ?? this.getTopSolanaTokensBySearch();
     }
   }
 
@@ -203,8 +231,14 @@ class DexScreenerService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${DEX_SCREENER_BASE}/token-profiles/latest/v1`);
-      if (!response.ok) return this.getTopSolanaTokensBySearch();
+      const response = await fetch(
+        `${DEX_SCREENER_BASE}/token-profiles/latest/v1`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
 
       const data: any[] = await response.json();
       const addresses = (data || [])
@@ -212,7 +246,10 @@ class DexScreenerService {
         .slice(0, 15)
         .map((item: any) => item.tokenAddress);
 
-      if (addresses.length === 0) return this.getTopSolanaTokensBySearch();
+      if (addresses.length === 0) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
 
       const pairPromises = addresses.map((addr: string) =>
         this.getTokenByAddress(addr).catch(() => [] as DexPair[])
@@ -227,13 +264,19 @@ class DexScreenerService {
         }
       }
 
+      if (pairs.length === 0) {
+        const stale = this.getStaleCache<DexPair[]>(cacheKey);
+        return stale ?? this.getTopSolanaTokensBySearch();
+      }
+
       pairs.sort((a, b) => (b.pairCreatedAt || 0) - (a.pairCreatedAt || 0));
 
       this.setCache(cacheKey, pairs, CACHE_DURATION_LIST);
       return pairs;
     } catch (error) {
       console.error('[DexScreener] New tokens error:', error);
-      return this.getTopSolanaTokensBySearch();
+      const stale = this.getStaleCache<DexPair[]>(cacheKey);
+      return stale ?? this.getTopSolanaTokensBySearch();
     }
   }
 

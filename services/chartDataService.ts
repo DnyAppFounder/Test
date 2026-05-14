@@ -133,7 +133,10 @@ class ChartDataService {
       return cached.pairAddress;
     }
     try {
-      const response = await fetch(`${DEX_SCREENER_API}/latest/dex/tokens/${tokenAddress}`);
+      const response = await fetch(
+        `${DEX_SCREENER_API}/latest/dex/tokens/${tokenAddress}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
       if (!response.ok) return null;
       const data  = await response.json();
       const pairs = (data.pairs || []).filter((p: any) => p.chainId === 'solana') as any[];
@@ -171,6 +174,7 @@ class ChartDataService {
 
       const response = await fetch(url, {
         headers: { Accept: 'application/json;version=20230302' },
+        signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) return [];
 

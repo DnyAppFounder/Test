@@ -201,12 +201,7 @@ export default function WalletHome() {
     setLiveTokens(prev => { if (prev.length === 0) setLoading(true); return prev; });
     setError(null);
     try {
-      let tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
-      // Retry once after 2s if first attempt returns empty (transient API blip)
-      if (tokens.length === 0) {
-        await new Promise(r => setTimeout(r, 2000));
-        tokens = await liveMarketService.getTokensByCategory('trending' as MarketCategory);
-      }
+      const tokens = await liveMarketService.getTokensByCategory(category as MarketCategory);
       if (tokens.length === 0) {
         setLiveTokens(prev => {
           if (prev.length === 0) setError('Market data temporarily unavailable. Pull down to refresh.');

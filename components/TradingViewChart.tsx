@@ -585,10 +585,7 @@ export function TradingViewChart({
   const visibleMs      = visibleBuckets * bucketMs;
   const leftTime       = rightTime - visibleMs;
 
-  // Sync refs so stale closures (panResponder, crosshair) always see current values
   bucketMsRef.current  = bucketMs;
-  visibleMsRef.current = visibleMs;
-  leftTimeRef.current  = leftTime;
 
   // Build the complete time-bucketed candle array.
   // fillBuckets ensures EVERY slot from leftTime→rightTime exists:
@@ -611,9 +608,32 @@ export function TradingViewChart({
   displayCandlesRef.current = displayCandles;
   const n = displayCandles.length;
 
+  // ── Adaptive x-range ─────────────────────────────────────────────────────
+  // For tokens whose trade history is shorter than the visible window, the
+  // data would normally appear compressed into the right portion of the chart
+  // (the left is empty because the token didn't exist yet). Instead, shift the
+  // left boundary so that the first real candle sits ~2 buckets from the left
+  // edge, filling the chart naturally — exactly like DexScreener.
+  // Only applied when not manually scrolled (panOffset = 0) so dragging still works.
+  let xLeft       = leftTime;
+  let xVisibleMs  = visibleMs;
+  if (displayCandles.length > 0 && panOffsetCandles === 0) {
+    const firstDataTs = displayCandles[0].timestamp;
+    // If the first real candle starts more than 35% into the window from the left,
+    // anchor the left boundary 2 buckets before the first candle.
+    if (firstDataTs > leftTime + visibleMs * 0.35) {
+      xLeft      = firstDataTs - bucketMs * 2;
+      xVisibleMs = rightTime - xLeft;
+    }
+  }
+
+  // Sync refs — crosshair + panResponder stale closures read these
+  leftTimeRef.current  = xLeft;
+  visibleMsRef.current = xVisibleMs;
+
   // Convert a Unix-ms timestamp to a chart x-coordinate
   function tsToX(ts: number): number {
-    return PAD.left + ((ts - leftTime) / visibleMs) * plotW;
+    return PAD.left + ((ts - xLeft) / xVisibleMs) * plotW;
   }
 
   // ── Stable price scale ───────────────────────────────────────────────────
@@ -632,11 +652,14 @@ export function TradingViewChart({
       const range = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
       const pad   = range * 0.15;
       const realVols = displayCandles.filter(c => c.volume > 0).map(c => c.volume);
+      const sortedVols = [...realVols].sort((a, b) => a - b);
+      const p90idx = Math.min(Math.floor(sortedVols.length * 0.9), sortedVols.length - 1);
+      const cappedMaxVol = sortedVols.length > 0 ? Math.max(sortedVols[p90idx] * 1.5, 1) : 1;
       priceScaleRef.current = {
         maxP:       safeMax + pad,
         minP:       Math.max(0, safeMin - pad),
         priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
-        maxVol:     realVols.length > 0 ? Math.max(...realVols) : 1,
+        maxVol:     cappedMaxVol,
       };
     }
     // Expand scale in-place when the live candle exceeds current bounds
@@ -657,7 +680,7 @@ export function TradingViewChart({
     }
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
-  const pixelPerBucket = n > 0 ? (bucketMs / visibleMs) * plotW : plotW / visibleBuckets;
+  const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : plotW / visibleBuckets;
   const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
   const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
 
@@ -787,7 +810,8 @@ export function TradingViewChart({
   // Never use livePrice state directly for display — applyLivePrice keeps candles in sync.
   const latestClose     = candles.length > 0 ? candles[candles.length - 1].close : 0;
   const displayPriceVal = latestClose > 0 ? latestClose
-    : (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
+    : (livePrice != null && livePrice > 0 ? livePrice : 0)
+    || (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
   const mcapVal    = resolvedInfo?.marketCap ?? null;
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
@@ -1031,7 +1055,7 @@ export function TradingViewChart({
   // Time labels — generated from leftTime→rightTime at regular bucket intervals
   // Aim for ~5-6 labels; step = multiple of bucketMs so labels land on clean boundaries
   const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(visibleBuckets / 6));
-  const firstLabelTs    = Math.ceil(leftTime / timeLabelStepMs) * timeLabelStepMs;
+  const firstLabelTs    = Math.ceil(xLeft / timeLabelStepMs) * timeLabelStepMs;
   const timeLabels: { ts: number; x: number }[] = [];
   for (let ts = firstLabelTs; ts <= rightTime; ts += timeLabelStepMs) {
     const x = tsToX(ts);
