@@ -93,11 +93,15 @@ class JupiterSwapService {
 
     let response: Response;
     try {
-      response = await fetch(url, { headers: proxyHeaders() });
+      response = await fetch(url, {
+        headers: proxyHeaders(),
+        signal: AbortSignal.timeout(8000),
+      });
     } catch (networkErr: any) {
+      const isTimeout = networkErr?.name === 'TimeoutError' || networkErr?.name === 'AbortError';
       const msg = networkErr?.message || String(networkErr);
-      console.error('[Jupiter] Network error fetching quote:', msg);
-      throw new Error(`Jupiter quote network error: ${msg}`);
+      console.error(`[Jupiter] ${isTimeout ? 'Timeout (8s)' : 'Network error'} fetching quote @ ${Date.now()}:`, msg);
+      throw new Error(`Jupiter quote ${isTimeout ? 'timed out' : 'network error'}: ${msg}`);
     }
 
     const bodyText = await response.text().catch(() => '');
@@ -180,11 +184,13 @@ class JupiterSwapService {
         method: 'POST',
         headers: proxyHeaders(),
         body,
+        signal: AbortSignal.timeout(10000),
       });
     } catch (networkErr: any) {
+      const isTimeout = networkErr?.name === 'TimeoutError' || networkErr?.name === 'AbortError';
       const msg = networkErr?.message || String(networkErr);
-      console.error('[Jupiter] Network error building swap tx:', msg);
-      throw new Error(`Jupiter swap network error: ${msg}`);
+      console.error(`[Jupiter] ${isTimeout ? 'Timeout (10s)' : 'Network error'} building swap tx @ ${Date.now()}:`, msg);
+      throw new Error(`Jupiter swap tx ${isTimeout ? 'timed out' : 'network error'}: ${msg}`);
     }
 
     const bodyText = await response.text().catch(() => '');

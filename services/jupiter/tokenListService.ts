@@ -122,13 +122,13 @@ class JupiterTokenListService {
 
     if (proxy) {
       // Proxy strict list
-      attempts.push(() => fetch(`${proxy}?action=tokens&list=strict`, { headers }));
+      attempts.push(() => fetch(`${proxy}?action=tokens&list=strict`, { headers, signal: AbortSignal.timeout(8000) }));
       // Proxy all list
-      attempts.push(() => fetch(`${proxy}?action=tokens`, { headers }));
+      attempts.push(() => fetch(`${proxy}?action=tokens`, { headers, signal: AbortSignal.timeout(8000) }));
     }
     // Direct fallback (works in native / server; blocked by CORS in browser)
-    attempts.push(() => fetch(JUPITER_STRICT_URL));
-    attempts.push(() => fetch(JUPITER_ALL_URL));
+    attempts.push(() => fetch(JUPITER_STRICT_URL, { signal: AbortSignal.timeout(8000) }));
+    attempts.push(() => fetch(JUPITER_ALL_URL, { signal: AbortSignal.timeout(8000) }));
 
     for (const attempt of attempts) {
       try {

@@ -4,7 +4,7 @@ import {
   TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Crown } from 'lucide-react-native';
+import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
 import {
   WorldRoom, RoomStyle, ROOM_STYLE_CONFIG,
   getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
@@ -134,17 +134,10 @@ export function DawenWorldRoomDirectory({
         </TouchableOpacity>
         <MapIcon size={18} color={colors.primary} strokeWidth={2} />
         <Text style={styles.title}>Room Directory</Text>
-        {isPremium ? (
-          <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
-            <Plus size={16} color="#fff" strokeWidth={2.5} />
-            <Text style={styles.createText}>Create</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={[styles.createBtn, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
-            <Crown size={14} color="#F59E0B" strokeWidth={2} />
-            <Text style={[styles.createText, { color: 'rgba(255,255,255,0.4)' }]}>Premium Only</Text>
-          </View>
-        )}
+        <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
+          <Plus size={16} color="#fff" strokeWidth={2.5} />
+          <Text style={styles.createText}>Create</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Tabs */}

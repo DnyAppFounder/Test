@@ -42,21 +42,21 @@ interface ThemeVisual {
 }
 
 const THEME_VISUALS: Record<string, ThemeVisual> = {
-  'DAWEN Neon Room':      { wallGradient: ['#1A1E2E','#222840','#1A1E2E'], floorEven: 'rgba(180,150,70,0.12)', floorOdd: 'rgba(140,110,45,0.18)', dividerColor: '#C09030' },
-  'Purple Lounge':        { wallGradient: ['#201045','#2E1560','#201045'], floorEven: 'rgba(120,60,240,0.12)', floorOdd: 'rgba(90,40,200,0.18)', dividerColor: '#9D4EDD' },
-  'Trading Room':         { wallGradient: ['#0A1F0A','#143A14','#0A1F0A'], floorEven: 'rgba(16,185,129,0.10)', floorOdd: 'rgba(10,120,80,0.16)', dividerColor: '#10B981' },
-  'Crew Room':            { wallGradient: ['#141428','#1E1E42','#141428'], floorEven: 'rgba(59,130,246,0.10)', floorOdd: 'rgba(37,99,235,0.16)', dividerColor: '#3B82F6' },
-  'Cyber Apartment':      { wallGradient: ['#0A1525','#142A40','#0A1525'], floorEven: 'rgba(6,182,212,0.10)', floorOdd: 'rgba(8,145,178,0.16)', dividerColor: '#06B6D4' },
-  'Solana Studio':        { wallGradient: ['#1A1A0A','#282820','#1A1A0A'], floorEven: 'rgba(245,158,11,0.10)', floorOdd: 'rgba(217,119,6,0.15)', dividerColor: '#F59E0B' },
-  'Royal Purple Suite':   { wallGradient: ['#251545','#381F68','#251545'], floorEven: 'rgba(167,139,250,0.12)', floorOdd: 'rgba(139,92,246,0.18)', dividerColor: '#A78BFA' },
-  'Empty Grid Room':      { wallGradient: ['#121218','#1A1A22','#121218'], floorEven: 'rgba(255,255,255,0.04)', floorOdd: 'rgba(255,255,255,0.07)', dividerColor: 'rgba(255,255,255,0.25)' },
+  'DAWEN Neon Room':      { wallGradient: ['#2A3050','#343C62','#2A3050'], floorEven: 'rgba(200,175,80,0.72)', floorOdd: 'rgba(160,138,55,0.82)', dividerColor: '#D4A830' },
+  'Purple Lounge':        { wallGradient: ['#2E1060','#3C2080','#2E1060'], floorEven: 'rgba(145,85,255,0.65)', floorOdd: 'rgba(110,55,210,0.78)', dividerColor: '#A855F7' },
+  'Trading Room':         { wallGradient: ['#0A2A10','#104A1A','#0A2A10'], floorEven: 'rgba(22,200,135,0.60)', floorOdd: 'rgba(14,150,90,0.74)', dividerColor: '#10B981' },
+  'Crew Room':            { wallGradient: ['#0E1840','#182258','#0E1840'], floorEven: 'rgba(70,140,255,0.62)', floorOdd: 'rgba(45,105,235,0.76)', dividerColor: '#3B82F6' },
+  'Cyber Apartment':      { wallGradient: ['#08253A','#103A55','#08253A'], floorEven: 'rgba(10,200,225,0.60)', floorOdd: 'rgba(6,155,180,0.74)', dividerColor: '#06B6D4' },
+  'Solana Studio':        { wallGradient: ['#252510','#353520','#252510'], floorEven: 'rgba(255,175,20,0.62)', floorOdd: 'rgba(225,140,8,0.76)', dividerColor: '#F59E0B' },
+  'Royal Purple Suite':   { wallGradient: ['#301A5A','#422878','#301A5A'], floorEven: 'rgba(180,155,255,0.65)', floorOdd: 'rgba(150,110,245,0.78)', dividerColor: '#A78BFA' },
+  'Empty Grid Room':      { wallGradient: ['#1A1A24','#222230','#1A1A24'], floorEven: 'rgba(255,255,255,0.12)', floorOdd: 'rgba(200,200,220,0.20)', dividerColor: 'rgba(255,255,255,0.40)' },
 };
 
 const DEFAULT_THEME_VISUAL: ThemeVisual = {
-  wallGradient: ['#141420','#1A1A30','#141420'],
-  floorEven: 'rgba(80,60,180,0.08)',
-  floorOdd: 'rgba(50,35,130,0.14)',
-  dividerColor: 'rgba(139,92,246,0.45)',
+  wallGradient: ['#1E1A34','#28224A','#1E1A34'],
+  floorEven: 'rgba(100,80,200,0.60)',
+  floorOdd: 'rgba(70,50,160,0.74)',
+  dividerColor: 'rgba(139,92,246,0.70)',
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -531,7 +531,7 @@ export function DawenWorldRoom({
         style={styles.sceneScroll}
       >
         <LinearGradient
-          colors={['#10121F', '#161A30', '#10121F']}
+          colors={themeVis.wallGradient as [string, string, string]}
           style={{ width: Math.max(ISO_CANVAS_W, screenW), height: ISO_CANVAS_H + 4 }}
         >
           {/* Tap responder layer — inverse iso projection maps touches to grid coords */}
