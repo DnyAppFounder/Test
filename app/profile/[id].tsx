@@ -174,6 +174,8 @@ export default function ProfileScreen() {
   const [followingCount, setFollowingCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockLoading, setBlockLoading] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
 
   // Followers/Following modal
@@ -257,7 +259,12 @@ export default function ProfileScreen() {
       const me = await SocialService.getOrCreateProfile(walletAddr);
       setCurrentUserProfile(me);
       if (me && me.id !== id) {
-        setIsFollowing(await SocialService.isFollowing(me.id, id));
+        const [following, blocked] = await Promise.all([
+          SocialService.isFollowing(me.id, id),
+          SocialService.isBlocked(me.id, id),
+        ]);
+        setIsFollowing(following);
+        setIsBlocked(blocked);
       }
     }
     setLoading(false);
@@ -298,6 +305,30 @@ export default function ProfileScreen() {
   const handleMessage = () => {
     if (!profile?.id) return;
     router.push(`/chat/${profile.id}` as any);
+  };
+
+  const handleBlock = async () => {
+    if (!currentUserProfile || !id || isOwnProfile) return;
+    setBlockLoading(true);
+    try {
+      if (isBlocked) {
+        await SocialService.unblockUser(currentUserProfile.id, id);
+        setIsBlocked(false);
+      } else {
+        await SocialService.blockUser(currentUserProfile.id, id);
+        setIsBlocked(true);
+        // Unfollow if currently following
+        if (isFollowing) {
+          await SocialService.toggleFollow(currentUserProfile.id, id);
+          setIsFollowing(false);
+          setFollowerCount(prev => Math.max(0, prev - 1));
+        }
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setBlockLoading(false);
+    }
   };
 
   const openEditModal = () => {
@@ -893,6 +924,17 @@ export default function ProfileScreen() {
             >
               <MessageCircle size={16} color={colors.textPrimary} strokeWidth={2} />
               <Text style={styles.messageBtnText}>Message</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.blockBtn, isBlocked && styles.blockedBtn]}
+              onPress={handleBlock}
+              disabled={blockLoading}
+              activeOpacity={0.85}
+            >
+              {blockLoading
+                ? <ActivityIndicator size="small" color={isBlocked ? '#EF4444' : colors.textMuted} />
+                : <Shield size={16} color={isBlocked ? '#EF4444' : colors.textMuted} strokeWidth={2} />
+              }
             </TouchableOpacity>
           </View>
         ) : null}
@@ -1682,6 +1724,8 @@ const styles = StyleSheet.create({
   followingBtnText: { color: colors.primary },
   messageBtn: { flex: 1, backgroundColor: '#1A1A28', borderColor: 'rgba(255,255,255,0.1)' },
   messageBtnText: { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary },
+  blockBtn: { flex: 0, paddingHorizontal: spacing.md, backgroundColor: '#1A1A28', borderColor: 'rgba(255,255,255,0.1)' },
+  blockedBtn: { backgroundColor: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)' },
   premiumBtn: {
     flex: 1, backgroundColor: 'rgba(251,191,36,0.12)',
     borderColor: '#FBBF24', borderWidth: 1,

@@ -94,7 +94,8 @@ export default function CreatePostScreen() {
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string }[]>([]);
   const [gifSearching, setGifSearching] = useState(false);
-  const GIPHY_KEY = process.env.EXPO_PUBLIC_GIPHY_API_KEY ?? '';
+  // Fall back to Giphy public demo key when none is configured
+  const GIPHY_KEY = process.env.EXPO_PUBLIC_GIPHY_API_KEY || 'dc6zaTOxFJmzC';
 
   // Poll
   const [showPoll, setShowPoll] = useState(false);
@@ -304,6 +305,22 @@ export default function CreatePostScreen() {
     setGifQuery('');
     setGifResults([]);
     setShowGifPicker(true);
+    // Load trending GIFs immediately on open
+    if (GIPHY_KEY) {
+      setGifSearching(true);
+      fetch(`https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_KEY}&limit=20&rating=g`)
+        .then(r => r.json())
+        .then(json => {
+          const results = (json.data || []).map((item: any) => ({
+            id: item.id,
+            url: item.images?.original?.url ?? item.images?.fixed_height?.url ?? '',
+            preview: item.images?.fixed_height_small?.url ?? item.images?.fixed_height?.url ?? '',
+          })).filter((g: any) => g.url);
+          setGifResults(results);
+        })
+        .catch(() => {})
+        .finally(() => setGifSearching(false));
+    }
   };
 
   const selectGif = (url: string) => {
