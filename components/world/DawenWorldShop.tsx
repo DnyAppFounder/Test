@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, ShoppingBag, Zap, Crown, Lock } from 'lucide-react-native';
 import {
   WorldCatalogItem, WorldInventoryItem, purchaseWorldItem, getCatalog,
+  getDawenCoinBalance,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { WorldSprite } from './WorldSprite';
@@ -39,9 +40,11 @@ export function DawenWorldShop({
   const [buying, setBuying] = useState(false);
   const [buyStatus, setBuyStatus] = useState('');
   const [buyError, setBuyError] = useState('');
+  const [dawenBalance, setDawenBalance] = useState(0);
 
   useEffect(() => {
     getCatalog().then(c => { setCatalog(c.filter(i => !i.is_starter)); setLoading(false); });
+    getDawenCoinBalance(walletAddress).then(b => setDawenBalance(b)).catch(() => {});
   }, []);
 
   const filtered = catalog.filter(i => {
@@ -70,6 +73,7 @@ export function DawenWorldShop({
     if (result.success) {
       setBuyItem(null);
       onPurchased(buyItem);
+      getDawenCoinBalance(walletAddress).then(b => setDawenBalance(b)).catch(() => {});
     } else {
       setBuyError(result.error ?? 'Purchase failed');
     }
@@ -86,6 +90,10 @@ export function DawenWorldShop({
         </TouchableOpacity>
         <ShoppingBag size={18} color={colors.primary} strokeWidth={2} />
         <Text style={styles.title}>World Shop</Text>
+        <View style={styles.balancePill}>
+          <Zap size={12} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />
+          <Text style={styles.balanceText}>{Math.floor(dawenBalance).toLocaleString()}</Text>
+        </View>
       </View>
 
       {/* Category tabs */}
@@ -234,4 +242,11 @@ const styles = StyleSheet.create({
   buyBtnText: { fontSize: fontSize.sm, fontWeight: '800', color: '#fff' },
   cancelBtn: { paddingVertical: spacing.sm },
   cancelText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+  balancePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(245,158,11,0.15)', borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)',
+  },
+  balanceText: { fontSize: 12, fontWeight: '800', color: '#F59E0B' },
 });

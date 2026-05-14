@@ -13,7 +13,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ArrowLeft, Users, ShoppingBag, Package, Map as MapIcon,
-  CreditCard as Edit3, Trash2, RotateCw, X, Crown,
+  CreditCard as Edit3, Trash2, RotateCw, X,
+  ChevronDown, ChevronUp,
 } from 'lucide-react-native';
 import {
   WorldRoom, WorldPresence, WorldMessage, WorldRoomItem, WorldInventoryItem,
@@ -24,7 +25,8 @@ import {
   subscribeToPositionBroadcasts, broadcastPosition,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
-import { WorldSprite, HAIR_SPRITES } from './WorldSprite';
+import { WorldSprite } from './WorldSprite';
+import { WorldAvatarChar, AvatarGesture } from './WorldAvatarChar';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -40,355 +42,22 @@ interface ThemeVisual {
 }
 
 const THEME_VISUALS: Record<string, ThemeVisual> = {
-  'DAWEN Neon Room':      { wallGradient: ['#0A0C14','#111828','#0A0C14'], floorEven: 'rgba(180,150,70,0.08)', floorOdd: 'rgba(140,110,45,0.13)', dividerColor: '#C09030' },
-  'Purple Lounge':        { wallGradient: ['#120530','#1E0840','#120530'], floorEven: 'rgba(120,60,240,0.08)', floorOdd: 'rgba(90,40,200,0.13)', dividerColor: '#9D4EDD' },
-  'Trading Room':         { wallGradient: ['#051005','#0A1F0A','#051005'], floorEven: 'rgba(16,185,129,0.07)', floorOdd: 'rgba(10,120,80,0.11)', dividerColor: '#10B981' },
-  'Crew Room':            { wallGradient: ['#0A0A1A','#131328','#0A0A1A'], floorEven: 'rgba(59,130,246,0.07)', floorOdd: 'rgba(37,99,235,0.11)', dividerColor: '#3B82F6' },
-  'Cyber Apartment':      { wallGradient: ['#050A15','#0A1525','#050A15'], floorEven: 'rgba(6,182,212,0.07)', floorOdd: 'rgba(8,145,178,0.11)', dividerColor: '#06B6D4' },
-  'Solana Studio':        { wallGradient: ['#0A0A05','#141410','#0A0A05'], floorEven: 'rgba(245,158,11,0.06)', floorOdd: 'rgba(217,119,6,0.10)', dividerColor: '#F59E0B' },
-  'Royal Purple Suite':   { wallGradient: ['#1A0A30','#260F4A','#1A0A30'], floorEven: 'rgba(167,139,250,0.09)', floorOdd: 'rgba(139,92,246,0.14)', dividerColor: '#A78BFA' },
-  'Empty Grid Room':      { wallGradient: ['#080808','#101010','#080808'], floorEven: 'rgba(255,255,255,0.025)', floorOdd: 'rgba(255,255,255,0.04)', dividerColor: 'rgba(255,255,255,0.2)' },
+  'DAWEN Neon Room':      { wallGradient: ['#1A1E2E','#222840','#1A1E2E'], floorEven: 'rgba(180,150,70,0.12)', floorOdd: 'rgba(140,110,45,0.18)', dividerColor: '#C09030' },
+  'Purple Lounge':        { wallGradient: ['#201045','#2E1560','#201045'], floorEven: 'rgba(120,60,240,0.12)', floorOdd: 'rgba(90,40,200,0.18)', dividerColor: '#9D4EDD' },
+  'Trading Room':         { wallGradient: ['#0A1F0A','#143A14','#0A1F0A'], floorEven: 'rgba(16,185,129,0.10)', floorOdd: 'rgba(10,120,80,0.16)', dividerColor: '#10B981' },
+  'Crew Room':            { wallGradient: ['#141428','#1E1E42','#141428'], floorEven: 'rgba(59,130,246,0.10)', floorOdd: 'rgba(37,99,235,0.16)', dividerColor: '#3B82F6' },
+  'Cyber Apartment':      { wallGradient: ['#0A1525','#142A40','#0A1525'], floorEven: 'rgba(6,182,212,0.10)', floorOdd: 'rgba(8,145,178,0.16)', dividerColor: '#06B6D4' },
+  'Solana Studio':        { wallGradient: ['#1A1A0A','#282820','#1A1A0A'], floorEven: 'rgba(245,158,11,0.10)', floorOdd: 'rgba(217,119,6,0.15)', dividerColor: '#F59E0B' },
+  'Royal Purple Suite':   { wallGradient: ['#251545','#381F68','#251545'], floorEven: 'rgba(167,139,250,0.12)', floorOdd: 'rgba(139,92,246,0.18)', dividerColor: '#A78BFA' },
+  'Empty Grid Room':      { wallGradient: ['#121218','#1A1A22','#121218'], floorEven: 'rgba(255,255,255,0.04)', floorOdd: 'rgba(255,255,255,0.07)', dividerColor: 'rgba(255,255,255,0.25)' },
 };
 
 const DEFAULT_THEME_VISUAL: ThemeVisual = {
-  wallGradient: ['#080812','#0D0D1A','#080812'],
-  floorEven: 'rgba(80,60,180,0.05)',
-  floorOdd: 'rgba(50,35,130,0.09)',
-  dividerColor: 'rgba(139,92,246,0.35)',
+  wallGradient: ['#141420','#1A1A30','#141420'],
+  floorEven: 'rgba(80,60,180,0.08)',
+  floorOdd: 'rgba(50,35,130,0.14)',
+  dividerColor: 'rgba(139,92,246,0.45)',
 };
-
-// ─── WorldAvatarChar ──────────────────────────────────────────────────────────
-
-type AvatarGesture = 'none' | 'wave' | 'dance';
-
-interface AvatarCharProps {
-  config: AvatarConfig;
-  username: string;
-  isPremium: boolean;
-  size?: number;
-  sitting?: boolean;
-  walking?: boolean;
-  gesture?: AvatarGesture;
-}
-
-function WorldAvatarChar({ config, username, isPremium, size = 48, sitting = false, walking = false, gesture = 'none' }: AvatarCharProps) {
-  const walkAnim  = useRef(new Animated.Value(0)).current;
-  const waveAnim  = useRef(new Animated.Value(0)).current;
-  const danceAnim = useRef(new Animated.Value(0)).current;
-  const walkLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
-  const waveLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
-  const danceLoopRef = useRef<Animated.CompositeAnimation | null>(null);
-
-  // Walk loop — only when walking and no gesture active
-  useEffect(() => {
-    if (walking && !sitting && gesture === 'none') {
-      walkLoopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(walkAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
-          Animated.timing(walkAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
-        ])
-      );
-      walkLoopRef.current.start();
-    } else {
-      walkLoopRef.current?.stop();
-      walkLoopRef.current = null;
-      walkAnim.setValue(0);
-    }
-    return () => { walkLoopRef.current?.stop(); };
-  }, [walking, sitting, gesture]);
-
-  // Wave loop
-  useEffect(() => {
-    if (gesture === 'wave') {
-      waveLoopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(waveAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-          Animated.timing(waveAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-        ])
-      );
-      waveLoopRef.current.start();
-    } else {
-      waveLoopRef.current?.stop();
-      waveLoopRef.current = null;
-      waveAnim.setValue(0);
-    }
-    return () => { waveLoopRef.current?.stop(); };
-  }, [gesture]);
-
-  // Dance loop
-  useEffect(() => {
-    if (gesture === 'dance') {
-      danceLoopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(danceAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
-          Animated.timing(danceAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
-        ])
-      );
-      danceLoopRef.current.start();
-    } else {
-      danceLoopRef.current?.stop();
-      danceLoopRef.current = null;
-      danceAnim.setValue(0);
-    }
-    return () => { danceLoopRef.current?.stop(); };
-  }, [gesture]);
-
-  // Scale everything relative to size (base design at 56px)
-  const sc = Math.max(0.5, size / 56);
-  const s = (n: number) => Math.max(1, Math.round(n * sc));
-
-  const skinColor = config.bodyColor ?? '#F4C08A';
-  const outfitColor = config.outfitColor ?? '#3B82F6';
-  const hairIdx = config.hairStyle ?? 0;
-  const HairSprite = HAIR_SPRITES[hairIdx] ?? null;
-  const hairSize = s(18);
-
-  // Walk — leg/arm alternation
-  const leg1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(4)] });
-  const leg2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [-s(4), 0] });
-  const arm1Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, s(2)] });
-  const arm2Y = walkAnim.interpolate({ inputRange: [0, 1], outputRange: [s(2), 0] });
-
-  // Wave — right arm raises up
-  const waveArmRot = waveAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-70deg'] });
-  const waveArmTY  = waveAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(8)] });
-
-  // Dance — body bounce + arms spread
-  const danceBodyY  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -s(5)] });
-  const danceArm1R  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '40deg'] });
-  const danceArm2R  = danceAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-40deg'] });
-
-  // Compute arm transforms based on active gesture
-  const leftArmTransform  = gesture === 'dance' ? [{ rotate: danceArm1R }] : [{ translateY: arm1Y }];
-  const rightArmTransform = gesture === 'wave'
-    ? [{ rotate: waveArmRot }, { translateY: waveArmTY }]
-    : gesture === 'dance' ? [{ rotate: danceArm2R }] : [{ translateY: arm2Y }];
-
-  return (
-    <Animated.View style={[ch.root, gesture === 'dance' && { transform: [{ translateY: danceBodyY }] }]}>
-      {/* Aura glow ring */}
-      {config.auraColor ? (
-        <View style={[ch.aura, {
-          width: s(30), height: s(50),
-          borderColor: config.auraColor,
-          shadowColor: config.auraColor,
-        }]} />
-      ) : null}
-
-      {/* Premium crown */}
-      {isPremium ? (
-        <View style={ch.crownWrap}>
-          <Crown size={s(10)} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />
-        </View>
-      ) : null}
-
-      {/* Cap / hat */}
-      {HairSprite ? (
-        <View style={{ height: hairSize, marginBottom: -s(2) }}>
-          <HairSprite size={hairSize} />
-        </View>
-      ) : (
-        <Svg width={s(26)} height={s(14)} viewBox="0 0 26 14" style={{ marginBottom: -s(2) }}>
-          {/* Cap dome */}
-          <SvgEllipse cx={13} cy={7} rx={11} ry={6.5} fill={outfitColor} />
-          {/* Cap highlight */}
-          <SvgEllipse cx={10} cy={4.5} rx={4.5} ry={2.5} fill="rgba(255,255,255,0.18)" />
-          {/* Cap brim */}
-          <SvgRect x={1} y={10} width={24} height={4} rx={2} fill={outfitColor} opacity={0.85} />
-          {/* Brim shadow */}
-          <SvgRect x={1} y={12} width={24} height={2} rx={1} fill="rgba(0,0,0,0.2)" />
-          {/* D badge */}
-          <SvgCircle cx={13} cy={7} r={3.5} fill="rgba(0,0,0,0.2)" />
-          <SvgText x={13} y={9} fill="rgba(255,255,255,0.9)" fontSize={5.5} fontWeight="900" textAnchor="middle">D</SvgText>
-        </Svg>
-      )}
-
-      {/* Head — SVG with realistic facial features */}
-      <Svg width={s(24)} height={s(23)} viewBox="0 0 24 23">
-        {/* Ear left */}
-        <SvgEllipse cx={1.8} cy={12} rx={2.2} ry={3} fill={skinColor} />
-        <SvgEllipse cx={2} cy={12} rx={1.2} ry={2} fill="rgba(0,0,0,0.08)" />
-        {/* Ear right */}
-        <SvgEllipse cx={22.2} cy={12} rx={2.2} ry={3} fill={skinColor} />
-        <SvgEllipse cx={22} cy={12} rx={1.2} ry={2} fill="rgba(0,0,0,0.08)" />
-        {/* Head oval */}
-        <SvgEllipse cx={12} cy={11.5} rx={9.8} ry={9.5} fill={skinColor} />
-        {/* Forehead highlight */}
-        <SvgEllipse cx={10} cy={6} rx={4.5} ry={2.5} fill="rgba(255,255,255,0.12)" />
-        {/* Eyebrow left */}
-        <SvgPath d="M5,8 Q7.5,6.2 9.5,7.5" stroke="rgba(0,0,0,0.5)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
-        {/* Eyebrow right */}
-        <SvgPath d="M14.5,7.5 Q16.5,6.2 19,8" stroke="rgba(0,0,0,0.5)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
-        {/* Eye socket left */}
-        <SvgEllipse cx={8} cy={11.5} rx={3.2} ry={2.8} fill="white" />
-        {/* Eye socket right */}
-        <SvgEllipse cx={16} cy={11.5} rx={3.2} ry={2.8} fill="white" />
-        {/* Iris left */}
-        <SvgEllipse cx={8.4} cy={11.5} rx={1.8} ry={2} fill={outfitColor} />
-        {/* Iris right */}
-        <SvgEllipse cx={16.4} cy={11.5} rx={1.8} ry={2} fill={outfitColor} />
-        {/* Pupil left */}
-        <SvgEllipse cx={8.6} cy={11.4} rx={1} ry={1.1} fill="#0A0A0A" />
-        {/* Pupil right */}
-        <SvgEllipse cx={16.6} cy={11.4} rx={1} ry={1.1} fill="#0A0A0A" />
-        {/* Eye shine left */}
-        <SvgEllipse cx={9.1} cy={10.8} rx={0.5} ry={0.5} fill="white" />
-        {/* Eye shine right */}
-        <SvgEllipse cx={17.1} cy={10.8} rx={0.5} ry={0.5} fill="white" />
-        {/* Nose */}
-        <SvgPath d="M11,14.5 Q12,16 13,14.5" stroke="rgba(0,0,0,0.25)" strokeWidth={1.1} fill="none" strokeLinecap="round" />
-        {/* Nostril left */}
-        <SvgEllipse cx={10.5} cy={15.5} rx={0.8} ry={0.5} fill="rgba(0,0,0,0.15)" />
-        {/* Nostril right */}
-        <SvgEllipse cx={13.5} cy={15.5} rx={0.8} ry={0.5} fill="rgba(0,0,0,0.15)" />
-        {/* Smile */}
-        <SvgPath d="M8,18 Q12,21 16,18" stroke="rgba(0,0,0,0.45)" strokeWidth={1.4} fill="none" strokeLinecap="round" />
-        {/* Cheek blush left */}
-        <SvgEllipse cx={5} cy={15} rx={3} ry={2} fill="rgba(255,150,130,0.22)" />
-        {/* Cheek blush right */}
-        <SvgEllipse cx={19} cy={15} rx={3} ry={2} fill="rgba(255,150,130,0.22)" />
-      </Svg>
-
-      {/* Neck */}
-      <Svg width={s(10)} height={s(5)} viewBox="0 0 10 5" style={{ marginTop: -s(1) }}>
-        <SvgRect x={1} y={0} width={8} height={5} rx={2} fill={skinColor} />
-      </Svg>
-
-      {/* Body row: left arm + torso + right arm */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: -s(1) }}>
-        {/* Left arm */}
-        {sitting ? (
-          <Svg width={s(7)} height={s(10)} viewBox="0 0 7 10"
-            style={{ transform: [{ rotate: '50deg' }, { translateX: s(2) }] as any, marginTop: s(1) }}
-          >
-            <SvgRect x={0.5} y={0} width={6} height={7.5} rx={3} fill={outfitColor} />
-            <SvgRect x={0.5} y={6} width={6} height={2} rx={1} fill="rgba(255,255,255,0.15)" />
-            <SvgEllipse cx={3.5} cy={9.5} rx={3} ry={2} fill={skinColor} />
-          </Svg>
-        ) : (
-          <Animated.View style={{ marginTop: s(1), transform: leftArmTransform as any }}>
-            <Svg width={s(7)} height={s(16)} viewBox="0 0 7 16">
-              <SvgRect x={0.5} y={0} width={6} height={12} rx={3} fill={outfitColor} />
-              <SvgRect x={0.5} y={10} width={6} height={2} rx={1} fill="rgba(255,255,255,0.15)" />
-              <SvgEllipse cx={3.5} cy={14.5} rx={3} ry={2.5} fill={skinColor} />
-            </Svg>
-          </Animated.View>
-        )}
-
-        {/* Torso */}
-        <Svg width={s(16)} height={sitting ? s(12) : s(15)} viewBox={`0 0 16 ${sitting ? 12 : 15}`}>
-          {/* Body */}
-          <SvgRect x={0} y={0} width={16} height={sitting ? 12 : 15} rx={2} fill={outfitColor} />
-          {/* Jacket shading right side */}
-          <SvgPath d={`M10,0 L16,0 L16,${sitting ? 12 : 15} L10,${sitting ? 12 : 15} Z`} fill="rgba(0,0,0,0.1)" />
-          {/* Left lapel */}
-          <SvgPath d="M8,0 L4,4 L7,10 L8,6 Z" fill="rgba(255,255,255,0.14)" />
-          {/* Right lapel */}
-          <SvgPath d="M8,0 L12,4 L9,10 L8,6 Z" fill="rgba(0,0,0,0.14)" />
-          {/* Collar V neck */}
-          <SvgPath d="M5,0 L8,5 L11,0" stroke="rgba(255,255,255,0.55)" strokeWidth={0.8} fill="none" />
-          {/* Shirt collar white */}
-          <SvgPath d="M6.5,0 L8,3 L9.5,0" fill="rgba(255,255,255,0.3)" />
-          {/* Pocket */}
-          <SvgRect x={2} y={6} width={4.5} height={3.5} rx={1} fill="rgba(0,0,0,0.18)" />
-          <SvgRect x={2.5} y={5.5} width={3.5} height={0.8} rx={0.4} fill="rgba(255,255,255,0.15)" />
-          {/* Button row */}
-          <SvgCircle cx={8} cy={7} r={0.8} fill="rgba(255,255,255,0.5)" />
-          <SvgCircle cx={8} cy={9.5} r={0.8} fill="rgba(255,255,255,0.5)" />
-          {sitting ? null : <SvgCircle cx={8} cy={12} r={0.8} fill="rgba(255,255,255,0.5)" />}
-          {/* DAWEN text */}
-          <SvgText x={8} y={4.2} fill="rgba(255,255,255,0.7)" fontSize={2.4} fontWeight="900" textAnchor="middle">DAWEN</SvgText>
-          {/* Belt */}
-          <SvgRect x={0} y={sitting ? 10 : 13} width={16} height={2} rx={0} fill="rgba(0,0,0,0.32)" />
-          {/* Belt buckle */}
-          <SvgRect x={6} y={sitting ? 10 : 13} width={4} height={2} rx={0.8} fill="rgba(200,180,60,0.7)" />
-          <SvgRect x={7.2} y={sitting ? 10.3 : 13.3} width={1.6} height={1.4} rx={0.5} fill="rgba(0,0,0,0.4)" />
-        </Svg>
-
-        {/* Right arm */}
-        {sitting ? (
-          <Svg width={s(7)} height={s(10)} viewBox="0 0 7 10"
-            style={{ transform: [{ rotate: '-50deg' }, { translateX: -s(2) }] as any, marginTop: s(1) }}
-          >
-            <SvgRect x={0.5} y={0} width={6} height={7.5} rx={3} fill={outfitColor} />
-            <SvgRect x={0.5} y={6} width={6} height={2} rx={1} fill="rgba(0,0,0,0.12)" />
-            <SvgEllipse cx={3.5} cy={9.5} rx={3} ry={2} fill={skinColor} />
-          </Svg>
-        ) : (
-          <Animated.View style={{ marginTop: s(1), transform: rightArmTransform as any }}>
-            <Svg width={s(7)} height={s(16)} viewBox="0 0 7 16">
-              <SvgRect x={0.5} y={0} width={6} height={12} rx={3} fill={outfitColor} />
-              <SvgRect x={0.5} y={10} width={6} height={2} rx={1} fill="rgba(0,0,0,0.12)" />
-              <SvgEllipse cx={3.5} cy={14.5} rx={3} ry={2.5} fill={skinColor} />
-            </Svg>
-          </Animated.View>
-        )}
-      </View>
-
-      {/* Legs */}
-      {sitting ? (
-        <Svg width={s(18)} height={s(9)} viewBox="0 0 18 9" style={{ marginTop: s(1) }}>
-          {/* Left leg horizontal */}
-          <SvgRect x={0} y={0} width={8} height={7} rx={3} fill="#1C1F3A" />
-          <SvgRect x={0} y={5} width={10} height={4} rx={2} fill="#1A1A22" />
-          {/* Right leg horizontal */}
-          <SvgRect x={10} y={0} width={8} height={7} rx={3} fill="#1C1F3A" />
-          <SvgRect x={9} y={5} width={10} height={4} rx={2} fill="#1A1A22" />
-        </Svg>
-      ) : (
-        <View style={{ flexDirection: 'row', gap: s(2), marginTop: s(1) }}>
-          {/* Left leg */}
-          <Animated.View style={{ transform: [{ translateY: leg1Y }] }}>
-            <Svg width={s(9)} height={s(16)} viewBox="0 0 9 16">
-              <SvgRect x={0} y={0} width={9} height={10} rx={3} fill="#1C1F3A" />
-              {/* Knee highlight */}
-              <SvgEllipse cx={4.5} cy={6} rx={3} ry={1.5} fill="rgba(255,255,255,0.06)" />
-              {/* Ankle */}
-              <SvgRect x={1} y={9.5} width={7} height={2} rx={1} fill="#252545" />
-              {/* Shoe */}
-              <SvgRect x={-1} y={11.5} width={11} height={4.5} rx={2.5} fill="#1A1A22" />
-              {/* Shoe toe */}
-              <SvgEllipse cx={9} cy={14.5} rx={2} ry={2} fill="#1A1A22" />
-              {/* Sole */}
-              <SvgRect x={-1} y={14.5} width={12} height={1.5} rx={0.75} fill="#303038" />
-            </Svg>
-          </Animated.View>
-          {/* Right leg */}
-          <Animated.View style={{ transform: [{ translateY: leg2Y }] }}>
-            <Svg width={s(9)} height={s(16)} viewBox="0 0 9 16">
-              <SvgRect x={0} y={0} width={9} height={10} rx={3} fill="#1C1F3A" />
-              <SvgEllipse cx={4.5} cy={6} rx={3} ry={1.5} fill="rgba(255,255,255,0.06)" />
-              <SvgRect x={1} y={9.5} width={7} height={2} rx={1} fill="#252545" />
-              <SvgRect x={-1} y={11.5} width={11} height={4.5} rx={2.5} fill="#1A1A22" />
-              <SvgEllipse cx={9} cy={14.5} rx={2} ry={2} fill="#1A1A22" />
-              <SvgRect x={-1} y={14.5} width={12} height={1.5} rx={0.75} fill="#303038" />
-            </Svg>
-          </Animated.View>
-        </View>
-      )}
-
-      {/* Name tag */}
-      <View style={ch.nameTag}>
-        <Text style={ch.nameText} numberOfLines={1}>{username || '???'}</Text>
-      </View>
-    </Animated.View>
-  );
-}
-
-const ch = StyleSheet.create({
-  root: { alignItems: 'center' },
-  aura: {
-    position: 'absolute', top: 0, borderWidth: 1.5, opacity: 0.7,
-    borderRadius: 20,
-    shadowRadius: 8, shadowOpacity: 0.7, elevation: 4,
-  },
-  crownWrap: { position: 'absolute', top: -6, right: -2, zIndex: 10 },
-  nameTag: {
-    backgroundColor: 'rgba(0,0,0,0.78)', paddingHorizontal: 4, paddingVertical: 1,
-    borderRadius: 4, maxWidth: 64, marginTop: 3,
-  },
-  nameText: { fontSize: 9, color: '#fff', fontWeight: '700', textAlign: 'center' },
-});
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -482,6 +151,8 @@ export function DawenWorldRoom({
   const [chatBubble, setChatBubble] = useState<string | null>(null);
   const [isWalking, setIsWalking] = useState(false);
   const [myGesture, setMyGesture] = useState<AvatarGesture>('none');
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [selectedPlayer, setSelectedPlayer] = useState<WorldPresence | null>(null);
   const walkTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -689,11 +360,80 @@ export function DawenWorldRoom({
   const handleSendChat = async () => {
     const text = chatText.trim();
     if (!text || sending) return;
+
+    // Command parsing
+    if (text.startsWith(':')) {
+      const cmd = text.toLowerCase();
+      setChatText('');
+      if (cmd === ':wave') { triggerGesture('wave'); return; }
+      if (cmd === ':dance') { triggerGesture('dance'); return; }
+      if (cmd === ':sit') {
+        const sittableItem = roomItems.find(ri => ri.x === myX && ri.y === myY && SITTABLE.has(ri.catalog_item?.category ?? ''));
+        if (sittableItem) setSittingOnItemId(sittableItem.id);
+        return;
+      }
+      if (cmd === ':stand') { setSittingOnItemId(null); setMyGesture('none'); return; }
+      if (cmd.startsWith(':me ')) {
+        const action = text.slice(4).trim();
+        if (action) {
+          setSending(true);
+          await sendMessage({ roomId: room.id, walletAddress, username, text: `* ${username} ${action}`, avatarConfig });
+          setChatBubble(`* ${action}`);
+          if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+          bubbleTimer.current = setTimeout(() => setChatBubble(null), BUBBLE_DURATION);
+          setSending(false);
+        }
+        return;
+      }
+      if (cmd === ':help') {
+        const helpLines = [
+          ':wave - Wave at others',
+          ':dance - Dance',
+          ':sit - Sit on furniture',
+          ':stand - Stand up',
+          ':me [action] - Emote',
+        ];
+        if (isOwner) helpLines.push(':kick [user] - Kick user', ':mute [user] - Mute user', ':unmute [user] - Unmute user');
+        setMessages(prev => [...prev, {
+          id: `help-${Date.now()}`, room_id: room.id, wallet_address: 'system',
+          username: 'System', message_text: helpLines.join('\n'), avatar_config: null,
+          created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+      if (isOwner && cmd.startsWith(':kick ')) {
+        const target = text.slice(6).trim();
+        setMessages(prev => [...prev, {
+          id: `kick-${Date.now()}`, room_id: room.id, wallet_address: 'system',
+          username: 'System', message_text: `${target} was kicked from the room.`,
+          avatar_config: null, created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+      if (isOwner && cmd.startsWith(':mute ')) {
+        const target = text.slice(6).trim();
+        setMessages(prev => [...prev, {
+          id: `mute-${Date.now()}`, room_id: room.id, wallet_address: 'system',
+          username: 'System', message_text: `${target} has been muted.`,
+          avatar_config: null, created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+      if (isOwner && cmd.startsWith(':unmute ')) {
+        const target = text.slice(8).trim();
+        setMessages(prev => [...prev, {
+          id: `unmute-${Date.now()}`, room_id: room.id, wallet_address: 'system',
+          username: 'System', message_text: `${target} has been unmuted.`,
+          avatar_config: null, created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+    }
+
     setSending(true);
     setChatText('');
     await sendMessage({ roomId: room.id, walletAddress, username, text, avatarConfig });
-    // Show bubble
-    setChatBubble(text.length > 40 ? text.slice(0, 40) + '…' : text);
+    setChatBubble(text.length > 40 ? text.slice(0, 40) + '...' : text);
     if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
     bubbleTimer.current = setTimeout(() => setChatBubble(null), BUBBLE_DURATION);
     setSending(false);
@@ -791,7 +531,7 @@ export function DawenWorldRoom({
         style={styles.sceneScroll}
       >
         <LinearGradient
-          colors={['#07080F', '#0D1020', '#07080F']}
+          colors={['#10121F', '#161A30', '#10121F']}
           style={{ width: Math.max(ISO_CANVAS_W, screenW), height: ISO_CANVAS_H + 4 }}
         >
           {/* Tap responder layer — inverse iso projection maps touches to grid coords */}
@@ -1225,7 +965,9 @@ export function DawenWorldRoom({
                         top: Animated.subtract(anim.y, charSize - ISO_TH / 4) as any,
                       }]}
                     >
-                      <WorldAvatarChar config={cfg} username={p.username || p.wallet_address.slice(0, 4)} isPremium={p.is_premium} size={charSize} />
+                      <TouchableOpacity activeOpacity={0.8} onPress={() => setSelectedPlayer(p)}>
+                        <WorldAvatarChar config={cfg} username={p.username || p.wallet_address.slice(0, 4)} isPremium={p.is_premium} size={charSize} />
+                      </TouchableOpacity>
                     </Animated.View>
                   ),
                 });
@@ -1299,71 +1041,107 @@ export function DawenWorldRoom({
 
       {/* Chat */}
       <View style={styles.chatArea}>
-        <ScrollView
-          ref={chatRef}
-          style={styles.chatScroll}
-          onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
-          showsVerticalScrollIndicator={false}
-        >
-          {messages.map(m => (
-            <View key={m.id} style={styles.chatMsg}>
-              <Text style={styles.chatUser}>
-                {m.username || m.wallet_address.slice(0, 4)}
-                {m.wallet_address === walletAddress ? ' (you)' : ''}
-              </Text>
-              <Text style={styles.chatText}>{m.message_text}</Text>
+        <TouchableOpacity style={styles.chatCollapseBtn} onPress={() => setChatCollapsed(c => !c)} activeOpacity={0.7}>
+          <Text style={styles.chatCollapseText}>Chat</Text>
+          {chatCollapsed ? <ChevronUp size={14} color="rgba(255,255,255,0.5)" strokeWidth={2.5} /> : <ChevronDown size={14} color="rgba(255,255,255,0.5)" strokeWidth={2.5} />}
+        </TouchableOpacity>
+        {!chatCollapsed && (
+          <>
+            <ScrollView
+              ref={chatRef}
+              style={styles.chatScroll}
+              onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
+              showsVerticalScrollIndicator={false}
+            >
+              {messages.map(m => (
+                <View key={m.id} style={styles.chatMsg}>
+                  <Text style={styles.chatUser}>
+                    {m.username || m.wallet_address.slice(0, 4)}
+                    {m.wallet_address === walletAddress ? ' (you)' : ''}
+                  </Text>
+                  <Text style={styles.chatText}>{m.message_text}</Text>
+                </View>
+              ))}
+              {messages.length === 0 && (
+                <Text style={styles.chatEmpty}>Say hello to the room!</Text>
+              )}
+            </ScrollView>
+            {/* Gesture bar */}
+            <View style={styles.gestureBar}>
+              {(['wave', 'dance', 'sit'] as const).map((g) => {
+                const labels: Record<string, string> = { wave: '👋 Wave', dance: '🕺 Dance', sit: '🪑 Sit' };
+                const isActive = g === 'sit' ? sittingOnItemId !== null : myGesture === g;
+                return (
+                  <TouchableOpacity
+                    key={g}
+                    style={[styles.gestureBtn, isActive && styles.gestureBtnActive]}
+                    onPress={() => {
+                      if (g === 'sit') {
+                        if (sittingOnItemId !== null) setSittingOnItemId(null);
+                      } else {
+                        triggerGesture(g as AvatarGesture);
+                      }
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[styles.gestureBtnText, isActive && styles.gestureBtnTextActive]}>
+                      {labels[g]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          ))}
-          {messages.length === 0 && (
-            <Text style={styles.chatEmpty}>Say hello to the room!</Text>
-          )}
-        </ScrollView>
-        {/* Gesture bar */}
-        <View style={styles.gestureBar}>
-          {(['wave', 'dance', 'sit'] as const).map((g) => {
-            const labels: Record<string, string> = { wave: '👋 Wave', dance: '🕺 Dance', sit: '🪑 Sit' };
-            const isActive = g === 'sit' ? sittingOnItemId !== null : myGesture === g;
-            return (
+
+            <View style={styles.chatInputRow}>
+              <TextInput
+                style={styles.chatInput}
+                value={chatText}
+                onChangeText={setChatText}
+                placeholder="Say something..."
+                placeholderTextColor="rgba(255,255,255,0.28)"
+                returnKeyType="send"
+                onSubmitEditing={handleSendChat}
+                maxLength={200}
+              />
               <TouchableOpacity
-                key={g}
-                style={[styles.gestureBtn, isActive && styles.gestureBtnActive]}
+                style={[styles.sendBtn, (!chatText.trim() || sending) && { opacity: 0.35 }]}
+                onPress={handleSendChat}
+                disabled={!chatText.trim() || sending}
+              >
+                <Text style={styles.sendBtnText}>→</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* Player profile popup */}
+      {selectedPlayer && (
+        <View style={styles.playerPopupOverlay}>
+          <View style={styles.playerPopup}>
+            <View style={styles.playerPopupHeader}>
+              <Text style={styles.playerPopupName}>{selectedPlayer.username || selectedPlayer.wallet_address.slice(0, 6)}</Text>
+              <TouchableOpacity onPress={() => setSelectedPlayer(null)} activeOpacity={0.7}>
+                <X size={16} color="rgba(255,255,255,0.6)" strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.playerPopupWallet}>{selectedPlayer.wallet_address.slice(0, 6)}...{selectedPlayer.wallet_address.slice(-4)}</Text>
+            {selectedPlayer.is_premium && <Text style={styles.playerPopupBadge}>Premium Member</Text>}
+            <View style={styles.playerPopupActions}>
+              <TouchableOpacity
+                style={styles.playerPopupBtn}
                 onPress={() => {
-                  if (g === 'sit') {
-                    if (sittingOnItemId !== null) setSittingOnItemId(null);
-                  } else {
-                    triggerGesture(g as AvatarGesture);
-                  }
+                  setChatText(`@${selectedPlayer.username || selectedPlayer.wallet_address.slice(0, 6)} `);
+                  setSelectedPlayer(null);
                 }}
                 activeOpacity={0.75}
               >
-                <Text style={[styles.gestureBtnText, isActive && styles.gestureBtnTextActive]}>
-                  {labels[g]}
-                </Text>
+                <Text style={styles.playerPopupBtnText}>Message</Text>
               </TouchableOpacity>
-            );
-          })}
+            </View>
+          </View>
         </View>
-
-        <View style={styles.chatInputRow}>
-          <TextInput
-            style={styles.chatInput}
-            value={chatText}
-            onChangeText={setChatText}
-            placeholder="Say something..."
-            placeholderTextColor="rgba(255,255,255,0.28)"
-            returnKeyType="send"
-            onSubmitEditing={handleSendChat}
-            maxLength={200}
-          />
-          <TouchableOpacity
-            style={[styles.sendBtn, (!chatText.trim() || sending) && { opacity: 0.35 }]}
-            onPress={handleSendChat}
-            disabled={!chatText.trim() || sending}
-          >
-            <Text style={styles.sendBtnText}>→</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      )}
 
       {/* Bottom Nav */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}>
@@ -1579,6 +1357,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: 'rgba(139,92,246,0.15)',
     backgroundColor: 'rgba(0,0,0,0.45)', maxHeight: 160,
   },
+  chatCollapseBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 8,
+  },
+  chatCollapseText: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.5)' },
   chatScroll: { maxHeight: 100, paddingHorizontal: spacing.md, paddingVertical: 5 },
   chatMsg: { marginBottom: 4 },
   chatUser: { fontSize: 10, fontWeight: '800', color: colors.primary, marginBottom: 1 },
@@ -1617,6 +1400,35 @@ const styles = StyleSheet.create({
   },
   gestureBtnText: { fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: '600' },
   gestureBtnTextActive: { color: colors.primary },
+
+  // Player popup
+  playerPopupOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 50,
+  },
+  playerPopup: {
+    backgroundColor: 'rgba(20,16,40,0.95)', borderRadius: 16,
+    padding: 20, minWidth: 220, maxWidth: 280,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+    shadowColor: '#8B5CF6', shadowRadius: 12, shadowOpacity: 0.3, elevation: 8,
+  },
+  playerPopupHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8,
+  },
+  playerPopupName: { fontSize: 16, fontWeight: '800', color: '#fff' },
+  playerPopupWallet: { fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: '500', marginBottom: 6 },
+  playerPopupBadge: {
+    fontSize: 11, fontWeight: '700', color: '#F59E0B', marginBottom: 8,
+  },
+  playerPopupActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  playerPopupBtn: {
+    flex: 1, paddingVertical: 8, borderRadius: 10,
+    backgroundColor: 'rgba(139,92,246,0.25)',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)',
+    alignItems: 'center',
+  },
+  playerPopupBtnText: { fontSize: 12, fontWeight: '700', color: colors.primary },
 
   // Bottom nav
   bottomNav: {

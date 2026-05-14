@@ -31,6 +31,7 @@ export interface WorldRoom {
   theme: string;
   is_default_personal_room: boolean;
   size_tier?: 'standard' | 'large' | 'mega';
+  room_style?: RoomStyle;
   room_width?: number;
   room_height?: number;
   max_players?: number;
@@ -38,6 +39,7 @@ export interface WorldRoom {
 }
 
 export type SizeTier = 'standard' | 'large' | 'mega';
+export type RoomStyle = 'apartment' | 'house' | 'villa';
 
 export const SIZE_TIER_CONFIG: Record<SizeTier, {
   label: string; emoji: string; width: number; height: number;
@@ -46,6 +48,15 @@ export const SIZE_TIER_CONFIG: Record<SizeTier, {
   standard: { label: 'Standard',   emoji: '🏠', width: 10, height: 8,  maxPlayers: 20, solPrice: 0,    description: 'Free — 10×8 grid, up to 20 players' },
   large:    { label: 'Large Room', emoji: '🏢', width: 14, height: 10, maxPlayers: 40, solPrice: 0.05, description: '14×10 grid, up to 40 players' },
   mega:     { label: 'Mega Room',  emoji: '🏰', width: 20, height: 14, maxPlayers: 80, solPrice: 0.15, description: '20×14 grid, up to 80 players' },
+};
+
+export const ROOM_STYLE_CONFIG: Record<RoomStyle, {
+  label: string; width: number; height: number;
+  maxPlayers: number; description: string;
+}> = {
+  apartment: { label: 'Apartment',    width: 10, height: 8,  maxPlayers: 20, description: 'Cozy 10x8, up to 20 players' },
+  house:     { label: 'Small House',  width: 14, height: 10, maxPlayers: 40, description: 'Spacious 14x10, up to 40 players' },
+  villa:     { label: 'Villa',        width: 20, height: 14, maxPlayers: 80, description: 'Luxury 20x14, up to 80 players' },
 };
 
 export interface WorldPresence {
@@ -184,7 +195,10 @@ export async function createRoom(params: {
   name: string;
   theme: string;
   visibility: 'public' | 'private' | 'invite_only';
+  roomStyle?: RoomStyle;
 }): Promise<WorldRoom> {
+  const style = params.roomStyle ?? 'apartment';
+  const cfg = ROOM_STYLE_CONFIG[style];
   const { data, error } = await supabase
     .from('world_rooms')
     .insert({
@@ -193,6 +207,10 @@ export async function createRoom(params: {
       type: 'user_created',
       visibility: params.visibility,
       theme: params.theme,
+      room_style: style,
+      room_width: cfg.width,
+      room_height: cfg.height,
+      max_players: cfg.maxPlayers,
       is_default_personal_room: false,
     })
     .select()
@@ -354,6 +372,64 @@ export async function grantStarterItems(walletAddress: string): Promise<void> {
   );
 }
 
+// ─── DawenCoin Balance ───────────────────────────────────────────────────────
+export async function getDawenCoinBalance(walletAddress: string): Promise<number> {
+  const { data } = await supabase
+    .from('dawen_coin_balances')
+    .select('balance')
+    .eq('wallet_address', walletAddress)
+    .maybeSingle();
+  return Number((data as any)?.balance ?? 0);
+}
+
+export async function earnDawenCoins(
+  walletAddress: string, amount: number, reason: string, refId?: string
+): Promise<void> {
+  const { data: bal } = await supabase
+    .from('dawen_coin_balances')
+    .select('balance, total_earned')
+    .eq('wallet_address', walletAddress)
+    .maybeSingle();
+  await supabase
+    .from('dawen_coin_balances')
+    .upsert({
+      wallet_address: walletAddress,
+      balance: Number((bal as any)?.balance ?? 0) + amount,
+      total_earned: Number((bal as any)?.total_earned ?? 0) + amount,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'wallet_address' });
+  await supabase.from('dawen_coin_transactions').insert({
+    wallet_address: walletAddress, amount, reason, ref_id: refId ?? null,
+  });
+}
+
+export async function spendDawenCoins(
+  walletAddress: string, amount: number, reason: string, refId?: string
+): Promise<{ success: boolean; error?: string }> {
+  const { data: bal } = await supabase
+    .from('dawen_coin_balances')
+    .select('balance, total_spent')
+    .eq('wallet_address', walletAddress)
+    .maybeSingle();
+  const current = Number((bal as any)?.balance ?? 0);
+  if (current < amount) {
+    return { success: false, error: `Not enough DawenCoins. Need ${amount}, you have ${Math.floor(current)}.` };
+  }
+  const { error: updErr } = await supabase
+    .from('dawen_coin_balances')
+    .upsert({
+      wallet_address: walletAddress,
+      balance: current - amount,
+      total_spent: Number((bal as any)?.total_spent ?? 0) + amount,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'wallet_address' });
+  if (updErr) return { success: false, error: 'Failed to deduct DawenCoins.' };
+  await supabase.from('dawen_coin_transactions').insert({
+    wallet_address: walletAddress, amount: -amount, reason, ref_id: refId ?? null,
+  });
+  return { success: true };
+}
+
 // ─── Purchase ─────────────────────────────────────────────────────────────────
 export async function purchaseWorldItem(params: {
   walletAddress: string;
@@ -370,45 +446,44 @@ export async function purchaseWorldItem(params: {
 
   if (!amountSol && !amountDawen) return { success: false, error: 'Item has no price configured' };
 
-  // Create pending purchase record
-  const { data: purchase, error: pErr } = await supabase
-    .from('world_purchases')
-    .insert({
-      wallet_address: walletAddress,
-      item_id: item.id,
-      quantity: 1,
-      currency,
-      amount_paid: amountSol ?? amountDawen ?? 0,
-      status: 'pending',
-    })
-    .select()
-    .single();
-  if (pErr) return { success: false, error: 'Failed to create purchase record' };
+  let txSignature: string | null = null;
 
-  // Execute payment
-  const result = await payToTreasury({
-    fromAddress: walletAddress,
-    amountSol: amountSol,
-    amountToken: amountDawen ? Number(amountDawen) : undefined,
-    tokenMint: amountDawen ? DAWEN_TOKEN_MINT : undefined,
-    connectedWalletId: connectedWalletId ?? null,
-    internalAccountIndex,
-    onStatus,
-  });
+  if (currency === 'DAWEN') {
+    onStatus?.('Checking DawenCoin balance');
+    const coinResult = await spendDawenCoins(walletAddress, amountDawen!, 'shop_purchase', item.id);
+    if (!coinResult.success) return { success: false, error: coinResult.error };
+    onStatus?.('Purchase confirmed');
+  } else {
+    const { data: purchase, error: pErr } = await supabase
+      .from('world_purchases')
+      .insert({
+        wallet_address: walletAddress,
+        item_id: item.id, quantity: 1,
+        currency, amount_paid: amountSol ?? 0, status: 'pending',
+      })
+      .select().single();
+    if (pErr) return { success: false, error: 'Failed to create purchase record' };
 
-  if (!result.success) {
-    await supabase.from('world_purchases').update({ status: 'failed' }).eq('id', purchase.id);
-    return { success: false, error: result.error ?? 'Transaction failed' };
+    const result = await payToTreasury({
+      fromAddress: walletAddress,
+      amountSol,
+      connectedWalletId: connectedWalletId ?? null,
+      internalAccountIndex,
+      onStatus,
+    });
+
+    if (!result.success) {
+      await supabase.from('world_purchases').update({ status: 'failed' }).eq('id', (purchase as any).id);
+      return { success: false, error: result.error ?? 'Transaction failed' };
+    }
+
+    txSignature = result.signature ?? null;
+    await supabase.from('world_purchases').update({
+      status: 'confirmed', tx_signature: txSignature,
+      confirmed_at: new Date().toISOString(),
+    }).eq('id', (purchase as any).id);
   }
 
-  // Confirm purchase + grant item
-  await supabase.from('world_purchases').update({
-    status: 'confirmed',
-    tx_signature: result.signature,
-    confirmed_at: new Date().toISOString(),
-  }).eq('id', purchase.id);
-
-  // Add to inventory (upsert quantity)
   const source = currency === 'SOL' ? 'purchased_sol' : 'purchased_dawen';
   const { data: inv } = await supabase
     .from('world_inventory')
@@ -419,14 +494,11 @@ export async function purchaseWorldItem(params: {
     .maybeSingle();
 
   if (inv) {
-    await supabase.from('world_inventory').update({ quantity: inv.quantity + 1, updated_at: new Date().toISOString() }).eq('id', inv.id);
+    await supabase.from('world_inventory').update({ quantity: (inv as any).quantity + 1, updated_at: new Date().toISOString() }).eq('id', (inv as any).id);
   } else {
     await supabase.from('world_inventory').insert({
-      wallet_address: walletAddress,
-      item_id: item.id,
-      quantity: 1,
-      source,
-      purchase_tx_signature: result.signature,
+      wallet_address: walletAddress, item_id: item.id, quantity: 1,
+      source, purchase_tx_signature: txSignature,
     });
   }
 

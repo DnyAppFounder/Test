@@ -8,6 +8,7 @@ import {
   getWorldAvatar, saveWorldAvatar,
   getPlazaRoom,
   getInventory, grantStarterItems,
+  earnDawenCoins, getDawenCoinBalance,
 } from '@/services/worldService';
 import { DawenWorldAvatarEditor } from './DawenWorldAvatarEditor';
 import { DawenWorldRoom } from './DawenWorldRoom';
@@ -64,6 +65,12 @@ export function DawenWorldPage({
 
         // Grant starter items (idempotent)
         await grantStarterItems(walletAddress);
+
+        // Grant starter DawenCoins if first load
+        const bal = await getDawenCoinBalance(walletAddress);
+        if (bal === 0) {
+          await earnDawenCoins(walletAddress, 500, 'welcome_bonus');
+        }
 
         // Load inventory
         const inv = await getInventory(walletAddress);
@@ -183,6 +190,7 @@ export function DawenWorldPage({
         <DawenWorldRoomDirectory
           walletAddress={walletAddress}
           username={username}
+          isPremium={isPremium}
           connectedWalletId={connectedWalletId}
           internalAccountIndex={internalAccountIndex}
           onJoinRoom={handleJoinRoom}

@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { AvatarConfig, DEFAULT_AVATAR } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { HAIR_SPRITES } from './WorldSprite';
+import { WorldAvatarChar } from './WorldAvatarChar';
 
 interface Props {
   initial: AvatarConfig | null;
@@ -19,31 +20,17 @@ const AURA_COLORS  = [null,'#8B5CF6','#EC4899','#F59E0B','#3B82F6','#10B981','#E
 export function AvatarPreview({ config, username, isPremium, size = 60 }: {
   config: AvatarConfig; username: string; isPremium?: boolean; size?: number;
 }) {
-  const initials = (username || 'U').slice(0, 2).toUpperCase();
-  const fontSize2 = size * 0.3;
   return (
     <View style={{ alignItems: 'center', gap: 4 }}>
-      <View style={[
-        av.circle,
-        { width: size, height: size, borderRadius: size / 2, backgroundColor: config.bodyColor },
-        config.auraColor && { shadowColor: config.auraColor, shadowRadius: 10, shadowOpacity: 0.8, elevation: 6 },
-      ]}>
-        <View style={[av.outfit, { backgroundColor: config.outfitColor, height: size * 0.4, borderBottomLeftRadius: size / 2, borderBottomRightRadius: size / 2 }]} />
-        <Text style={[av.initials, { fontSize: fontSize2, color: '#fff' }]}>{initials}</Text>
-        {isPremium && <View style={av.premiumRing} />}
-      </View>
-      {username ? <Text style={av.name} numberOfLines={1}>{username}</Text> : null}
+      <WorldAvatarChar
+        config={config}
+        username={username}
+        isPremium={isPremium ?? false}
+        size={size}
+      />
     </View>
   );
 }
-
-const av = StyleSheet.create({
-  circle: { overflow: 'hidden', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },
-  outfit: { position: 'absolute', bottom: 0, left: 0, right: 0 },
-  initials: { fontWeight: '900', zIndex: 1 },
-  name: { fontSize: 11, color: 'rgba(255,255,255,0.7)', fontWeight: '600', maxWidth: 64, textAlign: 'center' },
-  premiumRing: { position: 'absolute', top: -3, left: -3, right: -3, bottom: -3, borderRadius: 999, borderWidth: 2, borderColor: '#F59E0B' },
-});
 
 export function DawenWorldAvatarEditor({ initial, username, onSave }: Props) {
   const [cfg, setCfg] = useState<AvatarConfig>(initial ?? DEFAULT_AVATAR);

@@ -4,14 +4,12 @@ import {
   TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
+import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Crown } from 'lucide-react-native';
 import {
-  WorldRoom, SizeTier, SIZE_TIER_CONFIG,
+  WorldRoom, RoomStyle, ROOM_STYLE_CONFIG,
   getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
-  createRoom, deleteRoom, updateRoom, upgradeRoom, PLAZA_ROOM_ID,
+  createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
 } from '@/services/worldService';
-import { payToTreasury } from '@/services/treasuryService';
-import { SolanaPriceService } from '@/services/solana/priceService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
 const THEMES: { name: string; emoji: string }[] = [
@@ -35,6 +33,7 @@ const VISIBILITY_COLOR: Record<string, string> = {
 interface Props {
   walletAddress: string;
   username: string;
+  isPremium: boolean;
   connectedWalletId?: string | null;
   internalAccountIndex?: number;
   onJoinRoom: (room: WorldRoom) => void;
@@ -42,7 +41,7 @@ interface Props {
 }
 
 export function DawenWorldRoomDirectory({
-  walletAddress, username,
+  walletAddress, username, isPremium,
   connectedWalletId, internalAccountIndex,
   onJoinRoom, onClose,
 }: Props) {
@@ -59,14 +58,8 @@ export function DawenWorldRoomDirectory({
   const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
   const [editName, setEditName] = useState('');
   const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
-  const [pendingUpgradeTier, setPendingUpgradeTier] = useState<SizeTier | null>(null);
-  const [upgrading, setUpgrading] = useState(false);
-  const [solPrice, setSolPrice] = useState(0);
+  const [newRoomStyle, setNewRoomStyle] = useState<RoomStyle>('apartment');
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    new SolanaPriceService().getSOLPrice().then(p => setSolPrice(p)).catch(() => {});
-  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,7 +86,7 @@ export function DawenWorldRoomDirectory({
     setNameError('');
     setCreating(true);
     try {
-      const room = await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis });
+      const room = await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis, roomStyle: newRoomStyle });
       console.log('[DawenWorldRoomDirectory] room created:', room.id, room.name);
       setCreateOpen(false);
       setNewName('');
@@ -123,63 +116,6 @@ export function DawenWorldRoomDirectory({
     await load();
   };
 
-  const handleUpgrade = async (tier: SizeTier) => {
-    if (!editRoom || upgrading) return;
-    setPendingUpgradeTier(tier);
-    const cfg = SIZE_TIER_CONFIG[tier];
-    if (cfg.solPrice === 0) {
-      setUpgrading(true);
-      try {
-        await upgradeRoom(editRoom.id, walletAddress, tier, null, 0);
-        setEditRoom(null);
-        setPendingUpgradeTier(null);
-        await load();
-      } catch {
-        Alert.alert('Error', 'Failed to upgrade room. Please try again.');
-      } finally {
-        setUpgrading(false);
-        setPendingUpgradeTier(null);
-      }
-      return;
-    }
-
-    Alert.alert(
-      `Upgrade to ${cfg.label}`,
-      `This costs ${cfg.solPrice} SOL${solPrice > 0 ? ` (~$${(cfg.solPrice * solPrice).toFixed(2)})` : ''}.\n\nRoom size: ${cfg.width}×${cfg.height} tiles, up to ${cfg.maxPlayers} players.\n\nProceed?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Pay & Upgrade',
-          onPress: async () => {
-            setUpgrading(true);
-            try {
-              const result = await payToTreasury({
-                fromAddress: walletAddress,
-                amountSol: cfg.solPrice,
-                connectedWalletId,
-                internalAccountIndex,
-              });
-              if (!result.success) {
-                Alert.alert('Payment Failed', result.error ?? 'Transaction rejected.');
-                return;
-              }
-              await upgradeRoom(editRoom.id, walletAddress, tier, result.signature ?? null, cfg.solPrice);
-              setEditRoom(null);
-              setPendingUpgradeTier(null);
-              await load();
-              Alert.alert('Upgraded!', `Your room is now ${cfg.label}.`);
-            } catch (e: any) {
-              Alert.alert('Error', e?.message ?? 'Upgrade failed.');
-            } finally {
-              setUpgrading(false);
-              setPendingUpgradeTier(null);
-            }
-          },
-        },
-      ]
-    );
-  };
-
   const canAccess = (room: WorldRoom) => {
     if (room.visibility === 'public') return true;
     if (room.owner_wallet === walletAddress) return true;
@@ -198,10 +134,17 @@ export function DawenWorldRoomDirectory({
         </TouchableOpacity>
         <MapIcon size={18} color={colors.primary} strokeWidth={2} />
         <Text style={styles.title}>Room Directory</Text>
-        <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
-          <Plus size={16} color="#fff" strokeWidth={2.5} />
-          <Text style={styles.createText}>Create</Text>
-        </TouchableOpacity>
+        {isPremium ? (
+          <TouchableOpacity style={styles.createBtn} onPress={() => setCreateOpen(true)}>
+            <Plus size={16} color="#fff" strokeWidth={2.5} />
+            <Text style={styles.createText}>Create</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={[styles.createBtn, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+            <Crown size={14} color="#F59E0B" strokeWidth={2} />
+            <Text style={[styles.createText, { color: 'rgba(255,255,255,0.4)' }]}>Premium Only</Text>
+          </View>
+        )}
       </View>
 
       {/* Tabs */}
@@ -255,9 +198,9 @@ export function DawenWorldRoomDirectory({
                 <View style={styles.roomInfo}>
                   <View style={styles.roomNameRow}>
                     <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
-                    {room.size_tier && room.size_tier !== 'standard' && (
+                    {room.room_style && room.room_style !== 'apartment' && (
                       <View style={styles.sizeBadge}>
-                        <Text style={styles.sizeBadgeText}>{SIZE_TIER_CONFIG[room.size_tier as SizeTier]?.emoji} {SIZE_TIER_CONFIG[room.size_tier as SizeTier]?.label}</Text>
+                        <Text style={styles.sizeBadgeText}>{ROOM_STYLE_CONFIG[room.room_style as RoomStyle]?.label}</Text>
                       </View>
                     )}
                   </View>
@@ -346,6 +289,28 @@ export function DawenWorldRoomDirectory({
               ))}
             </View>
 
+            <Text style={styles.inputLabel}>Room Style</Text>
+            <View style={{ gap: 6 }}>
+              {(['apartment', 'house', 'villa'] as const).map(rs => {
+                const cfg = ROOM_STYLE_CONFIG[rs];
+                return (
+                  <TouchableOpacity
+                    key={rs}
+                    style={[styles.tierRow, newRoomStyle === rs && styles.tierRowActive]}
+                    onPress={() => setNewRoomStyle(rs)}
+                  >
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={styles.tierLabel}>{cfg.label}</Text>
+                      <Text style={styles.tierDesc}>{cfg.description}</Text>
+                    </View>
+                    {newRoomStyle === rs && (
+                      <View style={styles.tierCurrentBadge}><Text style={styles.tierCurrentText}>Selected</Text></View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
             <View style={styles.modalBtns}>
               <TouchableOpacity style={[styles.createRoomBtn, (newName.trim().length < 3 || creating) && { opacity: 0.5 }]} onPress={handleCreate} disabled={newName.trim().length < 3 || creating}>
                 {creating ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Create Room</Text>}
@@ -374,42 +339,6 @@ export function DawenWorldRoomDirectory({
                 </TouchableOpacity>
               ))}
             </View>
-
-            <Text style={styles.inputLabel}>Room Size</Text>
-            {(['standard', 'large', 'mega'] as SizeTier[]).map(tier => {
-              const cfg = SIZE_TIER_CONFIG[tier];
-              const currentTier = (editRoom?.size_tier ?? 'standard') as SizeTier;
-              const isCurrent = currentTier === tier;
-              const isDowngrade = ['standard', 'large', 'mega'].indexOf(tier) < ['standard', 'large', 'mega'].indexOf(currentTier);
-              return (
-                <TouchableOpacity
-                  key={tier}
-                  style={[styles.tierRow, isCurrent && styles.tierRowActive, isDowngrade && { opacity: 0.4 }]}
-                  onPress={() => !isDowngrade && !isCurrent && !upgrading && handleUpgrade(tier)}
-                  disabled={isCurrent || isDowngrade || upgrading}
-                  activeOpacity={0.75}
-                >
-                  <Text style={styles.tierEmoji}>{cfg.emoji}</Text>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.tierLabel}>{cfg.label}</Text>
-                    <Text style={styles.tierDesc}>{cfg.width}×{cfg.height} tiles · max {cfg.maxPlayers} players</Text>
-                  </View>
-                  {isCurrent ? (
-                    <View style={styles.tierCurrentBadge}><Text style={styles.tierCurrentText}>Current</Text></View>
-                  ) : isDowngrade ? (
-                    <Text style={styles.tierPriceText}>—</Text>
-                  ) : cfg.solPrice === 0 ? (
-                    <Text style={styles.tierFreeText}>Free</Text>
-                  ) : (
-                    <View style={styles.tierPriceCol}>
-                      <Text style={styles.tierPriceText}>{cfg.solPrice} SOL</Text>
-                      {solPrice > 0 && <Text style={styles.tierUsdText}>${(cfg.solPrice * solPrice).toFixed(2)}</Text>}
-                    </View>
-                  )}
-                  {upgrading && pendingUpgradeTier === tier && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 6 }} />}
-                </TouchableOpacity>
-              );
-            })}
 
             <View style={styles.modalBtns}>
               <TouchableOpacity style={[styles.createRoomBtn, saving && { opacity: 0.5 }]} onPress={handleSaveEdit} disabled={saving}>
