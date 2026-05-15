@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ArrowLeft, Users, ShoppingBag, Package, Map as MapIcon,
   CreditCard as Edit3, Trash2, RotateCw, X,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, User,
 } from 'lucide-react-native';
 import {
   WorldRoom, WorldPresence, WorldMessage, WorldRoomItem, WorldInventoryItem,
@@ -73,13 +73,14 @@ interface Props {
   onOpenShop: () => void;
   onOpenInventory: () => void;
   onOpenDirectory: () => void;
+  onEditAvatar?: () => void;
 }
 
 // ─── DawenWorldRoom ───────────────────────────────────────────────────────────
 
 export function DawenWorldRoom({
   room, walletAddress, username, avatarConfig, isPremium,
-  inventory, onBack, onOpenShop, onOpenInventory, onOpenDirectory,
+  inventory, onBack, onOpenShop, onOpenInventory, onOpenDirectory, onEditAvatar,
 }: Props) {
   const { width: screenW } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -134,7 +135,7 @@ export function DawenWorldRoom({
   }
 
   const SITTABLE = new Set(['Chairs', 'Sofas', 'Beds', 'Gaming Items']);
-  const charSize = Math.max(26, Math.round(ISO_TW * 0.9));
+  const charSize = Math.max(64, Math.round(ISO_TW * 1.6));
 
   const isPlaza = room.id === PLAZA_ROOM_ID;
   const isOwner = room.type !== 'official' && room.owner_wallet === walletAddress;
@@ -1170,6 +1171,7 @@ export function DawenWorldRoom({
         <NavBtn icon={MapIcon} label="Rooms" onPress={onOpenDirectory} />
         <NavBtn icon={ShoppingBag} label="Shop" onPress={onOpenShop} />
         <NavBtn icon={Package} label="Items" onPress={onOpenInventory} />
+        {onEditAvatar && <NavBtn icon={User} label="Avatar" onPress={onEditAvatar} />}
       </View>
     </KeyboardAvoidingView>
   );

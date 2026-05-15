@@ -175,7 +175,7 @@
 // ─── State ──────────────────────────────────────────────────────────────────
 
 var gender = 'M';
-var activeCategory = 'hd';
+var activeCategory = 'hr';
 var selection = {
   hd: { setId: '180', colorId: '2' },
   hr: { setId: '100', colorId: '61' },
@@ -200,15 +200,15 @@ var femaleDefaults = {
 // ─── Figure Data ─────────────────────────────────────────────────────────────
 
 var CATEGORIES = [
-  { id: 'hd', label: 'Skin' },
   { id: 'hr', label: 'Hair' },
-  { id: 'ch', label: 'Top' },
-  { id: 'lg', label: 'Bottom' },
+  { id: 'ha', label: 'Hats' },
+  { id: 'ch', label: 'Tops' },
+  { id: 'lg', label: 'Bottoms' },
   { id: 'sh', label: 'Shoes' },
-  { id: 'ha', label: 'Hat' },
   { id: 'he', label: 'Head' },
   { id: 'ea', label: 'Ears' },
   { id: 'fa', label: 'Face' },
+  { id: 'hd', label: 'Skin' },
 ];
 
 var SKIN_COLORS = [
@@ -360,18 +360,24 @@ var FIGURE_SETS = {
   },
   ha: {
     M: [
+      { setId: '1004', name: 'Baseball Cap' },
       { setId: '3580', name: 'Beanie' },
-      { setId: '1004', name: 'Cap' },
+      { setId: '3584', name: 'Snapback' },
       { setId: '3582', name: 'Cowboy' },
       { setId: '1002', name: 'Top Hat' },
-      { setId: '3584', name: 'Snapback' },
+      { setId: '1001', name: 'Straw Hat' },
+      { setId: '1003', name: 'Crown' },
+      { setId: '3010', name: 'Beret' },
     ],
     F: [
+      { setId: '1004', name: 'Baseball Cap' },
       { setId: '3580', name: 'Beanie' },
-      { setId: '1004', name: 'Cap' },
+      { setId: '3584', name: 'Snapback' },
       { setId: '3582', name: 'Cowboy' },
       { setId: '1002', name: 'Top Hat' },
+      { setId: '1003', name: 'Crown' },
       { setId: '3010', name: 'Beret' },
+      { setId: '1001', name: 'Straw Hat' },
     ],
   },
   he: {
@@ -496,7 +502,7 @@ function renderCategory(catId) {
 
   var sets = (FIGURE_SETS[catId] || {})[gender] || [];
   var hasSets = sets.length > 0;
-  var hasColors = catId === 'hd' || catId === 'hr' || catId === 'ch' || catId === 'lg' || catId === 'sh';
+  var hasColors = catId === 'hd' || catId === 'hr' || catId === 'ch' || catId === 'lg' || catId === 'sh' || catId === 'ha';
 
   // None option for optional categories
   var optionalCats = ['ha', 'he', 'ea', 'fa'];

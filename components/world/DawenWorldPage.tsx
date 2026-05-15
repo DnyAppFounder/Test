@@ -20,6 +20,7 @@ import { colors, spacing, fontSize } from '@/constants/theme';
 type Screen =
   | 'loading'
   | 'avatar_setup'
+  | 'avatar_edit'
   | 'room'
   | 'shop'
   | 'inventory'
@@ -150,6 +151,20 @@ export function DawenWorldPage({
           onOpenShop={() => setScreen('shop')}
           onOpenInventory={() => setScreen('inventory')}
           onOpenDirectory={() => setScreen('directory')}
+          onEditAvatar={() => setScreen('avatar_edit')}
+        />
+      </View>
+    );
+  }
+
+  if (screen === 'avatar_edit') {
+    return (
+      <View style={styles.fullscreen}>
+        <HabboAvatarEditor
+          initial={avatarConfig}
+          username={username}
+          onSave={handleAvatarSave}
+          onCancel={() => setScreen('room')}
         />
       </View>
     );

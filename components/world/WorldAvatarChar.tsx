@@ -82,7 +82,7 @@ export function WorldAvatarChar({
   // Habbo CDN avatar: render image if figureCode is set
   if (config.figureCode) {
     const habboUrl = `https://www.habbo.com/habbo-imaging/avatarimage?figure=${config.figureCode}&direction=4&head_direction=4&size=s&gender=${config.gender ?? 'M'}`;
-    const imgSize = Math.max(36, size);
+    const imgSize = Math.max(72, size);
     return (
       <View style={[styles.habboRoot, { width: imgSize, alignItems: 'center' }]}>
         {isPremium && (
