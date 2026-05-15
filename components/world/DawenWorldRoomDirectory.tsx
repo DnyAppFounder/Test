@@ -4,26 +4,15 @@ import {
   TextInput,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Grid2x2 as Grid } from 'lucide-react-native';
+import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Grid3x3 } from 'lucide-react-native';
 import {
-  WorldRoom, RoomStyle, ROOM_STYLE_CONFIG, type RoomLayout,
+  WorldRoom, type RoomLayout,
   getPublicRooms, getMyRooms, getRoomsWithCounts,
   createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
   saveRoomLayout, fetchRoomWithLayout,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { DawenRoomBuilder } from './DawenRoomBuilder';
-
-const THEMES: { name: string; emoji: string }[] = [
-  { name: 'DAWEN Neon Room',    emoji: '🌐' },
-  { name: 'Purple Lounge',      emoji: '💜' },
-  { name: 'Trading Room',       emoji: '📈' },
-  { name: 'Crew Room',          emoji: '👥' },
-  { name: 'Cyber Apartment',    emoji: '🏙️' },
-  { name: 'Solana Studio',      emoji: '⚡' },
-  { name: 'Royal Purple Suite', emoji: '👑' },
-  { name: 'Empty Grid Room',    emoji: '⬜' },
-];
 
 const VISIBILITY_ICON: Record<string, any> = {
   public: Globe, private: Lock, invite_only: UserCheck,
@@ -53,14 +42,11 @@ export function DawenWorldRoomDirectory({
   const [tab, setTab] = useState<'public' | 'mine'>('public');
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newTheme, setNewTheme] = useState(THEMES[0].name);
   const [nameError, setNameError] = useState('');
-  const [newVis, setNewVis] = useState<'public' | 'private' | 'invite_only'>('public');
   const [creating, setCreating] = useState(false);
   const [editRoom, setEditRoom] = useState<WorldRoom | null>(null);
   const [editName, setEditName] = useState('');
   const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
-  const [newRoomStyle, setNewRoomStyle] = useState<RoomStyle>('apartment');
   const [saving, setSaving] = useState(false);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [builderRoom, setBuilderRoom] = useState<WorldRoom | null>(null);
@@ -83,24 +69,23 @@ export function DawenWorldRoomDirectory({
 
   const handleCreate = async () => {
     const trimmed = newName.trim();
-    if (trimmed.length < 3) { setNameError('Name must be at least 3 characters.'); return; }
+    if (!trimmed) { setNameError('Please enter a room name.'); return; }
     if (trimmed.length > 40) { setNameError('Name must be 40 characters or less.'); return; }
     if (!walletAddress) { setNameError('Wallet not connected. Please reconnect and try again.'); return; }
     if (creating) return;
     setNameError('');
     setCreating(true);
     try {
-      const room = await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis, roomStyle: newRoomStyle });
+      const room = await createRoom({ walletAddress, name: trimmed, theme: 'Empty Grid Room', visibility: 'public' });
       setCreateOpen(false);
       setNewName('');
       await load();
       setTab('mine');
-      // Open builder so user can design the room layout
+      // Open builder immediately so user can design the layout
       const roomWithLayout = await fetchRoomWithLayout(room.id);
       setBuilderRoom(roomWithLayout ?? room);
       setBuilderOpen(true);
     } catch (e: any) {
-      console.error('[DawenWorldRoomDirectory] create error:', e?.message ?? e, JSON.stringify(e));
       const msg = e?.message ?? e?.error_description ?? 'Failed to create room. Please try again.';
       setNameError(msg);
     } finally {
@@ -217,9 +202,9 @@ export function DawenWorldRoomDirectory({
                 <View style={styles.roomInfo}>
                   <View style={styles.roomNameRow}>
                     <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
-                    {room.room_style && room.room_style !== 'apartment' && (
+                    {room.layout_saved_at && (
                       <View style={styles.sizeBadge}>
-                        <Text style={styles.sizeBadgeText}>{ROOM_STYLE_CONFIG[room.room_style as RoomStyle]?.label}</Text>
+                        <Text style={styles.sizeBadgeText}>Custom</Text>
                       </View>
                     )}
                   </View>
@@ -241,7 +226,7 @@ export function DawenWorldRoomDirectory({
                   {isMyRoom && (
                     <>
                       <TouchableOpacity onPress={() => handleOpenBuilder(room)} style={styles.layoutBtn}>
-                        <Grid size={13} color={colors.primary} strokeWidth={2} />
+                        <Grid3x3 size={13} color={colors.primary} strokeWidth={2} />
                       </TouchableOpacity>
                       <TouchableOpacity onPress={() => { setEditRoom(room); setEditName(room.name); setEditVis(room.visibility as any); }}>
                         <Edit3 size={14} color="rgba(255,255,255,0.4)" strokeWidth={2} />
@@ -278,66 +263,38 @@ export function DawenWorldRoomDirectory({
         </ScrollView>
       )}
 
-      {/* Create modal */}
+      {/* Create modal — name only, builder handles the layout */}
       <Modal visible={createOpen} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <LinearGradient colors={['#1A0A2E','#0D0D1A']} style={StyleSheet.absoluteFill} />
             <Text style={styles.modalTitle}>Create Room</Text>
+            <Text style={styles.modalHint}>Name your room. You'll design the layout in the Room Builder next.</Text>
 
             <TextInput
-              style={styles.input} placeholder="Room name (3–40 chars)…"
-              placeholderTextColor="rgba(255,255,255,0.3)" value={newName}
-              onChangeText={t => { setNewName(t); if (nameError) setNameError(''); }} maxLength={40}
+              style={styles.input}
+              placeholder="Room name…"
+              placeholderTextColor="rgba(255,255,255,0.3)"
+              value={newName}
+              onChangeText={t => { setNewName(t); if (nameError) setNameError(''); }}
+              maxLength={40}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleCreate}
             />
             {nameError ? <Text style={styles.nameError}>{nameError}</Text> : null}
 
-            <Text style={styles.inputLabel}>Theme</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 50 }} contentContainerStyle={{ flexDirection: 'row', gap: 6 }}>
-              {THEMES.map(t => (
-                <TouchableOpacity key={t.name} style={[styles.themeChip, newTheme === t.name && styles.themeChipActive]} onPress={() => setNewTheme(t.name)}>
-                  <Text style={{ fontSize: 14, marginBottom: 1 }}>{t.emoji}</Text>
-                  <Text style={[styles.themeText, newTheme === t.name && styles.themeTextActive]}>{t.name.split(' ')[0]}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <Text style={styles.inputLabel}>Visibility</Text>
-            <View style={styles.visRow}>
-              {(['public', 'private', 'invite_only'] as const).map(v => (
-                <TouchableOpacity key={v} style={[styles.visBtn, newVis === v && styles.visBtnActive]} onPress={() => setNewVis(v)}>
-                  <Text style={[styles.visText, newVis === v && styles.visTextActive]}>{v.replace('_',' ')}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.inputLabel}>Room Style</Text>
-            <View style={{ gap: 6 }}>
-              {(['apartment', 'house', 'villa'] as const).map(rs => {
-                const cfg = ROOM_STYLE_CONFIG[rs];
-                return (
-                  <TouchableOpacity
-                    key={rs}
-                    style={[styles.tierRow, newRoomStyle === rs && styles.tierRowActive]}
-                    onPress={() => setNewRoomStyle(rs)}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={styles.tierLabel}>{cfg.label}</Text>
-                      <Text style={styles.tierDesc}>{cfg.description}</Text>
-                    </View>
-                    {newRoomStyle === rs && (
-                      <View style={styles.tierCurrentBadge}><Text style={styles.tierCurrentText}>Selected</Text></View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
             <View style={styles.modalBtns}>
-              <TouchableOpacity style={[styles.createRoomBtn, (newName.trim().length < 3 || creating) && { opacity: 0.5 }]} onPress={handleCreate} disabled={newName.trim().length < 3 || creating}>
-                {creating ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.createRoomText}>Create Room</Text>}
+              <TouchableOpacity
+                style={[styles.createRoomBtn, (!newName.trim() || creating) && { opacity: 0.45 }]}
+                onPress={handleCreate}
+                disabled={!newName.trim() || creating}
+              >
+                {creating
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={styles.createRoomText}>Create Room</Text>}
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setCreateOpen(false)} style={styles.cancelBtn}>
+              <TouchableOpacity onPress={() => { setCreateOpen(false); setNewName(''); setNameError(''); }} style={styles.cancelBtn}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -429,20 +386,11 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
   modal: { backgroundColor: '#1A0A2E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.xxl, gap: 12, overflow: 'hidden', borderTopWidth: 1, borderColor: 'rgba(139,92,246,0.3)' },
-  modalTitle: { fontSize: fontSize.xl, fontWeight: '900', color: '#fff', marginBottom: 4 },
+  modalTitle: { fontSize: fontSize.xl, fontWeight: '900', color: '#fff', marginBottom: 2 },
+  modalHint: { fontSize: 12, color: 'rgba(255,255,255,0.4)', fontWeight: '500', lineHeight: 17, marginBottom: 4 },
   input: { backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: 12, fontSize: 14, color: '#fff', borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
-  inputLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  themeChip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'transparent', alignItems: 'center', gap: 2 },
-  themeChipActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },
-  themeText: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.5)' },
-  themeTextActive: { color: colors.primary },
   nameError: { fontSize: 11, color: '#EF4444', fontWeight: '600', marginTop: -4 },
-  visRow: { flexDirection: 'row', gap: 8 },
-  visBtn: { flex: 1, paddingVertical: 8, borderRadius: borderRadius.md, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', borderWidth: 1, borderColor: 'transparent' },
-  visBtnActive: { backgroundColor: colors.primaryMuted, borderColor: colors.primary },
-  visText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.45)', textTransform: 'capitalize' },
-  visTextActive: { color: colors.primary },
-  modalBtns: { gap: 8 },
+  modalBtns: { gap: 8, marginTop: 4 },
   createRoomBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.lg, paddingVertical: spacing.md, alignItems: 'center' },
   createRoomText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
   cancelBtn: { alignItems: 'center', paddingVertical: spacing.sm },
@@ -450,19 +398,4 @@ const styles = StyleSheet.create({
   roomNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sizeBadge: { backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' },
   sizeBadgeText: { fontSize: 9, fontWeight: '700', color: colors.primary },
-  tierRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: borderRadius.md,
-    padding: spacing.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
-  },
-  tierRowActive: { borderColor: colors.primary, backgroundColor: 'rgba(139,92,246,0.12)' },
-  tierEmoji: { fontSize: 22 },
-  tierLabel: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
-  tierDesc: { fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: '500' },
-  tierCurrentBadge: { backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  tierCurrentText: { fontSize: 9, fontWeight: '800', color: '#fff' },
-  tierPriceCol: { alignItems: 'flex-end', gap: 1 },
-  tierPriceText: { fontSize: 11, fontWeight: '800', color: '#F59E0B' },
-  tierUsdText: { fontSize: 9, color: 'rgba(255,255,255,0.35)', fontWeight: '500' },
-  tierFreeText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
 });
