@@ -116,7 +116,7 @@ export default function OnboardingWelcome() {
           </Animated.View>
 
           <Animated.View style={headlineStyle}>
-            <Text style={styles.appName}>DNY</Text>
+            <Text style={styles.appName}>Dawen</Text>
             <Text style={styles.headline}>Empire of Crypto</Text>
           </Animated.View>
 

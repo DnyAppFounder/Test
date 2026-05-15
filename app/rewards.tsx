@@ -61,7 +61,7 @@ export default function RewardsScreen() {
   const handleShareCode = async () => {
     try {
       await Share.share({
-        message: `Join me on DNY with my referral code: ${referralCode}\n\nGet crypto rewards when you sign up!`,
+        message: `Join me on Dawen with my referral code: ${referralCode}\n\nGet crypto rewards when you sign up!`,
       });
     } catch (error) {
       console.error('Error sharing:', error);
