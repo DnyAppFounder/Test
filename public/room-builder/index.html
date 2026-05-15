@@ -106,12 +106,12 @@
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // 45-second hard timeout (Unity WebGL can be slow on first load)
+    // 10-second hard timeout — if Unity files fail to load they fail fast
     timeoutHandle = setTimeout(function() {
       if (!loadedOk) {
-        showError('Room Builder timed out after 45 seconds. Check network and WebGL support.');
+        showError('Room Builder failed to load. Check console/network tab for missing or failed files.');
       }
-    }, 45000);
+    }, 10000);
 
     function startUnity() {
       if (typeof createUnityInstance === 'undefined') {

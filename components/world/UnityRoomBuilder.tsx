@@ -12,7 +12,7 @@ if (Platform.OS !== 'web') {
   WebView = require('react-native-webview').WebView;
 }
 
-const LOAD_TIMEOUT_MS = 45000;
+const LOAD_TIMEOUT_MS = 20000;
 
 interface Props {
   roomName: string;
@@ -24,6 +24,7 @@ interface Props {
 export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) {
   const webViewRef = useRef<any>(null);
   const iframeRef = useRef<any>(null);
+  const webContainerRef = useRef<any>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -92,6 +93,39 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     } catch { /* ignore */ }
   }, [handleBuilderMessage]);
 
+  // Web: inject iframe using document.createElement (more reliable than JSX iframe in React Native Web)
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const attemptCreateIframe = () => {
+      const container = webContainerRef.current;
+      if (!container) { setTimeout(attemptCreateIframe, 100); return; }
+      const iframe = document.createElement('iframe');
+      iframe.src = '/room-builder/index.html';
+      iframe.title = 'Room Builder';
+      iframe.setAttribute('style', 'position:absolute;top:0;left:0;width:100%;height:100%;border:none;background:#231F20;');
+      iframe.addEventListener('load', () => {
+        console.log('[UnityRoomBuilder] iframe onload fired — /room-builder/index.html loaded');
+        startLoadTimer();
+      });
+      iframe.addEventListener('error', () => {
+        console.error('[UnityRoomBuilder] iframe failed to load /room-builder/index.html');
+        clearLoadTimer();
+        setErrorMsg('Room Builder failed to load. Check that /room-builder/index.html exists in the public folder.');
+        setStatus('error');
+      });
+      container.appendChild(iframe);
+      iframeRef.current = iframe;
+    };
+    setTimeout(attemptCreateIframe, 0);
+    return () => {
+      try {
+        const container = webContainerRef.current;
+        if (container && iframeRef.current) container.removeChild(iframeRef.current);
+      } catch {}
+      iframeRef.current = null;
+    };
+  }, []); // eslint-disable-line
+
   // iframe/WebView page finished loading → start the timeout countdown
   const onLoadEnd = useCallback(() => { startLoadTimer(); }, [startLoadTimer]);
 
@@ -159,7 +193,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
             <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
             <ActivityIndicator size="large" color="#10B981" />
             <Text style={styles.loadingText}>Loading Room Builder...</Text>
-            <Text style={styles.loadingNote}>First load may take up to 45 seconds (WebGL)</Text>
+            <Text style={styles.loadingNote}>First load may take up to 20 seconds (WebGL)</Text>
           </View>
         )}
 
@@ -179,14 +213,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
         )}
 
         {Platform.OS === 'web' ? (
-          // @ts-ignore — plain HTML iframe on web
-          <iframe
-            ref={iframeRef}
-            src="/room-builder/index.html"
-            onLoad={onLoadEnd}
-            title="Room Builder"
-            style={{ width: '100%', height: '100%', border: 'none', position: 'absolute', top: 0, left: 0, backgroundColor: '#231F20' }}
-          />
+          <View ref={webContainerRef} style={styles.iframeContainer} />
         ) : (
           <WebView
             ref={webViewRef}
@@ -259,6 +286,7 @@ const styles = StyleSheet.create({
   saveBtnDisabled: { opacity: 0.6 },
   saveBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   webContainer: { flex: 1, position: 'relative' },
+  iframeContainer: { flex: 1, position: 'relative' },
   webView: { flex: 1, backgroundColor: '#231F20' },
   overlay: {
     ...StyleSheet.absoluteFillObject,
