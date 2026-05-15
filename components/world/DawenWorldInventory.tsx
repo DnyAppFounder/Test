@@ -4,6 +4,7 @@ import { ArrowLeft, Package } from 'lucide-react-native';
 import { WorldInventoryItem } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { WorldSprite } from './WorldSprite';
+import { getAssetForItem } from '@/services/worldAssetRegistry';
 
 const RARITY_COLOR: Record<string, string> = {
   common: '#6B7280', uncommon: '#10B981', rare: '#3B82F6', epic: '#8B5CF6', legendary: '#F59E0B',
@@ -52,7 +53,12 @@ export function DawenWorldInventory({ inventory, onClose }: Props) {
             return (
               <View key={inv.id} style={styles.row}>
                 <View style={[styles.iconBg, { backgroundColor: item.color_hex + '22' }]}>
-                  <WorldSprite emoji={item.icon_emoji} size={36} color={item.color_hex} />
+                  <WorldSprite
+                    emoji={item.icon_emoji}
+                    size={36}
+                    color={item.color_hex}
+                    imageUrl={getAssetForItem(item.icon_emoji, item.item_type).defaultUrl}
+                  />
                 </View>
                 <View style={styles.info}>
                   <Text style={styles.name}>{item.item_name}</Text>

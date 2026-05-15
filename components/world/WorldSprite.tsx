@@ -1,4 +1,5 @@
 import React from 'react';
+import { Image, View } from 'react-native';
 import Svg, { Rect, Circle, G, Polygon, Path, Line, Ellipse } from 'react-native-svg';
 
 interface SpriteProps {
@@ -1223,9 +1224,21 @@ interface WorldSpriteProps {
   emoji: string;
   size: number;
   color?: string;
+  imageUrl?: string;
 }
 
-export function WorldSprite({ emoji, size, color = '#8B5CF6' }: WorldSpriteProps) {
+export function WorldSprite({ emoji, size, color = '#8B5CF6', imageUrl }: WorldSpriteProps) {
+  if (imageUrl) {
+    return (
+      <View style={{ width: size, height: size }}>
+        <Image
+          source={{ uri: imageUrl }}
+          style={{ width: size, height: size }}
+          resizeMode="contain"
+        />
+      </View>
+    );
+  }
   const SpriteFn = SPRITE_MAP[emoji] ?? FALLBACK;
   return <SpriteFn size={size} color={color} />;
 }
