@@ -498,21 +498,22 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <ImageBackground
-        source={require('../../tour.jpeg')}
-        style={styles.header}
-        resizeMode="cover"
-        imageStyle={{ opacity: 0.35, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }}
-      >
-        <LinearGradient
-          colors={['rgba(5,0,25,0.5)', 'rgba(8,2,30,0.88)']}
+      <View style={styles.header}>
+        <ImageBackground
+          source={require('../../tour.jpeg')}
           style={StyleSheet.absoluteFill}
-        />
+          resizeMode="cover"
+        >
+          <LinearGradient
+            colors={['rgba(6,1,20,0.12)', 'rgba(10,2,30,0.72)']}
+            style={StyleSheet.absoluteFill}
+          />
+        </ImageBackground>
         <View style={styles.headerContent}>
           <Text style={styles.headerTitle}>{t.settings.title}</Text>
           <Text style={styles.headerSub}>Dawen City</Text>
         </View>
-      </ImageBackground>
+      </View>
 
       <ScrollView
         style={styles.content}
@@ -1302,29 +1303,37 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
+    height: 120,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  headerContent: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     paddingTop: 56,
     paddingBottom: 16,
     paddingHorizontal: spacing.xxl,
-    minHeight: 110,
-    overflow: 'hidden',
-    justifyContent: 'flex-end',
-  },
-  headerContent: {
     gap: 3,
+    justifyContent: 'flex-end',
   },
   headerTitle: {
     fontSize: fontSize.xl,
     fontWeight: '800',
     color: '#FFFFFF',
-    textShadowColor: 'rgba(139,92,246,0.5)',
+    textShadowColor: 'rgba(139,92,246,0.8)',
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 8,
+    textShadowRadius: 10,
   },
   headerSub: {
     fontSize: fontSize.xs,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.primary,
     letterSpacing: 0.5,
+    textShadowColor: 'rgba(139,92,246,0.6)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
   },
   content: {
     flex: 1,

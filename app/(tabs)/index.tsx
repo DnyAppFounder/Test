@@ -17,28 +17,7 @@ import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Plus,
-  Eye,
-  EyeOff,
-  TrendingUp,
-  TrendingDown,
-  Search,
-  Flame,
-  Star,
-  ArrowUp,
-  Sparkles,
-  Zap,
-  Coins,
-  RefreshCw,
-  Image as ImageIcon,
-  SlidersHorizontal,
-  Copy,
-  ArrowRight,
-  ChevronRight,
-} from 'lucide-react-native';
+import { ArrowDownToLine, ArrowUpFromLine, Plus, Eye, EyeOff, TrendingUp, TrendingDown, Search, Flame, Star, ArrowUp, Sparkles, Zap, Coins, RefreshCw, Image as ImageIcon, SlidersHorizontal, Copy, ArrowRight, ChevronRight, Rocket, ChartBar as BarChart2, Activity } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -48,11 +27,14 @@ import { watchlistService, WatchlistToken } from '@/services/watchlistService';
 import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
 import { PortfolioChart } from '@/components/PortfolioChart';
 import { NFTService, NFT } from '@/services/nftService';
+import { TrackedWalletsService, TrackedWallet } from '@/services/trackedWalletsService';
+import { PortfolioTracker } from '@/components/PortfolioTracker';
+import { WalletActivity } from '@/components/WalletActivity';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import SparklineChart from '@/components/SparklineChart';
 import { useLiveToken } from '@/hooks/useLiveToken';
 
-type TabKey = 'market' | 'assets' | 'watchlist';
+type TabKey = 'market' | 'assets' | 'watchlist' | 'portfolio' | 'activity';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
 type AssetSubTab = 'tokens' | 'nfts';
 
@@ -187,6 +169,8 @@ export default function WalletHome() {
   const [nftsLoading, setNftsLoading] = useState(false);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filterSort, setFilterSort] = useState<'default' | 'gainers' | 'losers' | 'volume' | 'mcap' | 'price_asc' | 'price_desc'>('default');
+  const [savedTrackedWallets, setSavedTrackedWallets] = useState<TrackedWallet[]>([]);
+  const [portfolioInitialAddr, setPortfolioInitialAddr] = useState('');
 
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
@@ -312,6 +296,13 @@ export default function WalletHome() {
       loadNFTs();
     }
   }, [activeTab, activeAddress, loadNFTs]);
+
+  // Load saved tracked wallets when portfolio tab opens
+  useEffect(() => {
+    if (activeTab === 'portfolio' && activeAddress) {
+      TrackedWalletsService.getSaved(activeAddress).then(setSavedTrackedWallets).catch(() => {});
+    }
+  }, [activeTab, activeAddress]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -503,26 +494,64 @@ export default function WalletHome() {
         ))}
       </View>
 
-      {/* ── 3. TABS ── */}
-      <View style={styles.tabsWrap}>
-        {(['assets', 'market', 'watchlist'] as TabKey[]).map((tab) => {
-          const label = tab === 'assets' ? 'My Assets' : tab === 'market' ? 'Discover' : 'Watchlist';
-          return (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.tabItem, activeTab === tab && styles.tabItemActive]}
-              onPress={() => handleTabChange(tab)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.tabItemText, activeTab === tab && styles.tabItemTextActive]}>{label}</Text>
-              {activeTab === tab && <View style={styles.tabUnderline} />}
-            </TouchableOpacity>
-          );
-        })}
+      {/* ── 3. QUICK ACCESS ── */}
+      <View style={styles.quickAccessRow}>
+        <TouchableOpacity
+          style={styles.quickBtn}
+          onPress={() => router.push('/launchpad/creator-dashboard' as any)}
+          activeOpacity={0.85}
+        >
+          <LinearGradient colors={['rgba(139,92,246,0.2)', 'rgba(109,40,217,0.08)']} style={StyleSheet.absoluteFill} />
+          <Rocket size={16} color={colors.primary} strokeWidth={2} />
+          <View style={styles.quickBtnText}>
+            <Text style={styles.quickBtnTitle}>Creator Dashboard</Text>
+            <Text style={styles.quickBtnSub}>Manage your launches</Text>
+          </View>
+          <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.quickBtn}
+          onPress={() => handleTabChange('portfolio')}
+          activeOpacity={0.85}
+        >
+          <LinearGradient colors={['rgba(139,92,246,0.2)', 'rgba(109,40,217,0.08)']} style={StyleSheet.absoluteFill} />
+          <BarChart2 size={16} color={colors.primary} strokeWidth={2} />
+          <View style={styles.quickBtnText}>
+            <Text style={styles.quickBtnTitle}>Portfolio Tracker</Text>
+            <Text style={styles.quickBtnSub}>Track any wallet</Text>
+          </View>
+          <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
       </View>
 
-      {/* ── 4. SEARCH BAR ── */}
-      <View style={styles.searchRow}>
+      {/* ── 4. TABS ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabsWrap}
+        contentContainerStyle={styles.tabsContent}
+      >
+        {([
+          { key: 'assets', label: 'My Assets' },
+          { key: 'market', label: 'Discover' },
+          { key: 'watchlist', label: 'Watchlist' },
+          { key: 'portfolio', label: 'Portfolio' },
+          { key: 'activity', label: 'Activity' },
+        ] as { key: TabKey; label: string }[]).map(({ key, label }) => (
+          <TouchableOpacity
+            key={key}
+            style={[styles.tabItem, activeTab === key && styles.tabItemActive]}
+            onPress={() => handleTabChange(key)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabItemText, activeTab === key && styles.tabItemTextActive]}>{label}</Text>
+            {activeTab === key && <View style={styles.tabUnderline} />}
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {/* ── 5. SEARCH BAR (not shown for portfolio/activity) ── */}
+      {activeTab !== 'portfolio' && activeTab !== 'activity' && <View style={styles.searchRow}>
         <View style={styles.searchBar}>
           <Search size={17} color={colors.textMuted} strokeWidth={2} />
           <TextInput
@@ -543,6 +572,31 @@ export default function WalletHome() {
           <SlidersHorizontal size={18} color={filterSort !== 'default' ? colors.primary : colors.textMuted} strokeWidth={2} />
         </TouchableOpacity>
       </View>
+
+      }
+
+      {/* ── 6. PORTFOLIO TRACKER TAB ── */}
+      {activeTab === 'portfolio' && (
+        <PortfolioTracker
+          currentUserAddress={activeAddress || undefined}
+          initialAddress={portfolioInitialAddr}
+          savedWallets={savedTrackedWallets}
+          onSavedWalletsChange={setSavedTrackedWallets}
+        />
+      )}
+
+      {/* ── 7. ACTIVITY TAB ── */}
+      {activeTab === 'activity' && (
+        <View style={{ paddingTop: spacing.lg }}>
+          {activeAddress ? (
+            <WalletActivity walletAddress={activeAddress} />
+          ) : (
+            <View style={styles.inlineEmpty}>
+              <Text style={styles.inlineEmptyText}>Connect a wallet to see activity</Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {/* ── 5. MY ASSETS / DISCOVER / WATCHLIST CONTENT ── */}
       {activeTab === 'assets' && (
@@ -1468,16 +1522,19 @@ const styles = StyleSheet.create({
 
   // Tabs
   tabsWrap: {
-    flexDirection: 'row',
     marginHorizontal: spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
     marginBottom: spacing.sm,
   },
+  tabsContent: {
+    flexDirection: 'row',
+    gap: 0,
+  },
   tabItem: {
-    flex: 1,
     alignItems: 'center',
     paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
     position: 'relative',
   },
   tabItemActive: {},
@@ -1485,6 +1542,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textMuted,
+    whiteSpace: 'nowrap' as any,
   },
   tabItemTextActive: {
     color: colors.primary,
@@ -1493,12 +1551,33 @@ const styles = StyleSheet.create({
   tabUnderline: {
     position: 'absolute',
     bottom: -1,
-    left: '20%',
-    right: '20%',
+    left: '15%',
+    right: '15%',
     height: 2,
     backgroundColor: colors.primary,
     borderRadius: 2,
   },
+  quickAccessRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  quickBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.25)',
+    overflow: 'hidden',
+  },
+  quickBtnText: { flex: 1 },
+  quickBtnTitle: { fontSize: 12, fontWeight: '800', color: colors.textPrimary },
+  quickBtnSub: { fontSize: 10, color: colors.textMuted, fontWeight: '500', marginTop: 1 },
 
   // Search row
   searchRow: {

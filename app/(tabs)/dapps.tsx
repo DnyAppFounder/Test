@@ -647,19 +647,22 @@ export default function DawenCityPage() {
   return (
     <View style={pageStyles.container}>
       {!gameFullscreen && (
-        <ImageBackground
-          source={require('../../tour.jpeg')}
-          style={pageStyles.header}
-          resizeMode="cover"
-          imageStyle={{ opacity: 0.55 }}
-        >
-          <LinearGradient
-            colors={['rgba(5,0,25,0.45)', 'rgba(8,2,30,0.82)']}
+        <View style={pageStyles.header}>
+          <ImageBackground
+            source={require('../../tour.jpeg')}
             style={StyleSheet.absoluteFill}
-          />
-          <Text style={pageStyles.headerTitle}>Dawen City</Text>
-          <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
-        </ImageBackground>
+            resizeMode="cover"
+          >
+            <LinearGradient
+              colors={['rgba(6,1,20,0.08)', 'rgba(10,2,30,0.58)']}
+              style={StyleSheet.absoluteFill}
+            />
+          </ImageBackground>
+          <View style={pageStyles.headerInner}>
+            <Text style={pageStyles.headerTitle}>Dawen City</Text>
+            <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
+          </View>
+        </View>
       )}
 
       {!gameFullscreen && (
@@ -684,28 +687,38 @@ export default function DawenCityPage() {
 const pageStyles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: {
-    paddingTop: 56,
+    height: 170,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  headerInner: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     paddingBottom: spacing.xl,
     paddingHorizontal: spacing.xxl,
-    minHeight: 130,
-    overflow: 'hidden',
+    paddingTop: 56,
     justifyContent: 'flex-end',
   },
   headerTitle: {
-    fontSize: 30,
+    fontSize: 32,
     fontWeight: '900',
     color: '#FFFFFF',
     marginBottom: 4,
     letterSpacing: 0.2,
-    textShadowColor: 'rgba(139,92,246,0.6)',
+    textShadowColor: 'rgba(139,92,246,0.9)',
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 12,
+    textShadowRadius: 16,
   },
   headerSubtitle: {
     fontSize: fontSize.sm,
     color: colors.primary,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
+    textShadowColor: 'rgba(139,92,246,0.7)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
   },
   tabsWrapper: { paddingTop: spacing.lg },
   section: { flex: 1 },
