@@ -15,6 +15,7 @@ export default function PriceAlertsScreen() {
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const [selectedToken, setSelectedToken] = useState('bitcoin');
   const [alertType, setAlertType] = useState<'above' | 'below'>('above');
@@ -27,6 +28,7 @@ export default function PriceAlertsScreen() {
 
   useEffect(() => {
     if (showCreateModal) {
+      setCreateError(null);
       loadCurrentPrice();
     }
   }, [showCreateModal, selectedToken]);
@@ -51,29 +53,47 @@ export default function PriceAlertsScreen() {
   const handleCreateAlert = async () => {
     if (!selectedAccount || !targetPrice) return;
 
+    setCreateError(null);
     setCreating(true);
-    const coins = await MarketService.getTopCoins();
-    const coin = coins.find(c => c.id === selectedToken);
-    if (!coin) {
+
+    try {
+      const coins = await MarketService.getTopCoins();
+      const coin = coins.find(c => c.id === selectedToken);
+      if (!coin) {
+        setCreateError('Could not fetch token data. Please try again.');
+        setCreating(false);
+        return;
+      }
+
+      const parsedPrice = parseFloat(targetPrice);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        setCreateError('Please enter a valid target price greater than 0.');
+        setCreating(false);
+        return;
+      }
+
+      const alert = await AlertsService.createAlert(
+        selectedAccount.address,
+        selectedToken,
+        coin.symbol.toUpperCase(),
+        coin.name,
+        alertType,
+        parsedPrice
+      );
+
+      if (alert) {
+        setShowCreateModal(false);
+        setTargetPrice('');
+        setCreateError(null);
+        loadAlerts();
+      } else {
+        setCreateError('Failed to create alert. Please check your connection and try again.');
+      }
+    } catch (err: any) {
+      setCreateError(err?.message || 'An unexpected error occurred. Please try again.');
+    } finally {
       setCreating(false);
-      return;
     }
-
-    const alert = await AlertsService.createAlert(
-      selectedAccount.address,
-      selectedToken,
-      coin.symbol.toUpperCase(),
-      coin.name,
-      alertType,
-      parseFloat(targetPrice)
-    );
-
-    if (alert) {
-      setShowCreateModal(false);
-      setTargetPrice('');
-      loadAlerts();
-    }
-    setCreating(false);
   };
 
   const handleToggleAlert = async (alertId: string, currentState: boolean) => {
@@ -250,6 +270,12 @@ export default function PriceAlertsScreen() {
                 value={targetPrice}
                 onChangeText={setTargetPrice}
               />
+
+              {createError && (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorBannerText}>{createError}</Text>
+                </View>
+              )}
 
               <TouchableOpacity
                 style={[styles.createButton, (!targetPrice || creating) && styles.createButtonDisabled]}
@@ -544,5 +570,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.white,
+  },
+  errorBanner: {
+    backgroundColor: colors.errorMuted,
+    borderWidth: 1,
+    borderColor: colors.error,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  errorBannerText: {
+    fontSize: fontSize.sm,
+    color: colors.error,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

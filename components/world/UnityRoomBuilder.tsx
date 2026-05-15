@@ -1,11 +1,16 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Save, CircleAlert as AlertCircle } from 'lucide-react-native';
 import { type RoomLayout } from '@/services/worldService';
+
+// Only import WebView on native
+let WebView: any = null;
+if (Platform.OS !== 'web') {
+  WebView = require('react-native-webview').WebView;
+}
 
 const LOAD_TIMEOUT_MS = 45000;
 
@@ -18,25 +23,22 @@ interface Props {
 
 export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) {
   const webViewRef = useRef<any>(null);
+  const iframeRef = useRef<any>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearLoadTimer = useCallback(() => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
+    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
   }, []);
 
   const startLoadTimer = useCallback(() => {
     clearLoadTimer();
     timeoutRef.current = setTimeout(() => {
-      console.error('[UnityRoomBuilder] Timeout: builder_loaded not received within', LOAD_TIMEOUT_MS / 1000, 'seconds');
       setStatus(prev => {
         if (prev === 'loading') {
-          setErrorMsg('Room Builder failed to load (timeout). The Unity WebGL files may not be served with the correct Content-Encoding headers for Brotli compression. Check browser DevTools → Network for 404 or decode errors on Builds.*.br files.');
+          setErrorMsg('Room Builder failed to load (timeout). The Unity WebGL files may not be served with the correct Content-Encoding headers for Brotli compression.');
           return 'error';
         }
         return prev;
@@ -44,9 +46,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     }, LOAD_TIMEOUT_MS);
   }, [clearLoadTimer]);
 
-  useEffect(() => {
-    return () => clearLoadTimer();
-  }, [clearLoadTimer]);
+  useEffect(() => { return () => clearLoadTimer(); }, [clearLoadTimer]);
 
   const handleBuilderMessage = useCallback((msg: { type: string; data?: any }) => {
     switch (msg.type) {
@@ -57,15 +57,13 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
         break;
       case 'room_saved': {
         setSaving(false);
-        const layout = buildLayoutFromUnity(msg.data);
-        onSave(layout);
+        onSave(buildLayoutFromUnity(msg.data));
         break;
       }
       case 'builder_error':
         clearLoadTimer();
         setStatus('error');
         setErrorMsg(msg.data ? String(msg.data) : 'Room Builder failed to load.');
-        console.error('[UnityRoomBuilder] builder_error from iframe:', msg.data);
         break;
     }
   }, [onSave, clearLoadTimer]);
@@ -78,7 +76,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
         const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (!msg?.type) return;
         handleBuilderMessage(msg);
-      } catch { /* ignore non-JSON messages */ }
+      } catch { /* ignore */ }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
@@ -94,37 +92,38 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     } catch { /* ignore */ }
   }, [handleBuilderMessage]);
 
-  // WebView HTML page finished loading → start the timeout countdown
-  const onLoadEnd = useCallback(() => {
-    startLoadTimer();
-  }, [startLoadTimer]);
+  // iframe/WebView page finished loading → start the timeout countdown
+  const onLoadEnd = useCallback(() => { startLoadTimer(); }, [startLoadTimer]);
 
-  // WebView itself failed to load the page (network error, etc.)
   const onWebViewError = useCallback((e: any) => {
-    const desc = e?.nativeEvent?.description || e?.nativeEvent?.url || 'Unknown error';
-    console.error('[UnityRoomBuilder] WebView load error:', desc);
+    console.error('[UnityRoomBuilder] WebView load error:', e?.nativeEvent?.description);
     clearLoadTimer();
-    setErrorMsg(`Failed to load Room Builder page: ${desc}`);
+    setErrorMsg(`Failed to load Room Builder page: ${e?.nativeEvent?.description || 'Unknown error'}`);
     setStatus('error');
   }, [clearLoadTimer]);
 
   const handleSave = () => {
     if (saving) return;
     setSaving(true);
-    const saveScript = `
-      (function() {
-        try {
-          if (typeof unityInstance !== 'undefined' && unityInstance) {
-            try { unityInstance.SendMessage('UIManager', 'OnSave', ''); } catch(e) {}
-            try { unityInstance.SendMessage('GameManager', 'SaveRoom', ''); } catch(e) {}
-            try { unityInstance.SendMessage('RoomBuilder', 'Save', ''); } catch(e) {}
-          }
-        } catch(e) {}
-      })();
-      true;
-    `;
-    if (webViewRef.current?.injectJavaScript) {
-      webViewRef.current.injectJavaScript(saveScript);
+    if (Platform.OS === 'web') {
+      try {
+        (iframeRef.current as HTMLIFrameElement | null)?.contentWindow?.postMessage(
+          JSON.stringify({ type: 'save_room' }), '*'
+        );
+      } catch {}
+    } else if (webViewRef.current?.injectJavaScript) {
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (typeof unityInstance !== 'undefined' && unityInstance) {
+              try { unityInstance.SendMessage('UIManager', 'OnSave', ''); } catch(e) {}
+              try { unityInstance.SendMessage('GameManager', 'SaveRoom', ''); } catch(e) {}
+              try { unityInstance.SendMessage('RoomBuilder', 'Save', ''); } catch(e) {}
+            }
+          } catch(e) {}
+        })();
+        true;
+      `);
     }
     setTimeout(() => setSaving(false), 3000);
   };
@@ -158,7 +157,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
         {status === 'loading' && (
           <View style={styles.overlay}>
             <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
-            <ActivityIndicator size="large" color="#8B5CF6" />
+            <ActivityIndicator size="large" color="#10B981" />
             <Text style={styles.loadingText}>Loading Room Builder...</Text>
             <Text style={styles.loadingNote}>First load may take up to 45 seconds (WebGL)</Text>
           </View>
@@ -179,18 +178,29 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
           </View>
         )}
 
-        <WebView
-          ref={webViewRef}
-          source={{ uri: '/room-builder/index.html' }}
-          style={styles.webView}
-          onMessage={onWebViewMessage}
-          onLoadEnd={onLoadEnd}
-          onError={onWebViewError}
-          javaScriptEnabled
-          allowsInlineMediaPlayback
-          mediaPlaybackRequiresUserAction={false}
-          originWhitelist={['*']}
-        />
+        {Platform.OS === 'web' ? (
+          // @ts-ignore — plain HTML iframe on web
+          <iframe
+            ref={iframeRef}
+            src="/room-builder/index.html"
+            onLoad={onLoadEnd}
+            title="Room Builder"
+            style={{ width: '100%', height: '100%', border: 'none', position: 'absolute', top: 0, left: 0, backgroundColor: '#231F20' }}
+          />
+        ) : (
+          <WebView
+            ref={webViewRef}
+            source={{ uri: '/room-builder/index.html' }}
+            style={styles.webView}
+            onMessage={onWebViewMessage}
+            onLoadEnd={onLoadEnd}
+            onError={onWebViewError}
+            javaScriptEnabled
+            allowsInlineMediaPlayback
+            mediaPlaybackRequiresUserAction={false}
+            originWhitelist={['*']}
+          />
+        )}
       </View>
 
       {saving && (
@@ -214,9 +224,7 @@ function buildLayoutFromUnity(data: any): RoomLayout | undefined {
     if (data.tiles || data.width) {
       const w = data.width || 10;
       const h = data.height || 8;
-      const tiles: boolean[][] = Array.from({ length: w }, () =>
-        Array.from({ length: h }, () => true)
-      );
+      const tiles: boolean[][] = Array.from({ length: w }, () => Array.from({ length: h }, () => true));
       return {
         version: '1.0', width: w, height: h,
         floor_style: data.floor_style || 'wood',

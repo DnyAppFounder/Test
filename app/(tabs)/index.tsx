@@ -12,12 +12,13 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  Switch,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowDownToLine, ArrowUpFromLine, Plus, Eye, EyeOff, TrendingUp, TrendingDown, Search, Flame, Star, ArrowUp, Sparkles, Zap, Coins, RefreshCw, Image as ImageIcon, SlidersHorizontal, Copy, ArrowRight, ChevronRight, Rocket, ChartBar as BarChart2, Activity } from 'lucide-react-native';
+import { ArrowDownToLine, ArrowUpFromLine, Plus, Eye, EyeOff, TrendingUp, TrendingDown, Search, Flame, Star, ArrowUp, Sparkles, Zap, Coins, RefreshCw, Image as ImageIcon, SlidersHorizontal, Copy, ArrowRight, ChevronRight, Rocket, ChartBar as BarChart2, Activity, BadgeCheck, X } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -171,6 +172,9 @@ export default function WalletHome() {
   const [filterSort, setFilterSort] = useState<'default' | 'gainers' | 'losers' | 'volume' | 'mcap' | 'price_asc' | 'price_desc'>('default');
   const [savedTrackedWallets, setSavedTrackedWallets] = useState<TrackedWallet[]>([]);
   const [portfolioInitialAddr, setPortfolioInitialAddr] = useState('');
+  const [allAssetsModalVisible, setAllAssetsModalVisible] = useState(false);
+  const [manageAssetsModalVisible, setManageAssetsModalVisible] = useState(false);
+  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(new Set());
 
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
@@ -373,7 +377,7 @@ export default function WalletHome() {
   };
 
   const filteredAssets = walletAssets.filter((asset) => {
-    // Always show native SOL regardless of balance; filter others by search only
+    if (hiddenAssets.has(asset.address)) return false;
     if (!searchQuery) return true;
     return asset.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
            asset.symbol.toLowerCase().includes(searchQuery.toLowerCase());
@@ -612,7 +616,7 @@ export default function WalletHome() {
               </View>
               <TouchableOpacity
                 style={styles.manageBtn}
-                onPress={() => setActiveTab('watchlist')}
+                onPress={() => setManageAssetsModalVisible(true)}
                 activeOpacity={0.8}
               >
                 <Text style={styles.manageBtnText}>Manage</Text>
@@ -642,10 +646,10 @@ export default function WalletHome() {
                 <Text style={styles.inlineEmptySub}>Buy tokens to get started</Text>
               </View>
             ) : (
-              filteredAssets.map((asset, idx) => (
+              filteredAssets.slice(0, 5).map((asset, idx) => (
                 <TouchableOpacity
                   key={asset.address}
-                  style={[styles.assetRow, idx < filteredAssets.length - 1 && styles.assetRowBorder]}
+                  style={[styles.assetRow, idx < Math.min(filteredAssets.length, 5) - 1 && styles.assetRowBorder]}
                   onPress={() => router.push(`/token-detail/${asset.address}` as any)}
                   activeOpacity={0.8}
                 >
@@ -661,7 +665,10 @@ export default function WalletHome() {
                     </View>
                   )}
                   <View style={styles.assetInfo}>
-                    <Text style={styles.assetName}>{asset.name}</Text>
+                    <View style={styles.assetNameRow}>
+                      <Text style={styles.assetName} numberOfLines={1}>{asset.name}</Text>
+                      {asset.verified && <BadgeCheck size={13} color={colors.success} strokeWidth={2.5} />}
+                    </View>
                     <Text style={styles.assetSymbol}>{asset.symbol?.toUpperCase()}</Text>
                   </View>
                   <View style={styles.assetMid}>
@@ -686,12 +693,11 @@ export default function WalletHome() {
             <TouchableOpacity
               style={styles.viewAllBtn}
               activeOpacity={0.8}
-              onPress={() => {
-                // Show all SPL tokens: scroll to top of assets tab which already shows all tokens
-                setActiveTab('assets');
-              }}
+              onPress={() => setAllAssetsModalVisible(true)}
             >
-              <Text style={styles.viewAllText}>View all assets</Text>
+              <Text style={styles.viewAllText}>
+                View all assets{filteredAssets.length > 5 ? ` (${filteredAssets.length})` : ''}
+              </Text>
               <ChevronRight size={16} color={colors.primary} strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
@@ -810,6 +816,139 @@ export default function WalletHome() {
 
       <View style={{ height: 100 }} />
     </ScrollView>
+
+    {/* All Assets Modal */}
+    <Modal
+      visible={allAssetsModalVisible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={() => setAllAssetsModalVisible(false)}
+    >
+      <View style={styles.fullModalRoot}>
+        <View style={styles.fullModalHeader}>
+          <Text style={styles.fullModalTitle}>All Assets</Text>
+          <TouchableOpacity style={styles.fullModalClose} onPress={() => setAllAssetsModalVisible(false)}>
+            <X size={20} color={colors.textPrimary} strokeWidth={2.5} />
+          </TouchableOpacity>
+        </View>
+        <ScrollView style={styles.fullModalScroll} showsVerticalScrollIndicator={false}>
+          {walletAssets.filter(a => !hiddenAssets.has(a.address)).map((asset, idx, arr) => (
+            <TouchableOpacity
+              key={asset.address}
+              style={[styles.allAssetRow, idx < arr.length - 1 && styles.assetRowBorder]}
+              onPress={() => { setAllAssetsModalVisible(false); router.push(`/token-detail/${asset.address}` as any); }}
+              activeOpacity={0.8}
+            >
+              {asset.logoUrl ? (
+                <Image source={{ uri: asset.logoUrl }} style={styles.assetLogo} />
+              ) : (
+                <View style={[styles.assetLogoPlaceholder, { backgroundColor: colors.primary + '33' }]}>
+                  <Text style={styles.assetLogoText}>{(asset.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={styles.assetInfo}>
+                <View style={styles.assetNameRow}>
+                  <Text style={styles.assetName} numberOfLines={1}>{asset.name}</Text>
+                  {asset.verified && <BadgeCheck size={13} color={colors.success} strokeWidth={2.5} />}
+                </View>
+                <Text style={styles.assetSymbol}>{asset.symbol?.toUpperCase()}</Text>
+              </View>
+              <View style={styles.assetMid}>
+                <Text style={styles.assetBalance2}>
+                  {balanceHidden ? '****' : asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: asset.isNative ? 4 : 2 })}
+                </Text>
+                <Text style={styles.assetBalanceUsd}>
+                  {asset.price > 0 ? (balanceHidden ? '****' : `$${asset.value.toFixed(2)}`) : '—'}
+                </Text>
+              </View>
+              <View style={styles.assetRight}>
+                <Text style={styles.assetValueText}>{asset.price > 0 ? `$${asset.price < 0.01 ? asset.price.toFixed(6) : asset.price.toFixed(2)}` : '—'}</Text>
+                <Text style={[styles.assetChangeText, { color: asset.priceChange24h >= 0 ? colors.success : colors.error }]}>
+                  {asset.priceChange24h >= 0 ? '+' : ''}{asset.priceChange24h.toFixed(2)}%
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+          {walletAssets.length === 0 && (
+            <View style={styles.inlineEmpty}>
+              <Text style={styles.inlineEmptyText}>No assets found</Text>
+            </View>
+          )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </View>
+    </Modal>
+
+    {/* Manage Assets Modal */}
+    <Modal
+      visible={manageAssetsModalVisible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={() => setManageAssetsModalVisible(false)}
+    >
+      <View style={styles.fullModalRoot}>
+        <View style={styles.fullModalHeader}>
+          <View>
+            <Text style={styles.fullModalTitle}>Manage Assets</Text>
+            <Text style={styles.fullModalSub}>Toggle tokens to show or hide them</Text>
+          </View>
+          <TouchableOpacity style={styles.fullModalClose} onPress={() => setManageAssetsModalVisible(false)}>
+            <X size={20} color={colors.textPrimary} strokeWidth={2.5} />
+          </TouchableOpacity>
+        </View>
+        <ScrollView style={styles.fullModalScroll} showsVerticalScrollIndicator={false}>
+          {walletAssets.map((asset, idx) => {
+            const isVisible = !hiddenAssets.has(asset.address);
+            return (
+              <View
+                key={asset.address}
+                style={[styles.manageRow, idx < walletAssets.length - 1 && styles.assetRowBorder]}
+              >
+                {asset.logoUrl ? (
+                  <Image source={{ uri: asset.logoUrl }} style={styles.manageLogo} />
+                ) : (
+                  <View style={[styles.manageLogoPlaceholder, { backgroundColor: colors.primary + '33' }]}>
+                    <Text style={styles.assetLogoText}>{(asset.symbol ?? '??').substring(0, 2).toUpperCase()}</Text>
+                  </View>
+                )}
+                <View style={styles.assetInfo}>
+                  <View style={styles.assetNameRow}>
+                    <Text style={[styles.assetName, !isVisible && styles.assetNameHidden]} numberOfLines={1}>{asset.name}</Text>
+                    {asset.verified && <BadgeCheck size={13} color={colors.success} strokeWidth={2.5} />}
+                  </View>
+                  <Text style={styles.assetSymbol}>{asset.symbol?.toUpperCase()}</Text>
+                </View>
+                <View style={styles.manageRight}>
+                  <Text style={[styles.manageBal, !isVisible && { color: colors.textMuted }]}>
+                    {asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  </Text>
+                  <Switch
+                    value={isVisible}
+                    onValueChange={(val) => {
+                      setHiddenAssets(prev => {
+                        const next = new Set(prev);
+                        if (val) next.delete(asset.address);
+                        else if (!asset.isNative) next.add(asset.address); // never hide native SOL
+                        return next;
+                      });
+                    }}
+                    trackColor={{ false: colors.surfaceBorder, true: colors.primaryMuted }}
+                    thumbColor={isVisible ? colors.primary : colors.textMuted}
+                    disabled={asset.isNative}
+                  />
+                </View>
+              </View>
+            );
+          })}
+          {walletAssets.length === 0 && (
+            <View style={styles.inlineEmpty}>
+              <Text style={styles.inlineEmptyText}>No assets to manage</Text>
+            </View>
+          )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </View>
+    </Modal>
     </>
   );
 }
@@ -1911,5 +2050,91 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: colors.primary,
+  },
+
+  // Asset name row (with verified badge)
+  assetNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
+  },
+  assetNameHidden: {
+    color: colors.textMuted,
+  },
+
+  // Full-screen modals
+  fullModalRoot: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  fullModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 52,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+    backgroundColor: colors.background,
+  },
+  fullModalTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  fullModalSub: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  fullModalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullModalScroll: {
+    flex: 1,
+    paddingHorizontal: spacing.lg,
+  },
+  allAssetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+
+  // Manage modal
+  manageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  manageLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  manageLogoPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  manageRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  manageBal: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
 });

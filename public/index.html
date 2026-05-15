@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no, viewport-fit=cover" />
     <title>bolt-expo-nativewind</title>
     <style id="expo-reset">
       html,
@@ -12,11 +12,18 @@
       }
       body {
         overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-overflow-scrolling: touch;
       }
       #root {
         display: flex;
         height: 100%;
         flex: 1;
+      }
+      /* Prevent iOS auto-zoom on input focus (requires font-size >= 16px) */
+      input, textarea, select {
+        font-size: 16px !important;
+        touch-action: manipulation;
       }
     </style>
     <style id="dawen-focus-reset">
