@@ -13,6 +13,8 @@ export interface AvatarConfig {
   outfitColor: string;
   hairStyle: number;
   auraColor: string | null;
+  figureCode?: string;
+  gender?: 'M' | 'F';
 }
 
 export const DEFAULT_AVATAR: AvatarConfig = {
