@@ -8,13 +8,21 @@ import {
   TextInput,
   ActivityIndicator,
   Share,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
-import { ReferralService, Referral, ReferralReward } from '@/services/referralService';
+import {
+  ReferralService,
+  Referral,
+  UserReward,
+  buildReferralLink,
+  buildShareMessage,
+  formatRewardReason,
+} from '@/services/referralService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 
 export default function RewardsScreen() {
@@ -23,21 +31,36 @@ export default function RewardsScreen() {
   const [loading, setLoading] = useState(true);
   const [referralCode, setReferralCode] = useState('');
   const [referrals, setReferrals] = useState<Referral[]>([]);
-  const [rewards, setRewards] = useState<ReferralReward[]>([]);
-  const [stats, setStats] = useState({ totalReferrals: 0, totalRewards: 0, unclaimedRewards: 0 });
+  const [rewards, setRewards] = useState<UserReward[]>([]);
+  const [stats, setStats] = useState({ totalReferrals: 0, totalEarned: 0, unclaimedAmount: 0 });
   const [copied, setCopied] = useState(false);
   const [inputCode, setInputCode] = useState('');
   const [applyingCode, setApplyingCode] = useState(false);
   const [codeApplied, setCodeApplied] = useState(false);
+  const [applyError, setApplyError] = useState('');
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimMessage, setClaimMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
   }, [activeAddress]);
 
+  // Pre-fill referral code from URL ?ref= param on web
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        const ref = new URL(window.location.href).searchParams.get('ref');
+        if (ref) setInputCode(ref.toUpperCase());
+      } catch {}
+    }
+  }, []);
+
   const loadData = async () => {
     if (!activeAddress) return;
-
     setLoading(true);
+
+    await ReferralService.checkEarlyUserReward(activeAddress);
+
     const [code, refs, rwds, sts] = await Promise.all([
       ReferralService.getOrCreateReferralCode(activeAddress),
       ReferralService.getUserReferrals(activeAddress),
@@ -48,33 +71,31 @@ export default function RewardsScreen() {
     if (code) setReferralCode(code.code);
     setReferrals(refs);
     setRewards(rwds);
-    setStats(sts);
+    setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
     setLoading(false);
   };
 
   const handleCopyCode = async () => {
-    await Clipboard.setStringAsync(referralCode);
+    const link = buildReferralLink(referralCode);
+    await Clipboard.setStringAsync(link);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleShareCode = async () => {
     try {
-      await Share.share({
-        message: `Join me on Dawen with my referral code: ${referralCode}\n\nGet crypto rewards when you sign up!`,
-      });
-    } catch (error) {
-      console.error('Error sharing:', error);
-    }
+      await Share.share({ message: buildShareMessage(referralCode) });
+    } catch {}
   };
 
   const handleApplyCode = async () => {
     if (!inputCode.trim() || !activeAddress) return;
-
+    setApplyError('');
     setApplyingCode(true);
+
     const success = await ReferralService.applyReferralCode(
       activeAddress,
-      inputCode.trim().toUpperCase()
+      inputCode.trim().toUpperCase(),
     );
 
     if (success) {
@@ -82,15 +103,28 @@ export default function RewardsScreen() {
       setInputCode('');
       await loadData();
       setTimeout(() => setCodeApplied(false), 3000);
+    } else {
+      setApplyError('Invalid code or already applied.');
     }
     setApplyingCode(false);
   };
 
-  const handleClaimReward = async (rewardId: string) => {
-    const success = await ReferralService.claimReward(rewardId);
-    if (success) {
+  const handleClaimReward = async (reward: UserReward) => {
+    if (!activeAddress || claimingId) return;
+    setClaimingId(reward.id);
+    setClaimMessage(null);
+
+    const result = await ReferralService.claimReward(reward.id, activeAddress);
+
+    if (result.success) {
+      setClaimMessage({ type: 'success', text: 'Reward claimed successfully!' });
       await loadData();
+    } else {
+      setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
     }
+
+    setClaimingId(null);
+    setTimeout(() => setClaimMessage(null), 5000);
   };
 
   if (!activeAddress) {
@@ -135,6 +169,13 @@ export default function RewardsScreen() {
       </LinearGradient>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+        {/* Claim status banner */}
+        {claimMessage && (
+          <View style={[styles.claimBanner, claimMessage.type === 'success' ? styles.claimBannerSuccess : styles.claimBannerError]}>
+            <Text style={styles.claimBannerText}>{claimMessage.text}</Text>
+          </View>
+        )}
+
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <Users size={24} color={colors.primary} />
@@ -143,12 +184,12 @@ export default function RewardsScreen() {
           </View>
           <View style={styles.statCard}>
             <Coins size={24} color={colors.warning} />
-            <Text style={styles.statValue}>${stats.totalRewards.toFixed(2)}</Text>
-            <Text style={styles.statLabel}>Total Earned</Text>
+            <Text style={styles.statValue}>{stats.totalEarned.toLocaleString()}</Text>
+            <Text style={styles.statLabel}>Earned (DWC)</Text>
           </View>
           <View style={styles.statCard}>
             <Gift size={24} color={colors.success} />
-            <Text style={styles.statValue}>${stats.unclaimedRewards.toFixed(2)}</Text>
+            <Text style={styles.statValue}>{stats.unclaimedAmount.toLocaleString()}</Text>
             <Text style={styles.statLabel}>Unclaimed</Text>
           </View>
         </View>
@@ -169,7 +210,7 @@ export default function RewardsScreen() {
                 ) : (
                   <>
                     <Copy size={18} color={colors.primary} />
-                    <Text style={styles.codeButtonText}>Copy</Text>
+                    <Text style={styles.codeButtonText}>Copy Link</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -180,7 +221,7 @@ export default function RewardsScreen() {
             </View>
           </View>
           <Text style={styles.codeHint}>
-            Share this code with friends. When they sign up, you both earn rewards!
+            Share your DAWEN code. Friends get 150 DWC, you get 300 DWC when they join!
           </Text>
         </View>
 
@@ -189,10 +230,10 @@ export default function RewardsScreen() {
           <View style={styles.inputRow}>
             <TextInput
               style={styles.codeInput}
-              placeholder="Enter code"
+              placeholder="e.g. DAWEN-AB12CD"
               placeholderTextColor={colors.textMuted}
               value={inputCode}
-              onChangeText={setInputCode}
+              onChangeText={t => { setInputCode(t); setApplyError(''); }}
               autoCapitalize="characters"
               maxLength={20}
             />
@@ -213,6 +254,7 @@ export default function RewardsScreen() {
               )}
             </TouchableOpacity>
           </View>
+          {!!applyError && <Text style={styles.applyError}>{applyError}</Text>}
         </View>
 
         {rewards.length > 0 && (
@@ -224,24 +266,33 @@ export default function RewardsScreen() {
                   <Star size={20} color={colors.warning} fill={colors.warning} />
                 </View>
                 <View style={styles.rewardInfo}>
-                  <Text style={styles.rewardType}>
-                    {reward.reward_type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                  <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
+                  <Text style={styles.rewardAmount}>
+                    {reward.reward_amount.toLocaleString()} DWC
                   </Text>
-                  <Text style={styles.rewardAmount}>${parseFloat(reward.reward_amount.toString()).toFixed(2)}</Text>
                 </View>
-                {!reward.claimed ? (
+                {reward.status === 'ready' ? (
                   <TouchableOpacity
-                    style={styles.claimButton}
-                    onPress={() => handleClaimReward(reward.id)}
+                    style={[styles.claimButton, claimingId === reward.id && styles.claimButtonDisabled]}
+                    onPress={() => handleClaimReward(reward)}
+                    disabled={claimingId === reward.id}
                   >
-                    <Text style={styles.claimButtonText}>Claim</Text>
+                    {claimingId === reward.id ? (
+                      <ActivityIndicator size="small" color={colors.white} />
+                    ) : (
+                      <Text style={styles.claimButtonText}>Claim</Text>
+                    )}
                   </TouchableOpacity>
-                ) : (
+                ) : reward.status === 'sent' ? (
                   <View style={styles.claimedBadge}>
                     <Check size={14} color={colors.success} />
                     <Text style={styles.claimedText}>Claimed</Text>
                   </View>
-                )}
+                ) : reward.status === 'claiming' ? (
+                  <View style={styles.claimedBadge}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  </View>
+                ) : null}
               </View>
             ))}
           </View>
@@ -261,9 +312,10 @@ export default function RewardsScreen() {
                   </Text>
                   <Text style={styles.referralDate}>
                     {new Date(referral.created_at).toLocaleDateString()}
+                    {referral.status === 'qualified' ? ' · Qualified' : ' · Pending'}
                   </Text>
                 </View>
-                {referral.reward_claimed && (
+                {referral.status === 'qualified' && (
                   <View style={styles.rewardClaimedIcon}>
                     <Check size={14} color={colors.success} />
                   </View>
@@ -276,22 +328,16 @@ export default function RewardsScreen() {
         <View style={styles.infoSection}>
           <Text style={styles.infoTitle}>How It Works</Text>
           <View style={styles.infoStep}>
-            <View style={styles.stepNumber}>
-              <Text style={styles.stepNumberText}>1</Text>
-            </View>
-            <Text style={styles.stepText}>Share your referral code with friends</Text>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
+            <Text style={styles.stepText}>Share your DAWEN referral code with friends</Text>
           </View>
           <View style={styles.infoStep}>
-            <View style={styles.stepNumber}>
-              <Text style={styles.stepNumberText}>2</Text>
-            </View>
-            <Text style={styles.stepText}>They sign up using your code</Text>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>2</Text></View>
+            <Text style={styles.stepText}>They join DAWEN and connect their wallet</Text>
           </View>
           <View style={styles.infoStep}>
-            <View style={styles.stepNumber}>
-              <Text style={styles.stepNumberText}>3</Text>
-            </View>
-            <Text style={styles.stepText}>You both earn bonus tokens and rewards!</Text>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
+            <Text style={styles.stepText}>You earn 300 DWC, they earn 150 DWC — claimable as real DawenWorld tokens!</Text>
           </View>
         </View>
       </ScrollView>
@@ -340,6 +386,27 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.textMuted,
   },
+  claimBanner: {
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  claimBannerSuccess: {
+    backgroundColor: colors.successMuted,
+    borderWidth: 1,
+    borderColor: colors.success,
+  },
+  claimBannerError: {
+    backgroundColor: colors.errorMuted ?? 'rgba(239,68,68,0.12)',
+    borderWidth: 1,
+    borderColor: colors.error ?? '#EF4444',
+  },
+  claimBannerText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
   statsGrid: {
     flexDirection: 'row',
     gap: spacing.md,
@@ -365,6 +432,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginTop: spacing.xs,
+    textAlign: 'center',
   },
   section: {
     marginBottom: spacing.xxl,
@@ -455,6 +523,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.white,
   },
+  applyError: {
+    fontSize: fontSize.xs,
+    color: colors.error ?? '#EF4444',
+    marginTop: spacing.xs,
+  },
   rewardCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -494,6 +567,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderRadius: borderRadius.md,
+    minWidth: 64,
+    alignItems: 'center',
+  },
+  claimButtonDisabled: {
+    opacity: 0.6,
   },
   claimButtonText: {
     fontSize: fontSize.sm,
