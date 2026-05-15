@@ -2,8 +2,11 @@ import { useRef, useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Check } from 'lucide-react-native';
+import { ArrowLeft, Check, CircleAlert as AlertCircle } from 'lucide-react-native';
 import { type AvatarConfig } from '@/services/worldService';
+
+const READY_TIMEOUT_MS  = 8000;  // clear React overlay after this even if onLoadEnd never fires
+const ERROR_TIMEOUT_MS  = 20000; // show error if page appears completely broken
 
 interface Props {
   initial: AvatarConfig | null;
@@ -15,9 +18,44 @@ interface Props {
 export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props) {
   const webViewRef = useRef<any>(null);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<{ figureCode: string; gender: 'M' | 'F' } | null>(null);
+  const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Send initial avatar data to the page once ready
+  // Start timers on mount
+  useEffect(() => {
+    // After READY_TIMEOUT_MS: clear React overlay even if onLoadEnd never fired
+    readyTimerRef.current = setTimeout(() => {
+      setReady(prev => {
+        if (!prev) {
+          console.warn('[HabboAvatarEditor] onLoadEnd did not fire within', READY_TIMEOUT_MS / 1000, 's — forcing ready');
+        }
+        return true;
+      });
+    }, READY_TIMEOUT_MS);
+
+    // After ERROR_TIMEOUT_MS: show error if still not ready at all
+    errorTimerRef.current = setTimeout(() => {
+      setReady(true); // clear overlay regardless
+      setLoadError(true);
+      console.error('[HabboAvatarEditor] Page failed to become interactive after', ERROR_TIMEOUT_MS / 1000, 's');
+    }, ERROR_TIMEOUT_MS);
+
+    return () => {
+      clearTimeout(readyTimerRef.current!);
+      clearTimeout(errorTimerRef.current!);
+    };
+  }, []);
+
+  const markReady = useCallback(() => {
+    clearTimeout(readyTimerRef.current!);
+    clearTimeout(errorTimerRef.current!);
+    setReady(true);
+    // Send initial figure data once page is ready
+    setTimeout(() => sendInitialData(), 500);
+  }, []); // eslint-disable-line
+
   const sendInitialData = useCallback(() => {
     if (!initial?.figureCode) return;
     const msg = JSON.stringify({
@@ -25,23 +63,29 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
       figureCode: initial.figureCode,
       gender: initial.gender || 'M',
     });
-    if (Platform.OS === 'web') {
-      // On web: inject into iframe via postMessage — we can't directly, so inject JS
-      if (webViewRef.current?.injectJavaScript) {
-        webViewRef.current.injectJavaScript(`
+    if (webViewRef.current?.injectJavaScript) {
+      webViewRef.current.injectJavaScript(`
+        try {
           window.dispatchEvent(new MessageEvent('message', { data: ${JSON.stringify(msg)} }));
-          true;
-        `);
-      }
-    } else {
-      webViewRef.current?.injectJavaScript?.(`
-        window.dispatchEvent(new MessageEvent('message', { data: ${JSON.stringify(msg)} }));
+        } catch(e) {}
         true;
       `);
     }
   }, [initial]);
 
-  // Web: listen for postMessages from iframe
+  // onLoadEnd fires on both success and error — more reliable than onLoad on web
+  const onLoadEnd = useCallback(() => {
+    markReady();
+  }, [markReady]);
+
+  const onWebViewError = useCallback((e: any) => {
+    const desc = e?.nativeEvent?.description || e?.nativeEvent?.url || 'Unknown error';
+    console.error('[HabboAvatarEditor] WebView load error:', desc);
+    setReady(true);
+    setLoadError(true);
+  }, []);
+
+  // Web: listen for postMessages from the iframe
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handler = (e: MessageEvent) => {
@@ -53,9 +97,12 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, []);
+  }, []); // eslint-disable-line
 
   const handleMsg = useCallback((msg: { type: string; figureCode?: string; gender?: string }) => {
+    if (msg.type === 'avatar_creator_ready') {
+      markReady();
+    }
     if (msg.type === 'avatar_saved' && msg.figureCode) {
       const g = (msg.gender === 'F' ? 'F' : 'M') as 'M' | 'F';
       setPendingConfig({ figureCode: msg.figureCode, gender: g });
@@ -63,7 +110,7 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
     if (msg.type === 'avatar_cancelled') {
       onCancel();
     }
-  }, [onCancel]);
+  }, [onCancel, markReady]);
 
   const onWebViewMessage = useCallback((event: any) => {
     try {
@@ -75,20 +122,10 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
     } catch { /* ignore */ }
   }, [handleMsg]);
 
-  const onLoad = useCallback(() => {
-    setReady(true);
-    setTimeout(sendInitialData, 500);
-  }, [sendInitialData]);
-
   const handleConfirmSave = () => {
     if (!pendingConfig) return;
     const updated: AvatarConfig = {
-      ...(initial ?? {
-        bodyColor: '#8B5CF6',
-        outfitColor: '#EC4899',
-        hairStyle: 0,
-        auraColor: null,
-      }),
+      ...(initial ?? { bodyColor: '#8B5CF6', outfitColor: '#EC4899', hairStyle: 0, auraColor: null }),
       figureCode: pendingConfig.figureCode,
       gender: pendingConfig.gender,
     };
@@ -110,14 +147,6 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
         )}
       </View>
 
-      {!ready && (
-        <View style={styles.loadingOverlay}>
-          <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
-          <ActivityIndicator size="large" color="#8B5CF6" />
-          <Text style={styles.loadingText}>Loading Avatar Creator...</Text>
-        </View>
-      )}
-
       {pendingConfig && (
         <View style={styles.previewBanner}>
           <Text style={styles.previewBannerText}>Avatar ready — tap Apply to save</Text>
@@ -127,15 +156,40 @@ export function HabboAvatarEditor({ initial, username, onSave, onCancel }: Props
         </View>
       )}
 
-      <WebView
-        ref={webViewRef}
-        source={{ uri: '/avatar-gen/index.html' }}
-        style={styles.webView}
-        onMessage={onWebViewMessage}
-        onLoad={onLoad}
-        javaScriptEnabled
-        originWhitelist={['*']}
-      />
+      <View style={styles.webContainer}>
+        {/* Loading overlay — cleared after onLoadEnd fires or timeout elapses */}
+        {!ready && (
+          <View style={styles.loadingOverlay}>
+            <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
+            <ActivityIndicator size="large" color="#8B5CF6" />
+            <Text style={styles.loadingText}>Loading Avatar Creator...</Text>
+          </View>
+        )}
+
+        {/* Error overlay — only shown if page truly failed */}
+        {ready && loadError && (
+          <View style={styles.loadingOverlay}>
+            <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
+            <AlertCircle size={40} color="#EF4444" strokeWidth={2} />
+            <Text style={styles.errorTitle}>Avatar Creator Failed to Load</Text>
+            <Text style={styles.errorSub}>Check browser console for details. The page at /avatar-gen/index.html may not be accessible.</Text>
+            <TouchableOpacity style={styles.cancelBtnLarge} onPress={onCancel}>
+              <Text style={styles.cancelBtnLargeText}>Go Back</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <WebView
+          ref={webViewRef}
+          source={{ uri: '/avatar-gen/index.html' }}
+          style={styles.webView}
+          onMessage={onWebViewMessage}
+          onLoadEnd={onLoadEnd}
+          onError={onWebViewError}
+          javaScriptEnabled
+          originWhitelist={['*']}
+        />
+      </View>
     </View>
   );
 }
@@ -160,11 +214,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#10B981',
   },
   saveBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10, alignItems: 'center', justifyContent: 'center', gap: 12,
-  },
-  loadingText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   previewBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 10,
@@ -177,5 +226,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#10B981',
   },
   applyBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  webView: { flex: 1 },
+  webContainer: { flex: 1, position: 'relative' },
+  webView: { flex: 1, backgroundColor: '#0D0A1A' },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+    alignItems: 'center', justifyContent: 'center', gap: 14,
+  },
+  loadingText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  errorTitle: { color: '#EF4444', fontSize: 17, fontWeight: '700', textAlign: 'center' },
+  errorSub: { color: 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', maxWidth: 280, paddingHorizontal: 24 },
+  cancelBtnLarge: {
+    marginTop: 8, paddingHorizontal: 20, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', borderRadius: 10,
+  },
+  cancelBtnLargeText: { color: 'rgba(255,255,255,0.6)', fontSize: 14 },
 });
