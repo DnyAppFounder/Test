@@ -1,4 +1,4 @@
-import { Text, Linking, TextStyle, StyleProp } from 'react-native';
+import { Text, Linking, TextStyle, StyleProp, Platform } from 'react-native';
 
 // Regex: matches http(s):// URLs and bare domain.tld/... patterns
 const URL_REGEX = /(?:https?:\/\/[^\s]+|(?<!\w)(?:[a-zA-Z0-9-]+\.)+(?:com|io|org|net|app|xyz|gg|co|dev|info|me|tv|finance|money|crypto|sol|trade|exchange)(?:\/[^\s]*)?)/g;
@@ -70,7 +70,13 @@ export default function LinkText({ text, style, linkStyle, onMentionPress, menti
             <Text
               key={`${i}-url-${start}`}
               style={[{ color: '#3B82F6', textDecorationLine: 'underline', fontWeight: '500' }, linkStyle]}
-              onPress={() => Linking.openURL(href).catch(() => {})}
+              onPress={() => {
+                if (Platform.OS === 'web') {
+                  try { window.open(href, '_blank', 'noopener,noreferrer'); } catch {}
+                } else {
+                  Linking.openURL(href).catch(() => {});
+                }
+              }}
             >
               {rawUrl}
             </Text>

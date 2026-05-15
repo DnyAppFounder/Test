@@ -1,11 +1,11 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator } from 'react-native';
-import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator, ScrollView } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Bell, BellOff, Plus, Trash2, TrendingUp, TrendingDown } from 'lucide-react-native';
+import { ArrowLeft, Bell, BellOff, Plus, Trash2, TrendingUp, TrendingDown, Search, X } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { AlertsService, PriceAlert } from '@/services/alertsService';
-import { MarketService } from '@/services/marketService';
+import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { useWallet } from '@/contexts/WalletContext';
 
 export default function PriceAlertsScreen() {
@@ -17,74 +17,95 @@ export default function PriceAlertsScreen() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const [selectedToken, setSelectedToken] = useState('bitcoin');
+  // Token search state
+  const [tokenSearch, setTokenSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<LiveToken[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<LiveToken | null>(null);
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [alertType, setAlertType] = useState<'above' | 'below'>('above');
   const [targetPrice, setTargetPrice] = useState('');
-  const [currentPrice, setCurrentPrice] = useState(0);
 
   useEffect(() => {
     loadAlerts();
   }, [selectedAccount]);
 
   useEffect(() => {
-    if (showCreateModal) {
+    if (!showCreateModal) {
+      setTokenSearch('');
+      setSearchResults([]);
+      setSelectedToken(null);
+      setTargetPrice('');
+      setAlertType('above');
       setCreateError(null);
-      loadCurrentPrice();
     }
-  }, [showCreateModal, selectedToken]);
+  }, [showCreateModal]);
+
+  useEffect(() => {
+    if (!tokenSearch.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    searchTimeout.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const results = await liveMarketService.searchTokens(tokenSearch.trim());
+        setSearchResults(results.slice(0, 8));
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 400);
+    return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
+  }, [tokenSearch]);
 
   const loadAlerts = async () => {
     if (!selectedAccount) return;
-
     setLoading(true);
     const userAlerts = await AlertsService.getUserAlerts(selectedAccount.address);
     setAlerts(userAlerts);
     setLoading(false);
   };
 
-  const loadCurrentPrice = async () => {
-    const coins = await MarketService.getTopCoins();
-    const coin = coins.find(c => c.id === selectedToken);
-    if (coin) {
-      setCurrentPrice(coin.current_price);
-    }
+  const handleSelectToken = (token: LiveToken) => {
+    setSelectedToken(token);
+    setTokenSearch('');
+    setSearchResults([]);
+  };
+
+  const handleClearToken = () => {
+    setSelectedToken(null);
+    setTokenSearch('');
+    setSearchResults([]);
   };
 
   const handleCreateAlert = async () => {
-    if (!selectedAccount || !targetPrice) return;
+    if (!selectedAccount || !targetPrice || !selectedToken) return;
 
     setCreateError(null);
     setCreating(true);
 
     try {
-      const coins = await MarketService.getTopCoins();
-      const coin = coins.find(c => c.id === selectedToken);
-      if (!coin) {
-        setCreateError('Could not fetch token data. Please try again.');
-        setCreating(false);
-        return;
-      }
-
       const parsedPrice = parseFloat(targetPrice);
       if (isNaN(parsedPrice) || parsedPrice <= 0) {
         setCreateError('Please enter a valid target price greater than 0.');
-        setCreating(false);
         return;
       }
 
       const alert = await AlertsService.createAlert(
         selectedAccount.address,
-        selectedToken,
-        coin.symbol.toUpperCase(),
-        coin.name,
+        selectedToken.address,
+        selectedToken.symbol.toUpperCase(),
+        selectedToken.name,
         alertType,
         parsedPrice
       );
 
       if (alert) {
         setShowCreateModal(false);
-        setTargetPrice('');
-        setCreateError(null);
         loadAlerts();
       } else {
         setCreateError('Failed to create alert. Please check your connection and try again.');
@@ -98,16 +119,12 @@ export default function PriceAlertsScreen() {
 
   const handleToggleAlert = async (alertId: string, currentState: boolean) => {
     const success = await AlertsService.toggleAlert(alertId, !currentState);
-    if (success) {
-      loadAlerts();
-    }
+    if (success) loadAlerts();
   };
 
   const handleDeleteAlert = async (alertId: string) => {
     const success = await AlertsService.deleteAlert(alertId);
-    if (success) {
-      loadAlerts();
-    }
+    if (success) loadAlerts();
   };
 
   const renderAlert = ({ item }: { item: PriceAlert }) => (
@@ -157,14 +174,6 @@ export default function PriceAlertsScreen() {
       </View>
     </View>
   );
-
-  const topCoins = [
-    { id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin' },
-    { id: 'ethereum', symbol: 'ETH', name: 'Ethereum' },
-    { id: 'solana', symbol: 'SOL', name: 'Solana' },
-    { id: 'cardano', symbol: 'ADA', name: 'Cardano' },
-    { id: 'ripple', symbol: 'XRP', name: 'XRP' },
-  ];
 
   return (
     <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
@@ -216,26 +225,66 @@ export default function PriceAlertsScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
               <Text style={styles.inputLabel}>Select Token</Text>
-              <View style={styles.tokenGrid}>
-                {topCoins.map((coin) => (
-                  <TouchableOpacity
-                    key={coin.id}
-                    style={[styles.tokenChip, selectedToken === coin.id && styles.tokenChipSelected]}
-                    onPress={() => setSelectedToken(coin.id)}
-                  >
-                    <Text style={[styles.tokenChipText, selectedToken === coin.id && styles.tokenChipTextSelected]}>
-                      {coin.symbol}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
 
-              {currentPrice > 0 && (
-                <View style={styles.currentPriceCard}>
-                  <Text style={styles.currentPriceLabel}>Current Price</Text>
-                  <Text style={styles.currentPriceValue}>${currentPrice.toLocaleString()}</Text>
+              {selectedToken ? (
+                <View style={styles.selectedTokenRow}>
+                  <View style={styles.selectedTokenInfo}>
+                    <Text style={styles.selectedTokenSymbol}>{selectedToken.symbol}</Text>
+                    <Text style={styles.selectedTokenName}>{selectedToken.name}</Text>
+                  </View>
+                  <View style={styles.selectedTokenPrice}>
+                    <Text style={styles.selectedTokenPriceLabel}>Current Price</Text>
+                    <Text style={styles.selectedTokenPriceValue}>
+                      ${selectedToken.price < 0.01
+                        ? selectedToken.price.toFixed(6)
+                        : selectedToken.price < 1
+                        ? selectedToken.price.toFixed(4)
+                        : selectedToken.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={handleClearToken} style={styles.clearTokenBtn}>
+                    <X size={16} color={colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.searchContainer}>
+                  <View style={styles.searchInputRow}>
+                    <Search size={16} color={colors.textMuted} />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="Search token name or symbol..."
+                      placeholderTextColor={colors.textMuted}
+                      value={tokenSearch}
+                      onChangeText={setTokenSearch}
+                      autoCapitalize="none"
+                    />
+                    {searchLoading && <ActivityIndicator size="small" color={colors.primary} />}
+                  </View>
+                  {searchResults.length > 0 && (
+                    <View style={styles.searchDropdown}>
+                      {searchResults.map((token) => (
+                        <TouchableOpacity
+                          key={token.address}
+                          style={styles.searchResultItem}
+                          onPress={() => handleSelectToken(token)}
+                        >
+                          <View style={styles.searchResultLeft}>
+                            <Text style={styles.searchResultSymbol}>{token.symbol}</Text>
+                            <Text style={styles.searchResultName} numberOfLines={1}>{token.name}</Text>
+                          </View>
+                          <Text style={styles.searchResultPrice}>
+                            ${token.price < 0.01
+                              ? token.price.toFixed(6)
+                              : token.price < 1
+                              ? token.price.toFixed(4)
+                              : token.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                 </View>
               )}
 
@@ -261,7 +310,7 @@ export default function PriceAlertsScreen() {
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.inputLabel}>Target Price</Text>
+              <Text style={styles.inputLabel}>Target Price (USD)</Text>
               <TextInput
                 style={styles.priceInput}
                 placeholder="Enter price"
@@ -278,9 +327,9 @@ export default function PriceAlertsScreen() {
               )}
 
               <TouchableOpacity
-                style={[styles.createButton, (!targetPrice || creating) && styles.createButtonDisabled]}
+                style={[styles.createButton, (!targetPrice || !selectedToken || creating) && styles.createButtonDisabled]}
                 onPress={handleCreateAlert}
-                disabled={!targetPrice || creating}
+                disabled={!targetPrice || !selectedToken || creating}
               >
                 {creating ? (
                   <ActivityIndicator size="small" color={colors.white} />
@@ -291,7 +340,7 @@ export default function PriceAlertsScreen() {
                   </>
                 )}
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -472,47 +521,97 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     marginTop: spacing.md,
   },
-  tokenGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
+  searchContainer: {
+    position: 'relative',
+    zIndex: 10,
   },
-  tokenChip: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     backgroundColor: colors.surfaceLight,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  tokenChipSelected: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: colors.primary,
+  searchInput: {
+    flex: 1,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
   },
-  tokenChipText: {
+  searchDropdown: {
+    backgroundColor: colors.surfaceElevated ?? colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.xs,
+    overflow: 'hidden',
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
+  },
+  searchResultLeft: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  searchResultSymbol: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  searchResultName: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+  },
+  searchResultPrice: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textSecondary,
   },
-  tokenChipTextSelected: {
+  selectedTokenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  selectedTokenInfo: {
+    flex: 1,
+  },
+  selectedTokenSymbol: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
     color: colors.primary,
   },
-  currentPriceCard: {
-    backgroundColor: colors.primaryMuted,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  currentPriceLabel: {
+  selectedTokenName: {
     fontSize: fontSize.xs,
     color: colors.textMuted,
   },
-  currentPriceValue: {
-    fontSize: fontSize.xl,
+  selectedTokenPrice: {
+    alignItems: 'flex-end',
+  },
+  selectedTokenPriceLabel: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+  },
+  selectedTokenPriceValue: {
+    fontSize: fontSize.sm,
     fontWeight: '700',
-    color: colors.primary,
-    marginTop: spacing.xs,
+    color: colors.textPrimary,
+  },
+  clearTokenBtn: {
+    padding: spacing.xs,
   },
   alertTypeRow: {
     flexDirection: 'row',
@@ -561,6 +660,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     borderRadius: borderRadius.xl,
     marginTop: spacing.xl,
+    marginBottom: spacing.lg,
     ...elevation.md,
   },
   createButtonDisabled: {

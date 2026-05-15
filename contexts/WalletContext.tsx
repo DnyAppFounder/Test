@@ -356,7 +356,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   // Track last background-refresh timestamp to prevent hammering on rapid visibility changes
   const lastBgRefreshRef = useRef<number>(0);
 
-  // Auto-refresh every 60 seconds while a wallet is connected (silent — no loading spinner)
+  // Auto-refresh every 30 seconds while a wallet is connected (silent — no loading spinner)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (refreshIntervalRef.current) {
@@ -367,7 +367,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       refreshIntervalRef.current = setInterval(() => {
         lastBgRefreshRef.current = Date.now();
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
-      }, 60_000);
+      }, 30_000);
     }
     return () => {
       if (refreshIntervalRef.current) {
@@ -380,7 +380,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (Platform.OS === 'web') return;
     const handleAppState = (nextState: AppStateStatus) => {
-      if (nextState === 'active' && activeAddress && Date.now() - lastBgRefreshRef.current > 60_000) {
+      if (nextState === 'active' && activeAddress && Date.now() - lastBgRefreshRef.current > 30_000) {
         lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] App foregrounded, refreshing assets');
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
@@ -394,7 +394,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     const handleVisibility = () => {
-      if (!document.hidden && activeAddress && Date.now() - lastBgRefreshRef.current > 60_000) {
+      if (!document.hidden && activeAddress && Date.now() - lastBgRefreshRef.current > 30_000) {
         lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] Tab visible, refreshing assets for:', activeAddress.slice(0, 8));
         walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});

@@ -94,8 +94,8 @@ export default function CreatePostScreen() {
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string }[]>([]);
   const [gifSearching, setGifSearching] = useState(false);
-  // Fall back to Giphy public demo key when none is configured
-  const GIPHY_KEY = process.env.EXPO_PUBLIC_GIPHY_API_KEY || 'dc6zaTOxFJmzC';
+  // Tenor demo key — works without configuration
+  const TENOR_KEY = process.env.EXPO_PUBLIC_TENOR_API_KEY || 'LIVDSRZULELA';
 
   // Poll
   const [showPoll, setShowPoll] = useState(false);
@@ -279,48 +279,43 @@ export default function CreatePostScreen() {
   };
 
   // ── GIF search ────────────────────────────────────────────────────────────
+  function parseTenorResults(items: any[]): { id: string; url: string; preview: string }[] {
+    return items.map((item: any) => {
+      const fmt = item.media_formats ?? item.media?.[0] ?? {};
+      const url = fmt.gif?.url ?? fmt.mediumgif?.url ?? fmt.tinygif?.url ?? '';
+      const preview = fmt.tinygif?.url ?? fmt.nanogif?.url ?? fmt.gif?.url ?? '';
+      return { id: item.id, url, preview };
+    }).filter((g: any) => g.url);
+  }
+
   const searchGifs = useCallback(async (query: string) => {
     setGifQuery(query);
-    if (!GIPHY_KEY) return;
     if (!query.trim()) { setGifResults([]); return; }
     setGifSearching(true);
     try {
-      const url = `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(query)}&limit=20&rating=g&lang=en`;
+      const url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=20&media_filter=gif,tinygif`;
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      const results = (json.data || []).map((item: any) => ({
-        id: item.id,
-        url: item.images?.original?.url ?? item.images?.fixed_height?.url ?? '',
-        preview: item.images?.fixed_height_small?.url ?? item.images?.fixed_height?.url ?? '',
-      })).filter((g: any) => g.url);
-      setGifResults(results);
+      setGifResults(parseTenorResults(json.results ?? []));
     } catch {
       setGifResults([]);
     } finally {
       setGifSearching(false);
     }
-  }, [GIPHY_KEY]);
+  }, [TENOR_KEY]);
 
   const openGifPicker = () => {
     setGifQuery('');
     setGifResults([]);
     setShowGifPicker(true);
-    // Load trending GIFs immediately on open
-    if (GIPHY_KEY) {
-      setGifSearching(true);
-      fetch(`https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_KEY}&limit=20&rating=g`)
-        .then(r => r.json())
-        .then(json => {
-          const results = (json.data || []).map((item: any) => ({
-            id: item.id,
-            url: item.images?.original?.url ?? item.images?.fixed_height?.url ?? '',
-            preview: item.images?.fixed_height_small?.url ?? item.images?.fixed_height?.url ?? '',
-          })).filter((g: any) => g.url);
-          setGifResults(results);
-        })
-        .catch(() => {})
-        .finally(() => setGifSearching(false));
-    }
+    // Load featured/trending GIFs immediately on open
+    setGifSearching(true);
+    fetch(`https://tenor.googleapis.com/v2/featured?key=${TENOR_KEY}&limit=20&media_filter=gif,tinygif`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(json => setGifResults(parseTenorResults(json.results ?? [])))
+      .catch(() => setGifResults([]))
+      .finally(() => setGifSearching(false));
   };
 
   const selectGif = (url: string) => {
@@ -1051,52 +1046,43 @@ export default function CreatePostScreen() {
             </TouchableOpacity>
           </View>
 
-          {!GIPHY_KEY ? (
-            <View style={styles.gifNoKeyWrap}>
-              <Text style={styles.gifNoKeyText}>GIF search is not configured yet.</Text>
-              <Text style={styles.gifNoKeySub}>Add EXPO_PUBLIC_GIPHY_API_KEY to your .env file.</Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.searchBox}>
-                <Search size={18} color={colors.textMuted} strokeWidth={2} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Search GIFs…"
-                  placeholderTextColor={colors.textMuted}
-                  value={gifQuery}
-                  onChangeText={searchGifs}
-                  autoFocus
-                />
-                {gifSearching && <ActivityIndicator size="small" color={colors.primary} />}
-              </View>
-              <FlatList
-                data={gifResults}
-                keyExtractor={item => item.id}
-                numColumns={2}
-                columnWrapperStyle={styles.gifGrid}
-                contentContainerStyle={{ padding: spacing.sm }}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.gifItem}
-                    onPress={() => selectGif(item.url)}
-                    activeOpacity={0.8}
-                  >
-                    <Image source={{ uri: item.preview }} style={styles.gifThumb} resizeMode="cover" />
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  gifSearching ? (
-                    <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
-                  ) : gifQuery.length > 0 ? (
-                    <Text style={styles.emptySearch}>No GIFs found</Text>
-                  ) : (
-                    <Text style={[styles.emptySearch, { marginTop: 60 }]}>Search for GIFs above</Text>
-                  )
-                }
-              />
-            </>
-          )}
+          <View style={styles.searchBox}>
+            <Search size={18} color={colors.textMuted} strokeWidth={2} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search GIFs…"
+              placeholderTextColor={colors.textMuted}
+              value={gifQuery}
+              onChangeText={searchGifs}
+              autoFocus
+            />
+            {gifSearching && <ActivityIndicator size="small" color={colors.primary} />}
+          </View>
+          <FlatList
+            data={gifResults}
+            keyExtractor={item => item.id}
+            numColumns={2}
+            columnWrapperStyle={styles.gifGrid}
+            contentContainerStyle={{ padding: spacing.sm }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.gifItem}
+                onPress={() => selectGif(item.url)}
+                activeOpacity={0.8}
+              >
+                <Image source={{ uri: item.preview }} style={styles.gifThumb} resizeMode="cover" />
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              gifSearching ? (
+                <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
+              ) : gifQuery.length > 0 ? (
+                <Text style={styles.emptySearch}>No GIFs found for "{gifQuery}"</Text>
+              ) : (
+                <Text style={[styles.emptySearch, { marginTop: 60 }]}>Search for GIFs above</Text>
+              )
+            }
+          />
         </View>
       </Modal>
     </SafeAreaView>
