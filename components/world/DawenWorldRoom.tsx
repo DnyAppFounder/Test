@@ -27,7 +27,6 @@ import {
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { WorldSprite } from './WorldSprite';
 import { WorldAvatarChar, AvatarGesture } from './WorldAvatarChar';
-import { getAssetForItem } from '@/services/worldAssetRegistry';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -946,12 +945,7 @@ export function DawenWorldRoom({
                         shadowColor: color,
                       }]}
                     >
-                      <WorldSprite
-                        emoji={ri.catalog_item?.icon_emoji ?? '📦'}
-                        size={spriteSize - 4}
-                        color={color}
-                        imageUrl={ri.catalog_item ? getAssetForItem(ri.catalog_item.icon_emoji, ri.catalog_item.item_type).defaultUrl : undefined}
-                      />
+                      <WorldSprite emoji={ri.catalog_item?.icon_emoji ?? '📦'} size={spriteSize - 4} color={color} />
                     </View>
                   ),
                 });
@@ -1035,7 +1029,6 @@ export function DawenWorldRoom({
                 emoji={inv.catalog_item?.icon_emoji ?? '📦'}
                 size={Math.round(ISO_TW * 0.72)}
                 color={inv.catalog_item?.color_hex ?? '#8B5CF6'}
-                imageUrl={inv.catalog_item ? getAssetForItem(inv.catalog_item.icon_emoji, inv.catalog_item.item_type).defaultUrl : undefined}
               />
               {inv.quantity > 1 && <Text style={styles.invBarQty}>×{inv.quantity}</Text>}
             </TouchableOpacity>
