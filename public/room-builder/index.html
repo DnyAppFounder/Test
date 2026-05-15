@@ -12,8 +12,7 @@
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       color: #fff; font-family: system-ui, sans-serif;
-      z-index: 100;
-      gap: 16px;
+      z-index: 100; gap: 16px;
     }
     #loading.hidden { display: none; }
     .spinner {
@@ -54,70 +53,101 @@
   </div>
 
   <div id="error-view">
-    <div style="font-size:40px">⚠️</div>
+    <div style="font-size:32px">&#9888;</div>
     <div style="font-size:18px;font-weight:700;color:#EF4444">Room Builder Failed to Load</div>
-    <div id="error-msg" style="font-size:12px;color:rgba(255,255,255,0.5);max-width:300px"></div>
-    <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:8px">Note: This app requires HTTPS and WebGL 2.0 support.</div>
-    <button onclick="notifyParent('builder_error','load_failed')"
+    <div id="error-msg" style="font-size:12px;color:rgba(255,255,255,0.5);max-width:300px;margin-top:4px"></div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:4px">Requires HTTPS and WebGL 2.0</div>
+    <button id="btn-go-back"
       style="margin-top:16px;padding:10px 20px;background:#8B5CF6;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
       Go Back
     </button>
   </div>
 
-  <script src="Builds.loader.js"></script>
   <script>
     var unityInstance = null;
+    var loadedOk = false;
+    var timeoutHandle = null;
 
     function notifyParent(type, data) {
       var msg = JSON.stringify({ type: type, data: data });
-      // React Native WebView
       if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
-      // Parent frame (iframe)
       if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
     }
 
-    // Unity C# can call this via Application.ExternalEval or jslib
+    function showError(msg) {
+      if (loadedOk) return;
+      clearTimeout(timeoutHandle);
+      console.error('[RoomBuilder] Error:', msg);
+      document.getElementById('loading').classList.add('hidden');
+      var ev = document.getElementById('error-view');
+      ev.classList.add('visible');
+      document.getElementById('error-msg').textContent = msg || 'Unknown error';
+      notifyParent('builder_error', msg);
+    }
+
+    document.getElementById('btn-go-back').onclick = function() {
+      notifyParent('builder_error', 'user_back');
+    };
+
+    // Unity callbacks
     window.onRoomSaved = function(jsonData) {
       notifyParent('room_saved', typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData);
     };
-
     window.onRoomBuilderReady = function() {
       notifyParent('builder_ready', null);
     };
 
-    // Resize canvas to fill
+    // Resize canvas
     function resizeCanvas() {
-      var canvas = document.getElementById('unity-canvas');
-      canvas.style.width  = window.innerWidth  + 'px';
-      canvas.style.height = window.innerHeight + 'px';
+      var c = document.getElementById('unity-canvas');
+      c.style.width = window.innerWidth + 'px';
+      c.style.height = window.innerHeight + 'px';
     }
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    createUnityInstance(document.getElementById('unity-canvas'), {
-      arguments: [],
-      dataUrl:      'Builds.data.br',
-      frameworkUrl: 'Builds.framework.js.br',
-      codeUrl:      'Builds.wasm.br',
-      streamingAssetsUrl: 'StreamingAssets',
-      companyName:   'InxExperiments',
-      productName:   'RoomBuilder',
-      productVersion: '1.0',
-    }, function(progress) {
-      var pct = Math.round(progress * 100);
-      document.getElementById('progress-bar').style.width = pct + '%';
-      document.getElementById('load-sub').textContent = 'Loading... ' + pct + '%';
-    }).then(function(instance) {
-      unityInstance = instance;
-      document.getElementById('loading').classList.add('hidden');
-      notifyParent('builder_loaded', null);
-    }).catch(function(err) {
-      document.getElementById('loading').classList.add('hidden');
-      var ev = document.getElementById('error-view');
-      ev.classList.add('visible');
-      document.getElementById('error-msg').textContent = String(err);
-      notifyParent('builder_error', String(err));
-    });
+    // 45-second hard timeout (Unity WebGL can be slow on first load)
+    timeoutHandle = setTimeout(function() {
+      if (!loadedOk) {
+        showError('Room Builder timed out after 45 seconds. Check network and WebGL support.');
+      }
+    }, 45000);
+
+    function startUnity() {
+      if (typeof createUnityInstance === 'undefined') {
+        showError('Builds.loader.js failed to load. Check that Unity files are deployed correctly at /room-builder/.');
+        return;
+      }
+      try {
+        createUnityInstance(document.getElementById('unity-canvas'), {
+          arguments: [],
+          dataUrl:      'Builds.data.br',
+          frameworkUrl: 'Builds.framework.js.br',
+          codeUrl:      'Builds.wasm.br',
+          streamingAssetsUrl: 'StreamingAssets',
+          companyName:   'InxExperiments',
+          productName:   'RoomBuilder',
+          productVersion: '1.0',
+        }, function(progress) {
+          var pct = Math.round(progress * 100);
+          document.getElementById('progress-bar').style.width = pct + '%';
+          document.getElementById('load-sub').textContent = 'Loading... ' + pct + '%';
+        }).then(function(instance) {
+          loadedOk = true;
+          clearTimeout(timeoutHandle);
+          unityInstance = instance;
+          document.getElementById('loading').classList.add('hidden');
+          notifyParent('builder_loaded', null);
+        }).catch(function(err) {
+          showError(String(err));
+        });
+      } catch (e) {
+        showError(String(e));
+      }
+    }
   </script>
+
+  <!-- Load Unity loader; on error, call showError immediately -->
+  <script src="Builds.loader.js" onload="startUnity()" onerror="showError('Builds.loader.js not found (404). Check deployment paths.')"></script>
 </body>
 </html>

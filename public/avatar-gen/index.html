@@ -683,12 +683,20 @@ function parseAndLoadFigureCode(code, g) {
   updatePreview();
 }
 
+function notifyParent(type, data) {
+  var msg = JSON.stringify({ type: type, data: data });
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+  if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+}
+
 function init() {
   initTabs();
   renderCategory(activeCategory);
   updatePreview();
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('app').style.display = 'flex';
+  // Signal to the React parent that the creator is ready
+  notifyParent('avatar_creator_ready', null);
 }
 
 // Ready
