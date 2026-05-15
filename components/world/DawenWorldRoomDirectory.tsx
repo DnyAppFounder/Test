@@ -12,7 +12,7 @@ import {
   saveRoomLayout, fetchRoomWithLayout,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
-import { DawenRoomBuilder } from './DawenRoomBuilder';
+import { UnityRoomBuilder } from './UnityRoomBuilder';
 
 const VISIBILITY_ICON: Record<string, any> = {
   public: Globe, private: Lock, invite_only: UserCheck,
@@ -108,9 +108,9 @@ export function DawenWorldRoomDirectory({
     await load();
   };
 
-  const handleBuilderSave = async (layout: RoomLayout) => {
+  const handleBuilderSave = async (layout?: RoomLayout) => {
     if (!builderRoom) return;
-    await saveRoomLayout(builderRoom.id, layout);
+    if (layout) await saveRoomLayout(builderRoom.id, layout);
     setBuilderOpen(false);
     setBuilderRoom(null);
     await load();
@@ -305,8 +305,9 @@ export function DawenWorldRoomDirectory({
       {/* Room Builder — full-screen overlay */}
       {builderOpen && builderRoom && (
         <View style={StyleSheet.absoluteFillObject}>
-          <DawenRoomBuilder
-            room={builderRoom}
+          <UnityRoomBuilder
+            roomName={builderRoom.name}
+            roomId={builderRoom.id}
             onSave={handleBuilderSave}
             onCancel={handleBuilderCancel}
           />

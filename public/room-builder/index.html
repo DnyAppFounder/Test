@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Room Builder</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #0D0A1A; overflow: hidden; }
+    #loading {
+      position: fixed; inset: 0; background: #0D0A1A;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: #fff; font-family: system-ui, sans-serif;
+      z-index: 100;
+      gap: 16px;
+    }
+    #loading.hidden { display: none; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 3px solid rgba(139,92,246,0.3);
+      border-top-color: #8B5CF6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .load-title { font-size: 18px; font-weight: 700; color: #fff; }
+    .load-sub { font-size: 12px; color: rgba(255,255,255,0.4); }
+    .progress-bar-wrap { width: 240px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #8B5CF6; border-radius: 2px; width: 0%; transition: width 0.3s; }
+    #error-view {
+      position: fixed; inset: 0; background: #0D0A1A;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: #fff; font-family: system-ui, sans-serif;
+      gap: 12px; padding: 24px; text-align: center;
+    }
+    #error-view.visible { display: flex; }
+    #unity-canvas {
+      width: 100%; height: 100%;
+      position: absolute; top: 0; left: 0;
+      background: #231F20;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <div class="load-title">Loading Room Builder</div>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar"></div></div>
+    <div class="load-sub" id="load-sub">Initializing...</div>
+  </div>
+
+  <div id="error-view">
+    <div style="font-size:40px">⚠️</div>
+    <div style="font-size:18px;font-weight:700;color:#EF4444">Room Builder Failed to Load</div>
+    <div id="error-msg" style="font-size:12px;color:rgba(255,255,255,0.5);max-width:300px"></div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:8px">Note: This app requires HTTPS and WebGL 2.0 support.</div>
+    <button onclick="notifyParent('builder_error','load_failed')"
+      style="margin-top:16px;padding:10px 20px;background:#8B5CF6;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
+      Go Back
+    </button>
+  </div>
+
+  <script src="Builds.loader.js"></script>
+  <script>
+    var unityInstance = null;
+
+    function notifyParent(type, data) {
+      var msg = JSON.stringify({ type: type, data: data });
+      // React Native WebView
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+      // Parent frame (iframe)
+      if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+    }
+
+    // Unity C# can call this via Application.ExternalEval or jslib
+    window.onRoomSaved = function(jsonData) {
+      notifyParent('room_saved', typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData);
+    };
+
+    window.onRoomBuilderReady = function() {
+      notifyParent('builder_ready', null);
+    };
+
+    // Resize canvas to fill
+    function resizeCanvas() {
+      var canvas = document.getElementById('unity-canvas');
+      canvas.style.width  = window.innerWidth  + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    createUnityInstance(document.getElementById('unity-canvas'), {
+      arguments: [],
+      dataUrl:      'Builds.data.br',
+      frameworkUrl: 'Builds.framework.js.br',
+      codeUrl:      'Builds.wasm.br',
+      streamingAssetsUrl: 'StreamingAssets',
+      companyName:   'InxExperiments',
+      productName:   'RoomBuilder',
+      productVersion: '1.0',
+    }, function(progress) {
+      var pct = Math.round(progress * 100);
+      document.getElementById('progress-bar').style.width = pct + '%';
+      document.getElementById('load-sub').textContent = 'Loading... ' + pct + '%';
+    }).then(function(instance) {
+      unityInstance = instance;
+      document.getElementById('loading').classList.add('hidden');
+      notifyParent('builder_loaded', null);
+    }).catch(function(err) {
+      document.getElementById('loading').classList.add('hidden');
+      var ev = document.getElementById('error-view');
+      ev.classList.add('visible');
+      document.getElementById('error-msg').textContent = String(err);
+      notifyParent('builder_error', String(err));
+    });
+  </script>
+</body>
+</html>

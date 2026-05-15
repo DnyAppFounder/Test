@@ -1,0 +1,11 @@
+/room-builder/Builds.wasm.br
+  Content-Encoding: br
+  Content-Type: application/wasm
+
+/room-builder/Builds.framework.js.br
+  Content-Encoding: br
+  Content-Type: application/javascript
+
+/room-builder/Builds.data.br
+  Content-Encoding: br
+  Content-Type: application/octet-stream

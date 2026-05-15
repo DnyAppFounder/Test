@@ -10,7 +10,7 @@ import {
   getInventory, grantStarterItems,
   earnDawenCoins, getDawenCoinBalance,
 } from '@/services/worldService';
-import { DawenWorldAvatarEditor } from './DawenWorldAvatarEditor';
+import { HabboAvatarEditor } from './HabboAvatarEditor';
 import { DawenWorldRoom } from './DawenWorldRoom';
 import { DawenWorldShop } from './DawenWorldShop';
 import { DawenWorldInventory } from './DawenWorldInventory';
@@ -126,10 +126,11 @@ export function DawenWorldPage({
   if (screen === 'avatar_setup') {
     return (
       <View style={styles.fullscreen}>
-        <DawenWorldAvatarEditor
+        <HabboAvatarEditor
           initial={avatarConfig}
           username={username}
           onSave={handleAvatarSave}
+          onCancel={onExit}
         />
       </View>
     );

@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Avatar Creator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { width: 100%; height: 100%; background: #0D0A1A; color: #fff; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+
+    /* Layout */
+    #app { display: flex; flex-direction: column; height: 100%; }
+
+    /* Header */
+    #header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+    }
+    #header h1 { font-size: 16px; font-weight: 700; flex: 1; }
+    #btn-cancel {
+      padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+      background: transparent; color: rgba(255,255,255,0.6); font-size: 13px; cursor: pointer;
+    }
+    #btn-save {
+      padding: 7px 16px; border-radius: 8px; border: none;
+      background: #10B981; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+    #btn-save:active { opacity: 0.8; }
+
+    /* Body */
+    #body { display: flex; flex: 1; overflow: hidden; }
+
+    /* Preview panel */
+    #preview-panel {
+      width: 110px; flex-shrink: 0;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 16px 8px;
+      background: rgba(255,255,255,0.03);
+      border-right: 1px solid rgba(255,255,255,0.06);
+      gap: 12px;
+    }
+    #preview-img {
+      width: 80px; height: 110px;
+      image-rendering: pixelated;
+      object-fit: contain;
+    }
+    #preview-placeholder {
+      width: 80px; height: 110px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.05); border-radius: 8px;
+      font-size: 11px; color: rgba(255,255,255,0.3); text-align: center; padding: 8px;
+    }
+    #gender-toggle { display: flex; gap: 6px; }
+    .gender-btn {
+      padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);
+      background: transparent; color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .gender-btn.active { background: #8B5CF6; border-color: #8B5CF6; color: #fff; }
+    #figure-code-display {
+      font-size: 8px; color: rgba(255,255,255,0.25); word-break: break-all; text-align: center;
+      max-width: 96px;
+    }
+
+    /* Editor panel */
+    #editor-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* Category tabs */
+    #cat-tabs {
+      display: flex; overflow-x: auto; flex-shrink: 0;
+      padding: 8px 12px 0;
+      gap: 4px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    #cat-tabs::-webkit-scrollbar { display: none; }
+    .cat-tab {
+      padding: 7px 12px; border-radius: 6px 6px 0 0; border: none;
+      background: transparent; color: rgba(255,255,255,0.4); font-size: 12px; font-weight: 600;
+      cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .cat-tab.active { color: #fff; border-bottom-color: #8B5CF6; background: rgba(139,92,246,0.1); }
+
+    /* Items grid */
+    #items-container { flex: 1; overflow-y: auto; padding: 12px; }
+    #items-container::-webkit-scrollbar { width: 4px; }
+    #items-container::-webkit-scrollbar-track { background: transparent; }
+    #items-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+    .section-label {
+      font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3);
+      text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; margin-top: 12px;
+    }
+    .section-label:first-child { margin-top: 0; }
+
+    .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 8px; }
+
+    .item-card {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 8px 4px;
+      border-radius: 8px; border: 2px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+      cursor: pointer; transition: all 0.15s;
+    }
+    .item-card:hover { border-color: rgba(139,92,246,0.5); background: rgba(139,92,246,0.08); }
+    .item-card.selected { border-color: #8B5CF6; background: rgba(139,92,246,0.2); }
+    .item-card img {
+      width: 44px; height: 60px;
+      image-rendering: pixelated;
+      object-fit: contain;
+    }
+    .item-card .item-name {
+      font-size: 9px; color: rgba(255,255,255,0.5); text-align: center; line-height: 1.2;
+    }
+    .item-card.selected .item-name { color: #A78BFA; }
+
+    /* Color picker row */
+    .color-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .color-swatch {
+      width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
+      border: 2px solid transparent; transition: all 0.15s; flex-shrink: 0;
+    }
+    .color-swatch.selected { border-color: #fff; transform: scale(1.15); }
+
+    /* Loading */
+    #loading {
+      position: fixed; inset: 0; background: #0D0A1A;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 12px; z-index: 99;
+    }
+    #loading.hidden { display: none; }
+    .spinner { width: 36px; height: 36px; border: 3px solid rgba(139,92,246,0.3); border-top-color: #8B5CF6; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { font-size: 13px; color: rgba(255,255,255,0.5); }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading Avatar Creator...</p>
+</div>
+
+<div id="app" style="display:none">
+  <div id="header">
+    <h1>Avatar Creator</h1>
+    <button id="btn-cancel" onclick="handleCancel()">Cancel</button>
+    <button id="btn-save" onclick="handleSave()">Save</button>
+  </div>
+
+  <div id="body">
+    <!-- Preview panel -->
+    <div id="preview-panel">
+      <div id="preview-placeholder">Select parts to preview</div>
+      <img id="preview-img" style="display:none" alt="Avatar Preview" onerror="onPreviewError()" onload="onPreviewLoad()">
+      <div id="gender-toggle">
+        <button class="gender-btn active" data-gender="M" onclick="setGender('M')">M</button>
+        <button class="gender-btn" data-gender="F" onclick="setGender('F')">F</button>
+      </div>
+      <div id="figure-code-display"></div>
+    </div>
+
+    <!-- Editor panel -->
+    <div id="editor-panel">
+      <div id="cat-tabs"></div>
+      <div id="items-container"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ──────────────────────────────────────────────────────────────────
+
+var gender = 'M';
+var activeCategory = 'hd';
+var selection = {
+  hd: { setId: '180', colorId: '2' },
+  hr: { setId: '100', colorId: '61' },
+  ch: { setId: '215', colorId: '92' },
+  lg: { setId: '270', colorId: '110' },
+  sh: { setId: '295', colorId: '110' },
+  ha: null,
+  he: null,
+  ea: null,
+  fa: null,
+};
+
+// Female defaults
+var femaleDefaults = {
+  hd: { setId: '600', colorId: '2' },
+  hr: { setId: '507', colorId: '61' },
+  ch: { setId: '3438', colorId: '110' },
+  lg: { setId: '3058', colorId: '82' },
+  sh: { setId: '3016', colorId: '110' },
+};
+
+// ─── Figure Data ─────────────────────────────────────────────────────────────
+
+var CATEGORIES = [
+  { id: 'hd', label: 'Skin' },
+  { id: 'hr', label: 'Hair' },
+  { id: 'ch', label: 'Top' },
+  { id: 'lg', label: 'Bottom' },
+  { id: 'sh', label: 'Shoes' },
+  { id: 'ha', label: 'Hat' },
+  { id: 'he', label: 'Head' },
+  { id: 'ea', label: 'Ears' },
+  { id: 'fa', label: 'Face' },
+];
+
+var SKIN_COLORS = [
+  { colorId: '1', hex: '#F5D5B8', label: 'Pale' },
+  { colorId: '2', hex: '#E8B88A', label: 'Light' },
+  { colorId: '3', hex: '#D4956A', label: 'Medium' },
+  { colorId: '4', hex: '#B47440', label: 'Tan' },
+  { colorId: '5', hex: '#8B5E3C', label: 'Brown' },
+  { colorId: '6', hex: '#5C3A1E', label: 'Dark' },
+  { colorId: '7', hex: '#3D2211', label: 'Deeper' },
+  { colorId: '8', hex: '#FADADD', label: 'Pink' },
+];
+
+var HAIR_COLORS = [
+  { colorId: '61', hex: '#F5E642', label: 'Yellow' },
+  { colorId: '29', hex: '#EFB435', label: 'Orange' },
+  { colorId: '24', hex: '#E07040', label: 'Auburn' },
+  { colorId: '11', hex: '#9E3A1A', label: 'Red' },
+  { colorId: '18', hex: '#8B4513', label: 'Brown' },
+  { colorId: '16', hex: '#5C3317', label: 'Dark Brown' },
+  { colorId: '0', hex: '#1A1A1A', label: 'Black' },
+  { colorId: '88', hex: '#E8E8E8', label: 'White' },
+  { colorId: '33', hex: '#A8D8EA', label: 'Blue' },
+  { colorId: '38', hex: '#FF8FAB', label: 'Pink' },
+  { colorId: '36', hex: '#98E06E', label: 'Green' },
+  { colorId: '51', hex: '#CC88FF', label: 'Purple' },
+];
+
+var CLOTHING_COLORS = [
+  { colorId: '110', hex: '#1A1A2E', label: 'Black' },
+  { colorId: '92', hex: '#FFFFFF', label: 'White' },
+  { colorId: '1', hex: '#E8A898', label: 'Peach' },
+  { colorId: '82', hex: '#4A90D9', label: 'Blue' },
+  { colorId: '29', hex: '#E07040', label: 'Orange' },
+  { colorId: '24', hex: '#E04060', label: 'Red' },
+  { colorId: '18', hex: '#40A050', label: 'Green' },
+  { colorId: '33', hex: '#805ED0', label: 'Purple' },
+  { colorId: '38', hex: '#D08050', label: 'Brown' },
+  { colorId: '9', hex: '#C0D050', label: 'Yellow' },
+];
+
+// Habbo figure sets - curated selections
+var FIGURE_SETS = {
+  hd: {
+    M: [
+      { setId: '180', name: 'Classic M', preview: '1' },
+      { setId: '190', name: 'Slim M', preview: '1' },
+      { setId: '3092', name: 'Broad M', preview: '1' },
+      { setId: '3115', name: 'Athletic M', preview: '1' },
+    ],
+    F: [
+      { setId: '600', name: 'Classic F', preview: '1' },
+      { setId: '605', name: 'Slim F', preview: '1' },
+      { setId: '3090', name: 'Curvy F', preview: '1' },
+      { setId: '3410', name: 'Petite F', preview: '1' },
+    ],
+  },
+  hr: {
+    M: [
+      { setId: '100', name: 'Crew Cut' },
+      { setId: '101', name: 'Spiky' },
+      { setId: '103', name: 'Messy' },
+      { setId: '115', name: 'Swept Back' },
+      { setId: '152', name: 'Short Side' },
+      { setId: '169', name: 'Classic' },
+      { setId: '890', name: 'Wavy' },
+      { setId: '3163', name: 'Modern' },
+      { setId: '3215', name: 'Casual' },
+      { setId: '3058', name: 'Fade' },
+      { setId: '605', name: 'Curly' },
+      { setId: '400', name: 'Long M' },
+    ],
+    F: [
+      { setId: '507', name: 'Long Waves' },
+      { setId: '515', name: 'Pigtails' },
+      { setId: '891', name: 'Ponytail' },
+      { setId: '3215', name: 'Casual' },
+      { setId: '3058', name: 'Short Bob' },
+      { setId: '893', name: 'Bun' },
+      { setId: '592', name: 'Side Part' },
+      { setId: '3410', name: 'Braids' },
+      { setId: '400', name: 'Long Straight' },
+      { setId: '3163', name: 'Layered' },
+    ],
+  },
+  ch: {
+    M: [
+      { setId: '215', name: 'T-Shirt' },
+      { setId: '217', name: 'V-Neck' },
+      { setId: '406', name: 'Polo' },
+      { setId: '696', name: 'Hoodie' },
+      { setId: '3438', name: 'Jacket' },
+      { setId: '3440', name: 'Blazer' },
+      { setId: '3092', name: 'Shirt' },
+      { setId: '4038', name: 'Tank' },
+      { setId: '3762', name: 'Sweater' },
+      { setId: '693', name: 'Track' },
+    ],
+    F: [
+      { setId: '3438', name: 'Blouse' },
+      { setId: '3440', name: 'Top' },
+      { setId: '3092', name: 'Dress Top' },
+      { setId: '4060', name: 'Crop Top' },
+      { setId: '3762', name: 'Sweater' },
+      { setId: '696', name: 'Hoodie' },
+      { setId: '215', name: 'T-Shirt' },
+      { setId: '406', name: 'Polo' },
+      { setId: '3450', name: 'Jacket' },
+      { setId: '3048', name: 'Cardigan' },
+    ],
+  },
+  lg: {
+    M: [
+      { setId: '270', name: 'Jeans' },
+      { setId: '280', name: 'Slacks' },
+      { setId: '3058', name: 'Cargo' },
+      { setId: '3056', name: 'Shorts' },
+      { setId: '676', name: 'Trackpants' },
+      { setId: '3450', name: 'Skinny' },
+      { setId: '3090', name: 'Chinos' },
+      { setId: '3440', name: 'Joggers' },
+    ],
+    F: [
+      { setId: '3058', name: 'Jeans' },
+      { setId: '3056', name: 'Skirt' },
+      { setId: '270', name: 'Slacks' },
+      { setId: '676', name: 'Leggings' },
+      { setId: '3450', name: 'Shorts' },
+      { setId: '3090', name: 'Midi Skirt' },
+      { setId: '3440', name: 'Dress Bottom' },
+    ],
+  },
+  sh: {
+    M: [
+      { setId: '295', name: 'Sneakers' },
+      { setId: '3016', name: 'Boots' },
+      { setId: '290', name: 'Classic' },
+      { setId: '3058', name: 'Slides' },
+      { setId: '45', name: 'Trainers' },
+      { setId: '3440', name: 'High Top' },
+    ],
+    F: [
+      { setId: '3016', name: 'Boots' },
+      { setId: '295', name: 'Sneakers' },
+      { setId: '290', name: 'Flats' },
+      { setId: '45', name: 'Heels' },
+      { setId: '3058', name: 'Sandals' },
+    ],
+  },
+  ha: {
+    M: [
+      { setId: '3580', name: 'Beanie' },
+      { setId: '1004', name: 'Cap' },
+      { setId: '3582', name: 'Cowboy' },
+      { setId: '1002', name: 'Top Hat' },
+      { setId: '3584', name: 'Snapback' },
+    ],
+    F: [
+      { setId: '3580', name: 'Beanie' },
+      { setId: '1004', name: 'Cap' },
+      { setId: '3582', name: 'Cowboy' },
+      { setId: '1002', name: 'Top Hat' },
+      { setId: '3010', name: 'Beret' },
+    ],
+  },
+  he: {
+    M: [
+      { setId: '3092', name: 'Headband' },
+      { setId: '3058', name: 'Headphones' },
+      { setId: '3900', name: 'Bandana' },
+    ],
+    F: [
+      { setId: '3092', name: 'Headband' },
+      { setId: '3900', name: 'Bandana' },
+      { setId: '3058', name: 'Headphones' },
+    ],
+  },
+  ea: {
+    M: [
+      { setId: '1001', name: 'Stud' },
+      { setId: '1006', name: 'Hoop' },
+      { setId: '3900', name: 'Gem' },
+    ],
+    F: [
+      { setId: '1001', name: 'Stud' },
+      { setId: '1006', name: 'Hoop' },
+      { setId: '3900', name: 'Gem' },
+    ],
+  },
+  fa: {
+    M: [
+      { setId: '3900', name: 'Mask' },
+      { setId: '1001', name: 'Scar' },
+    ],
+    F: [
+      { setId: '3900', name: 'Mask' },
+    ],
+  },
+};
+
+// ─── Figure Code Builder ─────────────────────────────────────────────────────
+
+function buildFigureCode() {
+  var parts = [];
+  var ORDER = ['hd', 'hr', 'ha', 'he', 'ea', 'fa', 'ch', 'lg', 'sh'];
+  ORDER.forEach(function(part) {
+    var sel = selection[part];
+    if (!sel) return;
+    if (sel.colorId) {
+      parts.push(part + '-' + sel.setId + '-' + sel.colorId);
+    } else {
+      parts.push(part + '-' + sel.setId);
+    }
+  });
+  return parts.join('.');
+}
+
+function buildAvatarUrl() {
+  var figure = buildFigureCode();
+  return 'https://www.habbo.com/habbo-imaging/avatarimage?figure=' + figure +
+    '&direction=4&head_direction=4&size=l&gender=' + gender;
+}
+
+// ─── Preview ─────────────────────────────────────────────────────────────────
+
+var previewTimeout = null;
+function updatePreview() {
+  if (previewTimeout) clearTimeout(previewTimeout);
+  previewTimeout = setTimeout(function() {
+    var url = buildAvatarUrl();
+    var img = document.getElementById('preview-img');
+    var placeholder = document.getElementById('preview-placeholder');
+    img.style.display = 'none';
+    placeholder.style.display = 'none';
+    img.src = url;
+    document.getElementById('figure-code-display').textContent = buildFigureCode();
+  }, 200);
+}
+
+function onPreviewLoad() {
+  document.getElementById('preview-img').style.display = 'block';
+  document.getElementById('preview-placeholder').style.display = 'none';
+}
+
+function onPreviewError() {
+  document.getElementById('preview-img').style.display = 'none';
+  document.getElementById('preview-placeholder').style.display = 'flex';
+  document.getElementById('preview-placeholder').textContent = 'Preview\nunavailable';
+}
+
+// ─── Gender ──────────────────────────────────────────────────────────────────
+
+function setGender(g) {
+  gender = g;
+  document.querySelectorAll('.gender-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.gender === g);
+  });
+  // Switch to gender-appropriate defaults
+  if (g === 'F') {
+    Object.assign(selection, JSON.parse(JSON.stringify(femaleDefaults)));
+  } else {
+    selection.hd = { setId: '180', colorId: '2' };
+    selection.hr = { setId: '100', colorId: '61' };
+    selection.ch = { setId: '215', colorId: '92' };
+    selection.lg = { setId: '270', colorId: '110' };
+    selection.sh = { setId: '295', colorId: '110' };
+  }
+  renderCategory(activeCategory);
+  updatePreview();
+}
+
+// ─── Category Rendering ──────────────────────────────────────────────────────
+
+function setCategory(id) {
+  activeCategory = id;
+  document.querySelectorAll('.cat-tab').forEach(function(tab) {
+    tab.classList.toggle('active', tab.dataset.cat === id);
+  });
+  renderCategory(id);
+}
+
+function renderCategory(catId) {
+  var container = document.getElementById('items-container');
+  container.innerHTML = '';
+
+  var sets = (FIGURE_SETS[catId] || {})[gender] || [];
+  var hasSets = sets.length > 0;
+  var hasColors = catId === 'hd' || catId === 'hr' || catId === 'ch' || catId === 'lg' || catId === 'sh';
+
+  // None option for optional categories
+  var optionalCats = ['ha', 'he', 'ea', 'fa'];
+  if (optionalCats.indexOf(catId) !== -1) {
+    var noneDiv = document.createElement('div');
+    noneDiv.style.cssText = 'margin-bottom:12px';
+    var noneLabel = document.createElement('div');
+    noneLabel.className = 'section-label';
+    noneLabel.textContent = 'NONE';
+    noneDiv.appendChild(noneLabel);
+    var noneBtn = document.createElement('button');
+    noneBtn.textContent = 'Remove';
+    noneBtn.style.cssText = 'padding:8px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.6);font-size:12px;cursor:pointer;';
+    noneBtn.onclick = function() {
+      selection[catId] = null;
+      renderCategory(catId);
+      updatePreview();
+    };
+    if (!selection[catId]) noneBtn.style.borderColor = '#8B5CF6';
+    noneDiv.appendChild(noneBtn);
+    container.appendChild(noneDiv);
+  }
+
+  // Items grid
+  if (hasSets) {
+    var itemsLabel = document.createElement('div');
+    itemsLabel.className = 'section-label';
+    itemsLabel.textContent = 'STYLE';
+    container.appendChild(itemsLabel);
+
+    var grid = document.createElement('div');
+    grid.className = 'items-grid';
+
+    sets.forEach(function(set) {
+      var card = document.createElement('div');
+      card.className = 'item-card';
+      var curSel = selection[catId];
+      if (curSel && curSel.setId === set.setId) card.classList.add('selected');
+
+      // Avatar preview image for this item
+      var previewFig = buildPreviewFigure(catId, set.setId, curSel ? curSel.colorId : '92');
+      var previewUrl = 'https://www.habbo.com/habbo-imaging/avatarimage?figure=' + previewFig +
+        '&direction=4&head_direction=4&size=s&gender=' + gender;
+
+      var img = document.createElement('img');
+      img.src = previewUrl;
+      img.onerror = function() { this.style.display='none'; };
+      card.appendChild(img);
+
+      var name = document.createElement('div');
+      name.className = 'item-name';
+      name.textContent = set.name;
+      card.appendChild(name);
+
+      card.onclick = function() {
+        var colorId = (selection[catId] && selection[catId].colorId) || '92';
+        selection[catId] = { setId: set.setId, colorId: colorId };
+        renderCategory(catId);
+        updatePreview();
+      };
+      grid.appendChild(card);
+    });
+    container.appendChild(grid);
+  }
+
+  // Color picker
+  if (hasColors) {
+    var colorList = catId === 'hd' ? SKIN_COLORS : (catId === 'hr' ? HAIR_COLORS : CLOTHING_COLORS);
+    var colorLabel = document.createElement('div');
+    colorLabel.className = 'section-label';
+    colorLabel.style.marginTop = '16px';
+    colorLabel.textContent = 'COLOR';
+    container.appendChild(colorLabel);
+
+    var colorRow = document.createElement('div');
+    colorRow.className = 'color-row';
+    var curSel = selection[catId];
+
+    colorList.forEach(function(c) {
+      var swatch = document.createElement('div');
+      swatch.className = 'color-swatch';
+      swatch.style.background = c.hex;
+      swatch.title = c.label;
+      if (curSel && curSel.colorId === c.colorId) swatch.classList.add('selected');
+      swatch.onclick = function() {
+        if (!selection[catId]) {
+          // Pick first set if none selected
+          var gsets = (FIGURE_SETS[catId] || {})[gender] || [];
+          if (gsets.length > 0) selection[catId] = { setId: gsets[0].setId, colorId: c.colorId };
+        } else {
+          selection[catId].colorId = c.colorId;
+        }
+        renderCategory(catId);
+        updatePreview();
+      };
+      colorRow.appendChild(swatch);
+    });
+    container.appendChild(colorRow);
+  }
+
+  if (!hasSets && !hasColors) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'padding:40px;text-align:center;color:rgba(255,255,255,0.3);font-size:13px';
+    empty.textContent = 'No items available for this category.';
+    container.appendChild(empty);
+  }
+}
+
+function buildPreviewFigure(catId, setId, colorId) {
+  var tempSel = JSON.parse(JSON.stringify(selection));
+  tempSel[catId] = { setId: setId, colorId: colorId || '92' };
+
+  var parts = [];
+  var ORDER = ['hd', 'hr', 'ha', 'he', 'ea', 'fa', 'ch', 'lg', 'sh'];
+  ORDER.forEach(function(part) {
+    var sel = tempSel[part];
+    if (!sel) return;
+    if (sel.colorId) parts.push(part + '-' + sel.setId + '-' + sel.colorId);
+    else parts.push(part + '-' + sel.setId);
+  });
+  return parts.join('.');
+}
+
+// ─── Tabs Init ───────────────────────────────────────────────────────────────
+
+function initTabs() {
+  var tabsEl = document.getElementById('cat-tabs');
+  CATEGORIES.forEach(function(cat) {
+    var btn = document.createElement('button');
+    btn.className = 'cat-tab' + (cat.id === activeCategory ? ' active' : '');
+    btn.dataset.cat = cat.id;
+    btn.textContent = cat.label;
+    btn.onclick = function() { setCategory(cat.id); };
+    tabsEl.appendChild(btn);
+  });
+}
+
+// ─── Save / Cancel ───────────────────────────────────────────────────────────
+
+function handleSave() {
+  var figureCode = buildFigureCode();
+  var payload = JSON.stringify({ type: 'avatar_saved', figureCode: figureCode, gender: gender });
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(payload);
+  if (window.parent && window.parent !== window) window.parent.postMessage(payload, '*');
+}
+
+function handleCancel() {
+  var payload = JSON.stringify({ type: 'avatar_cancelled' });
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(payload);
+  if (window.parent && window.parent !== window) window.parent.postMessage(payload, '*');
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
+window.addEventListener('message', function(e) {
+  try {
+    var msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+    if (!msg) return;
+    if (msg.type === 'load_avatar' && msg.figureCode) {
+      // Pre-load existing avatar
+      parseAndLoadFigureCode(msg.figureCode, msg.gender || 'M');
+    }
+  } catch(err) {}
+});
+
+function parseAndLoadFigureCode(code, g) {
+  gender = g || 'M';
+  document.querySelectorAll('.gender-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.gender === gender);
+  });
+  var segments = code.split('.');
+  segments.forEach(function(seg) {
+    var parts = seg.split('-');
+    if (parts.length >= 2) {
+      var partType = parts[0];
+      var setId = parts[1];
+      var colorId = parts[2] || null;
+      if (selection.hasOwnProperty(partType)) {
+        selection[partType] = { setId: setId, colorId: colorId || '1' };
+      }
+    }
+  });
+  renderCategory(activeCategory);
+  updatePreview();
+}
+
+function init() {
+  initTabs();
+  renderCategory(activeCategory);
+  updatePreview();
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('app').style.display = 'flex';
+}
+
+// Ready
+setTimeout(init, 400);
+</script>
+</body>
+</html>
