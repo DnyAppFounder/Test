@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Linking,
+  Share,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -235,6 +236,7 @@ export default function ProfileScreen() {
   const [verifyChecking, setVerifyChecking] = useState(false);
 
   const [showActionMenu, setShowActionMenu] = useState(false);
+  const [shareToast, setShareToast] = useState(false);
 
   const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const walletAddr = selectedAccount?.address || activeAddress || '';
@@ -335,12 +337,20 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleShareProfile = () => {
+  const handleShareProfile = async () => {
     setShowActionMenu(false);
     const url = `https://dawenpulse.app/profile/${id}`;
-    Clipboard.setStringAsync(url).catch(() => {});
-    setCopiedAddr(true);
-    setTimeout(() => setCopiedAddr(false), 2000);
+    if (Platform.OS !== 'web') {
+      try {
+        await Share.share({ message: url, url });
+        return;
+      } catch {
+        // fall through to clipboard
+      }
+    }
+    await Clipboard.setStringAsync(url).catch(() => {});
+    setShareToast(true);
+    setTimeout(() => setShareToast(false), 2500);
   };
 
   const handleBlockFromMenu = async () => {
@@ -1681,6 +1691,14 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Share toast */}
+      {shareToast && (
+        <View style={styles.shareToast} pointerEvents="none">
+          <Check size={14} color="#fff" strokeWidth={2.5} />
+          <Text style={styles.shareToastText}>Profile link copied!</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -1962,4 +1980,27 @@ const profileCommentStyles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   sendBtnDisabled: { backgroundColor: '#2A2A3A' },
+  shareToast: {
+    position: 'absolute',
+    bottom: 48,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(20,12,40,0.97)',
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  shareToastText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
 });
