@@ -22,6 +22,26 @@ export const DEFAULT_AVATAR: AvatarConfig = {
   auraColor: null,
 };
 
+// ─── Room Layout ─────────────────────────────────────────────────────────────
+
+export interface RoomDoor {
+  col: number;
+  row: number;
+  wall: 'left' | 'back';
+}
+
+export interface RoomLayout {
+  version: '1.0';
+  width: number;
+  height: number;
+  floor_style: string;
+  wall_style: string;
+  tiles: boolean[][];   // tiles[col][row] — true = walkable floor
+  doors: RoomDoor[];
+  builder_used?: string;
+  is_plaza?: boolean;
+}
+
 export interface WorldRoom {
   id: string;
   owner_wallet: string | null;
@@ -36,6 +56,42 @@ export interface WorldRoom {
   room_height?: number;
   max_players?: number;
   online_count?: number;
+  room_layout_data?: RoomLayout | null;
+  floor_data?: boolean[][] | null;
+  wall_data?: Record<string, any> | null;
+  door_data?: RoomDoor[] | null;
+  builder_used?: string;
+  layout_saved_at?: string | null;
+}
+
+export function buildDefaultLayout(width: number, height: number): RoomLayout {
+  const tiles: boolean[][] = [];
+  for (let c = 0; c < width; c++) {
+    tiles[c] = [];
+    for (let r = 0; r < height; r++) tiles[c][r] = true;
+  }
+  return {
+    version: '1.0',
+    width,
+    height,
+    floor_style: 'default',
+    wall_style: 'default',
+    tiles,
+    doors: [{ col: 0, row: Math.floor(height / 2), wall: 'left' }],
+    builder_used: 'native',
+  };
+}
+
+export function getRoomLayout(room: WorldRoom): RoomLayout {
+  if (room.room_layout_data?.version === '1.0') return room.room_layout_data;
+  const w = room.room_width ?? GRID_W;
+  const h = room.room_height ?? GRID_H;
+  return buildDefaultLayout(w, h);
+}
+
+export function isWalkable(layout: RoomLayout, col: number, row: number): boolean {
+  if (col < 0 || row < 0 || col >= layout.width || row >= layout.height) return false;
+  return layout.tiles[col]?.[row] ?? false;
 }
 
 export type SizeTier = 'standard' | 'large' | 'mega';
@@ -221,6 +277,31 @@ export async function createRoom(params: {
 
 export async function updateRoom(roomId: string, params: Partial<Pick<WorldRoom, 'name' | 'visibility' | 'theme'>>): Promise<void> {
   await supabase.from('world_rooms').update({ ...params, updated_at: new Date().toISOString() }).eq('id', roomId);
+}
+
+export async function saveRoomLayout(roomId: string, layout: RoomLayout): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('world_rooms').update({
+    room_layout_data: layout as any,
+    floor_data: layout.tiles as any,
+    wall_data: { style: layout.wall_style, left: true, back: true } as any,
+    door_data: layout.doors as any,
+    room_width: layout.width,
+    room_height: layout.height,
+    builder_used: 'native',
+    layout_saved_at: now,
+    updated_at: now,
+  }).eq('id', roomId);
+  if (error) throw error;
+}
+
+export async function fetchRoomWithLayout(roomId: string): Promise<WorldRoom | null> {
+  const { data } = await supabase
+    .from('world_rooms')
+    .select('*')
+    .eq('id', roomId)
+    .maybeSingle();
+  return data as WorldRoom | null;
 }
 
 export async function deleteRoom(roomId: string): Promise<void> {

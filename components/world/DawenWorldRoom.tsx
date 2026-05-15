@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, useWindowDimensions,
@@ -23,6 +23,7 @@ import {
   getRoomItems, placeRoomItem, removeRoomItem, moveRoomItem,
   subscribeToRoomMessages, subscribeToRoomPresence, subscribeToRoomItems,
   subscribeToPositionBroadcasts, broadcastPosition,
+  getRoomLayout, isWalkable, type RoomLayout,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { WorldSprite } from './WorldSprite';
@@ -83,15 +84,20 @@ export function DawenWorldRoom({
   const { width: screenW } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
+  // ── Layout (floor/wall/door data from DB, fallback to default) ───────────
+  const layout = useMemo(() => getRoomLayout(room), [room]);
+  const GW = layout.width;
+  const GH = layout.height;
+
   // ── Isometric projection constants ───────────────────────────────────────
   // ISO_TW = tile diamond width, ISO_TH = tile diamond height (2:1 ratio)
-  const ISO_TW = Math.max(40, Math.floor(Math.min(screenW - 8, 480) / ((GRID_W + GRID_H) * 0.5)));
+  const ISO_TW = Math.max(40, Math.floor(Math.min(screenW - 8, 480) / ((GW + GH) * 0.5)));
   const ISO_TH = Math.round(ISO_TW / 2);
   const WALL_H = Math.round(ISO_TW * 0.9);
-  const ISO_ORIGIN_X = Math.round(GRID_H * ISO_TW / 2);
+  const ISO_ORIGIN_X = Math.round(GH * ISO_TW / 2);
   const ISO_ORIGIN_Y = WALL_H;
-  const ISO_CANVAS_W = (GRID_W + GRID_H) * Math.round(ISO_TW / 2) + 2;
-  const ISO_CANVAS_H = WALL_H + (GRID_W + GRID_H) * Math.round(ISO_TH / 2) + ISO_TH + 8;
+  const ISO_CANVAS_W = (GW + GH) * Math.round(ISO_TW / 2) + 2;
+  const ISO_CANVAS_H = WALL_H + (GW + GH) * Math.round(ISO_TH / 2) + ISO_TH + 8;
 
   function isoToScreen(col: number, row: number) {
     return {
@@ -296,6 +302,9 @@ export function DawenWorldRoom({
       setSelectedRoomItem(null);
       return;
     }
+
+    // Don't navigate to void/non-walkable tiles
+    if (!isWalkable(layout, col, row)) return;
 
     // Check if the tile has a sittable item (chair, sofa, bed, gaming seat)
     const sittableItem = roomItems.find(
@@ -545,15 +554,15 @@ export function DawenWorldRoom({
               const dy = ly - ISO_ORIGIN_Y;
               const col = Math.round((dx / (ISO_TW / 2) + dy / (ISO_TH / 2)) / 2);
               const row = Math.round((dy / (ISO_TH / 2) - dx / (ISO_TW / 2)) / 2);
-              const cc = Math.max(0, Math.min(GRID_W - 1, col));
-              const rr = Math.max(0, Math.min(GRID_H - 1, row));
+              const cc = Math.max(0, Math.min(GW - 1, col));
+              const rr = Math.max(0, Math.min(GH - 1, row));
               handleTileTap(cc, rr);
             }}
           >
             {/* ── SVG: walls + floor tiles ── */}
             <Svg width={ISO_CANVAS_W} height={ISO_CANVAS_H} style={StyleSheet.absoluteFill}>
               {/* Back wall panels (row=0, along all cols) */}
-              {Array.from({ length: GRID_W }, (_, col) => (
+              {Array.from({ length: GW }, (_, col) => (
                 <Polygon
                   key={`bw-${col}`}
                   points={backWallPoly(col)}
@@ -565,7 +574,7 @@ export function DawenWorldRoom({
               ))}
 
               {/* Left wall panels (col=0, along all rows) */}
-              {Array.from({ length: GRID_H }, (_, row) => (
+              {Array.from({ length: GH }, (_, row) => (
                 <Polygon
                   key={`lw-${row}`}
                   points={leftWallPoly(row)}
@@ -581,13 +590,26 @@ export function DawenWorldRoom({
                 const tiles: ReactNode[] = [];
                 // Sort tiles by depth: col+row ascending
                 const sorted: [number, number][] = [];
-                for (let col = 0; col < GRID_W; col++) {
-                  for (let row = 0; row < GRID_H; row++) {
+                for (let col = 0; col < GW; col++) {
+                  for (let row = 0; row < GH; row++) {
                     sorted.push([col, row]);
                   }
                 }
                 sorted.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
                 for (const [col, row] of sorted) {
+                  const walkable = layout.tiles[col]?.[row] ?? false;
+                  if (!walkable) {
+                    tiles.push(
+                      <Polygon
+                        key={`t-${col}-${row}`}
+                        points={tilePoly(col, row)}
+                        fill="rgba(0,0,0,0.55)"
+                        stroke="rgba(0,0,0,0.7)"
+                        strokeWidth={0.5}
+                      />
+                    );
+                    continue;
+                  }
                   const isEven = (col + row) % 2 === 0;
                   const isSelected = selectedRoomItem?.x === col && selectedRoomItem?.y === row;
                   const hasSittable = roomItems.some(
@@ -660,7 +682,7 @@ export function DawenWorldRoom({
                     </SvgDefs>
 
                     {/* ── Brick texture on back wall ── */}
-                    {Array.from({ length: GRID_W }, (_, col) =>
+                    {Array.from({ length: GW }, (_, col) =>
                       [1, 2, 3, 4].map(i => {
                         const fy = i * WALL_H / 5;
                         const odd = i % 2 === 1;
@@ -674,7 +696,7 @@ export function DawenWorldRoom({
                     )}
 
                     {/* ── Brick texture on left wall ── */}
-                    {Array.from({ length: GRID_H }, (_, row) =>
+                    {Array.from({ length: GH }, (_, row) =>
                       [1, 2, 3, 4].map(i => {
                         const fy = i * WALL_H / 5;
                         return (

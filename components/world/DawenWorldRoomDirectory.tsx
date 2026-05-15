@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
-  TextInput, Alert,
+  TextInput,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3 } from 'lucide-react-native';
+import { ArrowLeft, Map as MapIcon, Users, Plus, Lock, Globe, UserCheck, Trash2, CreditCard as Edit3, Grid2x2 as Grid } from 'lucide-react-native';
 import {
-  WorldRoom, RoomStyle, ROOM_STYLE_CONFIG,
-  getPublicRooms, getMyRooms, getOrCreateMyRoom, getRoomsWithCounts,
+  WorldRoom, RoomStyle, ROOM_STYLE_CONFIG, type RoomLayout,
+  getPublicRooms, getMyRooms, getRoomsWithCounts,
   createRoom, deleteRoom, updateRoom, PLAZA_ROOM_ID,
+  saveRoomLayout, fetchRoomWithLayout,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { DawenRoomBuilder } from './DawenRoomBuilder';
 
 const THEMES: { name: string; emoji: string }[] = [
   { name: 'DAWEN Neon Room',    emoji: '🌐' },
@@ -60,6 +62,8 @@ export function DawenWorldRoomDirectory({
   const [editVis, setEditVis] = useState<'public' | 'private' | 'invite_only'>('public');
   const [newRoomStyle, setNewRoomStyle] = useState<RoomStyle>('apartment');
   const [saving, setSaving] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [builderRoom, setBuilderRoom] = useState<WorldRoom | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,11 +91,14 @@ export function DawenWorldRoomDirectory({
     setCreating(true);
     try {
       const room = await createRoom({ walletAddress, name: trimmed, theme: newTheme, visibility: newVis, roomStyle: newRoomStyle });
-      console.log('[DawenWorldRoomDirectory] room created:', room.id, room.name);
       setCreateOpen(false);
       setNewName('');
       await load();
       setTab('mine');
+      // Open builder so user can design the room layout
+      const roomWithLayout = await fetchRoomWithLayout(room.id);
+      setBuilderRoom(roomWithLayout ?? room);
+      setBuilderOpen(true);
     } catch (e: any) {
       console.error('[DawenWorldRoomDirectory] create error:', e?.message ?? e, JSON.stringify(e));
       const msg = e?.message ?? e?.error_description ?? 'Failed to create room. Please try again.';
@@ -114,6 +121,25 @@ export function DawenWorldRoomDirectory({
     setSaving(false);
     setEditRoom(null);
     await load();
+  };
+
+  const handleBuilderSave = async (layout: RoomLayout) => {
+    if (!builderRoom) return;
+    await saveRoomLayout(builderRoom.id, layout);
+    setBuilderOpen(false);
+    setBuilderRoom(null);
+    await load();
+  };
+
+  const handleBuilderCancel = () => {
+    setBuilderOpen(false);
+    setBuilderRoom(null);
+  };
+
+  const handleOpenBuilder = async (room: WorldRoom) => {
+    const roomWithLayout = await fetchRoomWithLayout(room.id);
+    setBuilderRoom(roomWithLayout ?? room);
+    setBuilderOpen(true);
   };
 
   const canAccess = (room: WorldRoom) => {
@@ -214,6 +240,9 @@ export function DawenWorldRoomDirectory({
                 <View style={styles.cardActions}>
                   {isMyRoom && (
                     <>
+                      <TouchableOpacity onPress={() => handleOpenBuilder(room)} style={styles.layoutBtn}>
+                        <Grid size={13} color={colors.primary} strokeWidth={2} />
+                      </TouchableOpacity>
                       <TouchableOpacity onPress={() => { setEditRoom(room); setEditName(room.name); setEditVis(room.visibility as any); }}>
                         <Edit3 size={14} color="rgba(255,255,255,0.4)" strokeWidth={2} />
                       </TouchableOpacity>
@@ -242,7 +271,7 @@ export function DawenWorldRoomDirectory({
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>{tab === 'mine' ? '🏠' : '🌐'}</Text>
               <Text style={styles.emptyText}>
-                {tab === 'mine' ? 'No rooms yet. Create one!' : 'No public rooms found.'}
+                {tab === 'mine' ? 'No rooms yet. Create one!' : 'No other public rooms yet.'}
               </Text>
             </View>
           )}
@@ -316,6 +345,17 @@ export function DawenWorldRoomDirectory({
         </View>
       </Modal>
 
+      {/* Room Builder — full-screen overlay */}
+      {builderOpen && builderRoom && (
+        <View style={StyleSheet.absoluteFillObject}>
+          <DawenRoomBuilder
+            room={builderRoom}
+            onSave={handleBuilderSave}
+            onCancel={handleBuilderCancel}
+          />
+        </View>
+      )}
+
       {/* Edit modal */}
       <Modal visible={!!editRoom} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -380,6 +420,7 @@ const styles = StyleSheet.create({
   metaText: { fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
   dot: { color: 'rgba(255,255,255,0.3)' },
   cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  layoutBtn: { width: 28, height: 28, borderRadius: 7, backgroundColor: colors.primaryMuted, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' },
   joinBtn: { backgroundColor: colors.primary, borderRadius: borderRadius.md, paddingHorizontal: 14, paddingVertical: 7 },
   joinText: { fontSize: 11, fontWeight: '800', color: '#fff' },
   lockedBtn: { width: 30, height: 30, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', alignItems: 'center' },
