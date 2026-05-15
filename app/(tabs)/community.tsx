@@ -1073,14 +1073,16 @@ export default function CommunityScreen() {
               activeOpacity={0.75}
               onPress={() => router.push(`/chat/group/${group.id}` as any)}
             >
-              <View style={[styles.convAvatarWrap, { backgroundColor: 'rgba(139,92,246,0.15)', borderRadius: 24, justifyContent: 'center', alignItems: 'center' }]}>
-                <Users size={22} color={colors.primary} strokeWidth={2} />
+              <View style={styles.convAvatarWrap}>
+                <View style={styles.groupAvatarIcon}>
+                  <Users size={22} color={colors.primary} strokeWidth={2} />
+                </View>
               </View>
               <View style={styles.convBody}>
                 <View style={styles.convNameRow}>
-                  <Text style={[styles.convUsername, { color: colors.primary }]}>{group.name}</Text>
-                  <View style={{ backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: colors.primary }}>GROUP</Text>
+                  <Text style={styles.convUsername} numberOfLines={1}>{group.name}</Text>
+                  <View style={styles.groupBadge}>
+                    <Text style={styles.groupBadgeText}>GROUP</Text>
                   </View>
                 </View>
                 <Text style={styles.convLastMsg} numberOfLines={1}>
@@ -2982,6 +2984,30 @@ const styles = StyleSheet.create({
   },
   convAvatarWrap: {
     position: 'relative',
+  },
+  groupAvatarIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupBadge: {
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.4)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  groupBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 0.3,
   },
   convAvatar: {
     width: 52,

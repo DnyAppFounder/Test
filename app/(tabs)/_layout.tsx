@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Wallet, Globe, Rocket, Compass, Settings } from 'lucide-react-native';
+import { Wallet, Globe, Rocket, Building2, Settings } from 'lucide-react-native';
 import { OnboardingGate } from '@/components/OnboardingGate';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useEffect, useRef } from 'react';
@@ -98,6 +98,47 @@ function AnimatedGlobeIcon({ size, color, count }: { size: number; color: string
   );
 }
 
+function AnimatedCityIcon({ size, color }: { size: number; color: string }) {
+  const glowAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const isActive = color === colors.primary;
+  const prevActive = useRef(false);
+
+  useEffect(() => {
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 0, duration: 1800, useNativeDriver: true }),
+      ])
+    );
+    glowLoop.start();
+    return () => glowLoop.stop();
+  }, []);
+
+  useEffect(() => {
+    if (isActive && !prevActive.current) {
+      Animated.sequence([
+        Animated.spring(scaleAnim, { toValue: 1.25, useNativeDriver: true, speed: 30, bounciness: 12 }),
+        Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
+      ]).start();
+    }
+    prevActive.current = isActive;
+  }, [isActive]);
+
+  const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0, isActive ? 0.5 : 0] });
+
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+      {isActive && (
+        <Animated.View style={[badgeStyles.cityGlow, { opacity: glowOpacity }]} />
+      )}
+      <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+        <Building2 size={size} color={isActive ? colors.primary : color} strokeWidth={2} />
+      </Animated.View>
+    </View>
+  );
+}
+
 const badgeStyles = StyleSheet.create({
   badge: {
     position: 'absolute',
@@ -133,6 +174,18 @@ const badgeStyles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
+    backgroundColor: '#A855F7',
+    shadowColor: '#A855F7',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  cityGlow: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#A855F7',
     shadowColor: '#A855F7',
     shadowOffset: { width: 0, height: 0 },
@@ -212,7 +265,7 @@ export default function TabLayout() {
         options={{
           title: t.tabs.dapps,
           tabBarIcon: ({ size, color }) => (
-            <AnimatedTabIcon icon={Compass} size={size} color={color} />
+            <AnimatedCityIcon size={size} color={color} />
           ),
         }}
       />

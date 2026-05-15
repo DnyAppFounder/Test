@@ -12,6 +12,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  ImageBackground,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera, Delete } from 'lucide-react-native';
@@ -497,9 +498,21 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={colors.gradient.header} style={styles.header}>
-        <Text style={styles.headerTitle}>{t.settings.title}</Text>
-      </LinearGradient>
+      <ImageBackground
+        source={require('../../tour.jpeg')}
+        style={styles.header}
+        resizeMode="cover"
+        imageStyle={{ opacity: 0.35, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }}
+      >
+        <LinearGradient
+          colors={['rgba(5,0,25,0.5)', 'rgba(8,2,30,0.88)']}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.headerContent}>
+          <Text style={styles.headerTitle}>{t.settings.title}</Text>
+          <Text style={styles.headerSub}>Dawen City</Text>
+        </View>
+      </ImageBackground>
 
       <ScrollView
         style={styles.content}
@@ -1292,11 +1305,26 @@ const styles = StyleSheet.create({
     paddingTop: 56,
     paddingBottom: 16,
     paddingHorizontal: spacing.xxl,
+    minHeight: 110,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  headerContent: {
+    gap: 3,
   },
   headerTitle: {
     fontSize: fontSize.xl,
-    fontWeight: '700',
-    color: colors.textPrimary,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(139,92,246,0.5)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
+  headerSub: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.primary,
+    letterSpacing: 0.5,
   },
   content: {
     flex: 1,
