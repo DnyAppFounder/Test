@@ -314,7 +314,7 @@ export default function SettingsScreen() {
   const handleInviteFriends = async () => {
     try {
       await Share.share({
-        message: 'Join me on DNY - the crypto super app! Trade, Post, Play, Earn. Download now: https://dny.app',
+        message: 'Join me on Dawen - the crypto super app! Trade, Post, Play, Earn. Download now: https://dny.app',
       });
     } catch {}
   };
@@ -481,8 +481,8 @@ export default function SettingsScreen() {
   ];
 
   const faqItems = [
-    { q: 'What is DNY?', a: 'DNY is a non-custodial crypto super app. Your private keys never leave your device. Trade, post, play, and earn all in one place.' },
-    { q: 'Is my wallet safe?', a: 'Yes. DNY is non-custodial, meaning only you hold your private keys. Your seed phrase is encrypted and stored locally on your device.' },
+    { q: 'What is Dawen?', a: 'Dawen is a non-custodial crypto super app. Your private keys never leave your device. Trade, post, play, and earn all in one place.' },
+    { q: 'Is my wallet safe?', a: 'Yes. Dawen is non-custodial, meaning only you hold your private keys. Your seed phrase is encrypted and stored locally on your device.' },
     { q: 'How do I recover my wallet?', a: 'Go to Settings > Security > Recovery Phrase to view your seed phrase. Write it down and store it safely. You can import it on any device.' },
     { q: 'What chains are supported?', a: 'Currently Solana, Ethereum, Polygon, and Base. More chains are coming soon.' },
     { q: 'How does the Community work?', a: 'Post updates, share images, like and comment. You can promote posts for visibility with various duration tiers.' },
@@ -891,7 +891,7 @@ export default function SettingsScreen() {
             </View>
             <View style={styles.assistantSection}>
               <Bot size={56} color={colors.primary} style={{ alignSelf: 'center' }} />
-              <Text style={styles.assistantTitle}>DNY Assistant</Text>
+              <Text style={styles.assistantTitle}>Dawen Assistant</Text>
               <Text style={styles.assistantDesc}>
                 Your AI-powered crypto companion. Get help navigating the app, understanding market trends, and managing your portfolio.
               </Text>

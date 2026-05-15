@@ -270,7 +270,7 @@ export default function CreateWallet() {
           <View style={styles.alertBox}>
             <AlertTriangle size={20} color={colors.warning} />
             <Text style={styles.alertText}>
-              No one from DNY will ever ask you for this phrase
+              No one from Dawen will ever ask you for this phrase
             </Text>
           </View>
         </ScrollView>
