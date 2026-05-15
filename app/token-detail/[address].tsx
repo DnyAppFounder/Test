@@ -10,6 +10,8 @@ import {
   RefreshControl,
   Platform,
   useWindowDimensions,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -28,7 +30,11 @@ import {
   Share2,
   TrendingUp,
   TrendingDown,
+  Bell,
+  X,
+  Trash2,
 } from 'lucide-react-native';
+import { AlertsService, PriceAlert } from '@/services/alertsService';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
@@ -84,6 +90,14 @@ export default function TokenDetailScreen() {
   const [totalSupply, setTotalSupply] = useState<number>(0);
   const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
 
+  // Price alerts
+  const [showAlertsModal, setShowAlertsModal] = useState(false);
+  const [alertsList, setAlertsList] = useState<PriceAlert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [alertType, setAlertType] = useState<'above' | 'below'>('above');
+  const [alertPrice, setAlertPrice] = useState('');
+  const [alertSaving, setAlertSaving] = useState(false);
+
   // Live token state from shared store (10s poll + Supabase realtime candles)
   const liveData = useLiveToken(address ?? null);
 
@@ -127,6 +141,13 @@ export default function TokenDetailScreen() {
       loadHolders();
     }
   }, [activeBottomTab]);
+
+  useEffect(() => {
+    if (!activeAddress || !address) return;
+    AlertsService.getTokenAlerts(activeAddress, address)
+      .then(list => setAlertsList(list))
+      .catch(() => {});
+  }, [activeAddress, address]);
 
   const loadTokenDetail = async (addr: string, isRefresh = false) => {
     if (!isRefresh) setLoading(true);
@@ -233,6 +254,44 @@ export default function TokenDetailScreen() {
     if (success) {
       setIsWatchlisted(!wasWatchlisted);
     }
+  };
+
+  const openAlerts = async () => {
+    setShowAlertsModal(true);
+    if (!activeAddress) return;
+    setAlertsLoading(true);
+    try {
+      const list = await AlertsService.getTokenAlerts(activeAddress, address ?? '');
+      setAlertsList(list);
+    } catch {}
+    finally { setAlertsLoading(false); }
+  };
+
+  const saveAlert = async () => {
+    if (!activeAddress || !token || !alertPrice.trim()) return;
+    const price = parseFloat(alertPrice.trim());
+    if (isNaN(price) || price <= 0) return;
+    setAlertSaving(true);
+    try {
+      const created = await AlertsService.createAlert(
+        activeAddress,
+        token.address,
+        token.symbol ?? '',
+        token.name ?? '',
+        alertType,
+        price
+      );
+      if (created) {
+        setAlertsList(prev => [created, ...prev]);
+        setAlertPrice('');
+      }
+    } catch {}
+    finally { setAlertSaving(false); }
+  };
+
+  const deleteAlert = async (alertId: string) => {
+    const ok = await AlertsService.deleteAlert(alertId);
+    if (ok) setAlertsList(prev => prev.filter(a => a.id !== alertId));
   };
 
   const loadHolders = async () => {
@@ -371,6 +430,11 @@ export default function TokenDetailScreen() {
                 fill={isWatchlisted ? '#F59E0B' : 'transparent'}
                 strokeWidth={2}
               />
+            </TouchableOpacity>
+          )}
+          {activeAddress && (
+            <TouchableOpacity style={styles.iconBtn} onPress={openAlerts} activeOpacity={0.7}>
+              <Bell size={16} color={alertsList.length > 0 ? '#10B981' : colors.textMuted} strokeWidth={2} />
             </TouchableOpacity>
           )}
         </View>
@@ -630,6 +694,87 @@ export default function TokenDetailScreen() {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+
+      {/* Price Alerts Modal */}
+      <Modal visible={showAlertsModal} animationType="slide" transparent onRequestClose={() => setShowAlertsModal(false)}>
+        <View style={alertStyles.overlay}>
+          <View style={alertStyles.sheet}>
+            <View style={alertStyles.handle} />
+            <View style={alertStyles.header}>
+              <Bell size={18} color="#10B981" strokeWidth={2} />
+              <Text style={alertStyles.title}>Price Alerts</Text>
+              <TouchableOpacity onPress={() => setShowAlertsModal(false)} activeOpacity={0.7}>
+                <X size={20} color={colors.textPrimary} strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Create new alert */}
+            <View style={alertStyles.createSection}>
+              <Text style={alertStyles.sectionLabel}>Notify me when price is</Text>
+              <View style={alertStyles.typeRow}>
+                <TouchableOpacity
+                  style={[alertStyles.typeBtn, alertType === 'above' && alertStyles.typeBtnActive]}
+                  onPress={() => setAlertType('above')}
+                  activeOpacity={0.8}
+                >
+                  <TrendingUp size={14} color={alertType === 'above' ? '#10B981' : colors.textMuted} strokeWidth={2} />
+                  <Text style={[alertStyles.typeBtnText, alertType === 'above' && alertStyles.typeBtnTextActive]}>Above</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[alertStyles.typeBtn, alertType === 'below' && alertStyles.typeBtnActive]}
+                  onPress={() => setAlertType('below')}
+                  activeOpacity={0.8}
+                >
+                  <TrendingDown size={14} color={alertType === 'below' ? '#10B981' : colors.textMuted} strokeWidth={2} />
+                  <Text style={[alertStyles.typeBtnText, alertType === 'below' && alertStyles.typeBtnTextActive]}>Below</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={alertStyles.priceRow}>
+                <TextInput
+                  style={alertStyles.priceInput}
+                  placeholder={`e.g. ${fmtTokenPrice(token.price)}`}
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                  value={alertPrice}
+                  onChangeText={setAlertPrice}
+                />
+                <TouchableOpacity
+                  style={[alertStyles.saveBtn, (!alertPrice.trim() || alertSaving) && alertStyles.saveBtnDisabled]}
+                  onPress={saveAlert}
+                  disabled={!alertPrice.trim() || alertSaving}
+                  activeOpacity={0.8}
+                >
+                  {alertSaving
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={alertStyles.saveBtnText}>Set Alert</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Existing alerts */}
+            <Text style={alertStyles.sectionLabel}>Active Alerts</Text>
+            {alertsLoading ? (
+              <ActivityIndicator color="#10B981" style={{ marginVertical: 20 }} />
+            ) : alertsList.length === 0 ? (
+              <Text style={alertStyles.emptyText}>No alerts set for this token</Text>
+            ) : (
+              alertsList.map(alert => (
+                <View key={alert.id} style={alertStyles.alertRow}>
+                  <View style={alertStyles.alertInfo}>
+                    <View style={[alertStyles.alertDot, { backgroundColor: alert.alert_type === 'above' ? '#10B981' : '#EF4444' }]} />
+                    <Text style={alertStyles.alertText}>
+                      {alert.alert_type === 'above' ? 'Above' : 'Below'} ${fmtTokenPrice(alert.target_price)}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => deleteAlert(alert.id)} activeOpacity={0.7} style={alertStyles.deleteBtn}>
+                    <Trash2 size={14} color="#EF4444" strokeWidth={2} />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1136,4 +1281,30 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '500',
   },
+});
+
+const alertStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#12121A', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.xl, paddingBottom: 40, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.2)', alignSelf: 'center', marginBottom: spacing.lg },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xl },
+  title: { flex: 1, fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
+  createSection: { backgroundColor: '#1A1A28', borderRadius: 16, padding: spacing.lg, marginBottom: spacing.lg, gap: spacing.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  sectionLabel: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textSecondary, marginBottom: spacing.sm },
+  typeRow: { flexDirection: 'row', gap: spacing.sm },
+  typeBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 12, backgroundColor: '#0A0A0F', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  typeBtnActive: { borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.1)' },
+  typeBtnText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textMuted },
+  typeBtnTextActive: { color: '#10B981' },
+  priceRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  priceInput: { flex: 1, backgroundColor: '#0A0A0F', borderRadius: 12, paddingHorizontal: spacing.lg, paddingVertical: 10, fontSize: fontSize.md, color: colors.textPrimary, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  saveBtn: { backgroundColor: '#10B981', borderRadius: 12, paddingHorizontal: spacing.lg, paddingVertical: 11, alignItems: 'center', justifyContent: 'center' },
+  saveBtnDisabled: { opacity: 0.45 },
+  saveBtnText: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
+  alertRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  alertInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  alertDot: { width: 8, height: 8, borderRadius: 4 },
+  alertText: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
+  deleteBtn: { padding: 6 },
+  emptyText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center', paddingVertical: 20 },
 });

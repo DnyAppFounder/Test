@@ -1041,7 +1041,6 @@ export default function CreatePostScreen() {
       <Modal
         visible={showGifPicker}
         animationType="slide"
-        presentationStyle="pageSheet"
         onRequestClose={() => setShowGifPicker(false)}
       >
         <View style={styles.modalContainer}>
@@ -1087,11 +1086,13 @@ export default function CreatePostScreen() {
                   </TouchableOpacity>
                 )}
                 ListEmptyComponent={
-                  gifQuery.length > 0 && !gifSearching ? (
+                  gifSearching ? (
+                    <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
+                  ) : gifQuery.length > 0 ? (
                     <Text style={styles.emptySearch}>No GIFs found</Text>
-                  ) : gifQuery.length === 0 ? (
+                  ) : (
                     <Text style={[styles.emptySearch, { marginTop: 60 }]}>Search for GIFs above</Text>
-                  ) : null
+                  )
                 }
               />
             </>

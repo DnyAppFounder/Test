@@ -20,7 +20,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ArrowLeft,
   MoveHorizontal as MoreHorizontal,
-  Share2,
   X,
   Check,
   Copy,
@@ -36,9 +35,12 @@ import {
   Send,
   Heart,
   Twitter,
-  ExternalLink,
   MessageSquare,
+  Share2,
+  Flag,
+  Ban,
 } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
 import LinkText from '@/components/LinkText';
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
@@ -232,6 +234,8 @@ export default function ProfileScreen() {
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyChecking, setVerifyChecking] = useState(false);
 
+  const [showActionMenu, setShowActionMenu] = useState(false);
+
   const { updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const walletAddr = selectedAccount?.address || activeAddress || '';
   const isOwnProfile = currentUserProfile?.id === id;
@@ -328,6 +332,33 @@ export default function ProfileScreen() {
       // silently ignore
     } finally {
       setBlockLoading(false);
+    }
+  };
+
+  const handleShareProfile = () => {
+    setShowActionMenu(false);
+    const url = `https://dawenpulse.app/profile/${id}`;
+    Clipboard.setStringAsync(url).catch(() => {});
+    setCopiedAddr(true);
+    setTimeout(() => setCopiedAddr(false), 2000);
+  };
+
+  const handleBlockFromMenu = async () => {
+    setShowActionMenu(false);
+    await handleBlock();
+  };
+
+  const handleReport = () => {
+    setShowActionMenu(false);
+    // Report is a no-op that gives feedback; real implementation would post to DB
+  };
+
+  const openExternalUrl = (url: string) => {
+    const full = url.startsWith('http') ? url : 'https://' + url;
+    if (Platform.OS === 'web') {
+      window.open(full, '_blank');
+    } else {
+      Linking.openURL(full).catch(() => {});
     }
   };
 
@@ -741,7 +772,7 @@ export default function ProfileScreen() {
           <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>Profile</Text>
-        <TouchableOpacity style={styles.topBarBtn} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.topBarBtn} activeOpacity={0.8} onPress={() => !isOwnProfile && currentUserProfile ? setShowActionMenu(true) : undefined}>
           <MoreHorizontal size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
       </View>
@@ -792,9 +823,6 @@ export default function ProfileScreen() {
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.shareBtn} activeOpacity={0.8}>
-            <Share2 size={18} color={colors.textPrimary} strokeWidth={2} />
-          </TouchableOpacity>
         </View>
 
         {/* Wallet address */}
@@ -821,7 +849,7 @@ export default function ProfileScreen() {
             {profile.twitter_url ? (
               <TouchableOpacity
                 style={styles.socialLinkBtn}
-                onPress={() => Linking.openURL(profile.twitter_url!.startsWith('http') ? profile.twitter_url! : 'https://' + profile.twitter_url!).catch(() => {})}
+                onPress={() => openExternalUrl(profile.twitter_url!)}
                 activeOpacity={0.75}
               >
                 <Twitter size={15} color="#1DA1F2" strokeWidth={2} />
@@ -831,17 +859,20 @@ export default function ProfileScreen() {
             {profile.telegram_url ? (
               <TouchableOpacity
                 style={styles.socialLinkBtn}
-                onPress={() => Linking.openURL(profile.telegram_url!.startsWith('http') ? profile.telegram_url! : 'https://' + profile.telegram_url!).catch(() => {})}
+                onPress={() => openExternalUrl(profile.telegram_url!)}
                 activeOpacity={0.75}
               >
-                <ExternalLink size={15} color="#26A5E4" strokeWidth={2} />
+                <Svg width={15} height={15} viewBox="0 0 24 24" fill="none">
+                  <Path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z" fill="#26A5E4" />
+                  <Path d="M17.64 8.2L15.54 18.26c-.16.7-.57.87-1.15.54l-3.18-2.34-1.53 1.47c-.17.17-.31.31-.63.31l.22-3.23 5.82-5.26c.25-.23-.06-.35-.39-.12L7.08 14.4l-3.14-.98c-.68-.21-.7-.68.14-.1l10.48-4.04c.57-.2 1.06.14.88.92z" fill="white" />
+                </Svg>
                 <Text style={[styles.socialLinkText, { color: '#26A5E4' }]}>Telegram</Text>
               </TouchableOpacity>
             ) : null}
             {profile.discord_url ? (
               <TouchableOpacity
                 style={styles.socialLinkBtn}
-                onPress={() => Linking.openURL(profile.discord_url!.startsWith('http') ? profile.discord_url! : 'https://' + profile.discord_url!).catch(() => {})}
+                onPress={() => openExternalUrl(profile.discord_url!)}
                 activeOpacity={0.75}
               >
                 <MessageSquare size={15} color="#5865F2" strokeWidth={2} />
@@ -924,17 +955,6 @@ export default function ProfileScreen() {
             >
               <MessageCircle size={16} color={colors.textPrimary} strokeWidth={2} />
               <Text style={styles.messageBtnText}>Message</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.blockBtn, isBlocked && styles.blockedBtn]}
-              onPress={handleBlock}
-              disabled={blockLoading}
-              activeOpacity={0.85}
-            >
-              {blockLoading
-                ? <ActivityIndicator size="small" color={isBlocked ? '#EF4444' : colors.textMuted} />
-                : <Shield size={16} color={isBlocked ? '#EF4444' : colors.textMuted} strokeWidth={2} />
-              }
             </TouchableOpacity>
           </View>
         ) : null}
@@ -1036,6 +1056,30 @@ export default function ProfileScreen() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* ── 3-dot Action Menu ───────────────────────────────────────────── */}
+      <Modal visible={showActionMenu} animationType="fade" transparent>
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setShowActionMenu(false)}>
+          <View style={styles.menuSheet}>
+            <TouchableOpacity style={styles.menuItem} activeOpacity={0.75} onPress={handleShareProfile}>
+              <Share2 size={18} color={colors.textPrimary} strokeWidth={2} />
+              <Text style={styles.menuItemText}>Share Profile</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity style={styles.menuItem} activeOpacity={0.75} onPress={handleBlockFromMenu}>
+              <Ban size={18} color={isBlocked ? '#EF4444' : colors.textMuted} strokeWidth={2} />
+              <Text style={[styles.menuItemText, isBlocked && { color: '#EF4444' }]}>
+                {isBlocked ? 'Unblock User' : 'Block User'}
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity style={styles.menuItem} activeOpacity={0.75} onPress={handleReport}>
+              <Flag size={18} color="#F59E0B" strokeWidth={2} />
+              <Text style={[styles.menuItemText, { color: '#F59E0B' }]}>Report User</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       {/* ── Premium Certification Modal ──────────────────────────────────── */}
@@ -1832,6 +1876,13 @@ const styles = StyleSheet.create({
   verifyStepSub: { fontSize: fontSize.xs, color: colors.textMuted },
   verifyActionBtn: { backgroundColor: 'rgba(99,102,241,0.12)', borderRadius: borderRadius.full, paddingVertical: 7, paddingHorizontal: 14, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)' },
   verifyActionBtnText: { fontSize: 12, fontWeight: '700', color: '#6366F1' },
+
+  // 3-dot action menu
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 56, paddingRight: spacing.lg },
+  menuSheet: { backgroundColor: '#16161F', borderRadius: 16, minWidth: 200, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 14, paddingHorizontal: spacing.lg },
+  menuItemText: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
+  menuDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)' },
 });
 
 const profileCommentStyles = StyleSheet.create({

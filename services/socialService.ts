@@ -1448,4 +1448,74 @@ export class SocialService {
       return false;
     }
   }
+
+  static async getGroupMessages(groupId: string): Promise<any[]> {
+    try {
+      const { data } = await supabase
+        .from('group_messages')
+        .select('*')
+        .eq('group_id', groupId)
+        .order('created_at', { ascending: true });
+      if (!data || data.length === 0) return [];
+      const senderIds = [...new Set(data.map((m: any) => m.sender_id))];
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .in('id', senderIds);
+      const profileMap = new Map((profiles || []).map((p: UserProfile) => [p.id, p]));
+      return data.map((m: any) => ({ ...m, sender: profileMap.get(m.sender_id) }));
+    } catch {
+      return [];
+    }
+  }
+
+  static async getGroupDetails(groupId: string): Promise<{ id: string; name: string; avatar_url: string | null; members: UserProfile[] } | null> {
+    try {
+      const { data: group } = await supabase
+        .from('group_conversations')
+        .select('*')
+        .eq('id', groupId)
+        .maybeSingle();
+      if (!group) return null;
+      const { data: memberRows } = await supabase
+        .from('group_members')
+        .select('user_id')
+        .eq('group_id', groupId);
+      const memberIds = (memberRows || []).map((r: any) => r.user_id);
+      let members: UserProfile[] = [];
+      if (memberIds.length > 0) {
+        const { data: profiles } = await supabase.from('user_profiles').select('*').in('id', memberIds);
+        members = profiles || [];
+      }
+      return { id: group.id, name: group.name, avatar_url: group.avatar_url, members };
+    } catch {
+      return null;
+    }
+  }
+
+  static async getGroupConversationsWithLastMsg(userId: string): Promise<any[]> {
+    try {
+      const { data: memberRows } = await supabase
+        .from('group_members')
+        .select('group_id, group_conversations(id, name, avatar_url, created_at)')
+        .eq('user_id', userId);
+      if (!memberRows || memberRows.length === 0) return [];
+      const groups = (memberRows as any[]).map((r: any) => r.group_conversations).filter(Boolean);
+      const results = await Promise.all(
+        groups.map(async (g: any) => {
+          const { data: lastMsg } = await supabase
+            .from('group_messages')
+            .select('content, created_at, sender_id')
+            .eq('group_id', g.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          return { ...g, lastMessage: lastMsg, type: 'group' as const };
+        })
+      );
+      return results;
+    } catch {
+      return [];
+    }
+  }
 }

@@ -89,6 +89,9 @@ export default function CommunityScreen() {
   const [groupCreating, setGroupCreating] = useState(false);
   const [groupCreateError, setGroupCreateError] = useState('');
 
+  // Group conversations (for inbox)
+  const [groupConversations, setGroupConversations] = useState<any[]>([]);
+
   // Profile tab posts
   const [profilePosts, setProfilePosts] = useState<Post[]>([]);
   const [profilePostsLoading, setProfilePostsLoading] = useState(false);
@@ -204,8 +207,12 @@ export default function CommunityScreen() {
     if (!profile?.id) return;
     setConvsLoading(true);
     try {
-      const data = await SocialService.getConversations(profile.id);
-      setConversations(data);
+      const [dms, groups] = await Promise.all([
+        SocialService.getConversations(profile.id),
+        SocialService.getGroupConversationsWithLastMsg(profile.id),
+      ]);
+      setConversations(dms);
+      setGroupConversations(groups);
     } catch (e) {
       console.warn('[Community] loadConversations error:', e);
     } finally {
@@ -407,6 +414,8 @@ export default function CommunityScreen() {
       setGroupSelectedMembers([]);
       setGroupMemberSearch('');
       setGroupMemberResults([]);
+      await loadConversations();
+      router.push(`/chat/group/${groupId}` as any);
     } catch (e: any) {
       setGroupCreateError(e?.message || 'Failed to create group. Please try again.');
     } finally {
@@ -1022,6 +1031,11 @@ export default function CommunityScreen() {
     return name.toLowerCase().includes(q) || msg.toLowerCase().includes(q);
   });
 
+  const filteredGroupConvos = groupConversations.filter(g => {
+    const q = msgSearch.toLowerCase();
+    return (g.name || '').toLowerCase().includes(q);
+  });
+
   const renderMessagesTab = () => (
     <ScrollView style={styles.msgContainer} contentContainerStyle={styles.msgContent} showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
@@ -1040,7 +1054,7 @@ export default function CommunityScreen() {
 
       {convsLoading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
-      ) : filteredConvos.length === 0 ? (
+      ) : filteredConvos.length === 0 && filteredGroupConvos.length === 0 ? (
         <View style={styles.emptyState}>
           <View style={styles.emptyIconWrap}>
             <MessageSquare size={44} color={colors.primary} strokeWidth={1.5} />
@@ -1051,6 +1065,34 @@ export default function CommunityScreen() {
       ) : (
         /* Conversation list */
         <View style={styles.msgList}>
+          {/* Group conversations */}
+          {filteredGroupConvos.map((group, idx) => (
+            <TouchableOpacity
+              key={`group-${group.id}`}
+              style={[styles.convRow, (idx < filteredGroupConvos.length - 1 || filteredConvos.length > 0) && styles.convRowBorder]}
+              activeOpacity={0.75}
+              onPress={() => router.push(`/chat/group/${group.id}` as any)}
+            >
+              <View style={[styles.convAvatarWrap, { backgroundColor: 'rgba(139,92,246,0.15)', borderRadius: 24, justifyContent: 'center', alignItems: 'center' }]}>
+                <Users size={22} color={colors.primary} strokeWidth={2} />
+              </View>
+              <View style={styles.convBody}>
+                <View style={styles.convNameRow}>
+                  <Text style={[styles.convUsername, { color: colors.primary }]}>{group.name}</Text>
+                  <View style={{ backgroundColor: 'rgba(139,92,246,0.2)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: colors.primary }}>GROUP</Text>
+                  </View>
+                </View>
+                <Text style={styles.convLastMsg} numberOfLines={1}>
+                  {group.lastMessage ? group.lastMessage.content : 'No messages yet'}
+                </Text>
+              </View>
+              <View style={styles.convMeta}>
+                {group.lastMessage && <Text style={styles.convTime}>{timeAgo(group.lastMessage.created_at)}</Text>}
+              </View>
+            </TouchableOpacity>
+          ))}
+
           {filteredConvos.map((conv, idx) => {
             const otherUser = conv.otherUser;
             const displayName = otherUser.username || `${otherUser.wallet_address?.slice(0, 6)}...`;
