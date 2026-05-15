@@ -647,22 +647,20 @@ export default function DawenCityPage() {
   return (
     <View style={pageStyles.container}>
       {!gameFullscreen && (
-        <View style={pageStyles.header}>
-          <ImageBackground
-            source={require('../../tour.jpeg')}
+        <ImageBackground
+          source={require('../../tour.jpeg')}
+          style={pageStyles.header}
+          resizeMode="cover"
+        >
+          <LinearGradient
+            colors={['rgba(6,1,20,0.22)', 'rgba(10,2,30,0.70)']}
             style={StyleSheet.absoluteFill}
-            resizeMode="cover"
-          >
-            <LinearGradient
-              colors={['rgba(6,1,20,0.08)', 'rgba(10,2,30,0.58)']}
-              style={StyleSheet.absoluteFill}
-            />
-          </ImageBackground>
+          />
           <View style={pageStyles.headerInner}>
             <Text style={pageStyles.headerTitle}>Dawen City</Text>
             <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
           </View>
-        </View>
+        </ImageBackground>
       )}
 
       {!gameFullscreen && (

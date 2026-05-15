@@ -5,10 +5,8 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
   Image,
-  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Search, Wallet, TrendingUp, TrendingDown, Star, Trash2, ChartBar as BarChart2, Check, X, Plus, CreditCard as Edit2 } from 'lucide-react-native';
@@ -127,7 +125,7 @@ export function PortfolioTracker({
   const worst = [...tokenAssets].filter(a => a.priceChange24h !== 0).sort((a, b) => a.priceChange24h - b.priceChange24h)[0];
 
   return (
-    <ScrollView style={s.root} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+    <View style={s.content}>
       {/* Search bar */}
       <View style={s.searchCard}>
         <Text style={s.searchLabel}>Track any Solana wallet</Text>
@@ -345,13 +343,12 @@ export function PortfolioTracker({
       )}
 
       <View style={{ height: 32 }} />
-    </ScrollView>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
-  content: { paddingHorizontal: spacing.xxl, paddingTop: spacing.lg, gap: spacing.lg },
+  content: { paddingHorizontal: spacing.xxl, paddingTop: spacing.sm, paddingBottom: spacing.lg, gap: spacing.lg },
   searchCard: {
     backgroundColor: colors.surface,
     borderRadius: borderRadius.xl,

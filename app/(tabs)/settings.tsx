@@ -498,22 +498,20 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <ImageBackground
-          source={require('../../tour.jpeg')}
+      <ImageBackground
+        source={require('../../tour.jpeg')}
+        style={styles.header}
+        resizeMode="cover"
+      >
+        <LinearGradient
+          colors={['rgba(6,1,20,0.25)', 'rgba(10,2,30,0.78)']}
           style={StyleSheet.absoluteFill}
-          resizeMode="cover"
-        >
-          <LinearGradient
-            colors={['rgba(6,1,20,0.12)', 'rgba(10,2,30,0.72)']}
-            style={StyleSheet.absoluteFill}
-          />
-        </ImageBackground>
+        />
         <View style={styles.headerContent}>
           <Text style={styles.headerTitle}>{t.settings.title}</Text>
           <Text style={styles.headerSub}>Dawen City</Text>
         </View>
-      </View>
+      </ImageBackground>
 
       <ScrollView
         style={styles.content}
