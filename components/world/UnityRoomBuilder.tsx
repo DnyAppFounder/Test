@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Save, AlertCircle } from 'lucide-react-native';
+import { ArrowLeft, Save, CircleAlert as AlertCircle } from 'lucide-react-native';
 import { type RoomLayout } from '@/services/worldService';
 
 interface Props {
