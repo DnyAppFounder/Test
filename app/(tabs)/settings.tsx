@@ -501,10 +501,12 @@ export default function SettingsScreen() {
       <ImageBackground
         source={require('../../tour.jpeg')}
         style={styles.header}
+        imageStyle={styles.headerImage}
         resizeMode="cover"
       >
+        <View style={styles.headerTint} />
         <LinearGradient
-          colors={['rgba(6,1,20,0.25)', 'rgba(10,2,30,0.78)']}
+          colors={['rgba(30,5,60,0.55)', 'rgba(10,2,30,0.88)']}
           style={StyleSheet.absoluteFill}
         />
         <View style={styles.headerContent}>
@@ -1311,6 +1313,14 @@ const styles = StyleSheet.create({
     height: 120,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: '#0D0520',
+  },
+  headerImage: {
+    opacity: 0.55,
+  },
+  headerTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(88,20,160,0.50)',
   },
   headerContent: {
     position: 'absolute',

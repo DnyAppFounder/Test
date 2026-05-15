@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowDownLeft, ArrowUpRight, RefreshCw, ExternalLink, CircleAlert as AlertCircle, Clock, ChevronDown } from 'lucide-react-native';
-import { PublicKey } from '@solana/web3.js';
 import { SolanaConnectionService } from '@/services/solana/connectionService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 
@@ -60,17 +59,22 @@ export function WalletActivity({ walletAddress, limit = 50 }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const connection = SolanaConnectionService.getInstance().getConnection();
-      const pubkey = new PublicKey(walletAddress);
-      const sigs = await connection.getSignaturesForAddress(pubkey, { limit });
-      setTxns(sigs.map(s => ({
+      const svc = SolanaConnectionService.getInstance();
+      const result = await svc.rpcCall('getSignaturesForAddress', [
+        walletAddress,
+        { limit, commitment: 'confirmed' },
+      ]);
+      const sigs: any[] = Array.isArray(result) ? result : [];
+      setTxns(sigs.map((s: any) => ({
         signature: s.signature,
         blockTime: s.blockTime ?? null,
-        err: s.err,
+        err: s.err ?? null,
         memo: s.memo ?? null,
       })));
     } catch (e: any) {
-      setError(e?.message || 'Activity unavailable. Check connection.');
+      const msg = e?.message || String(e) || 'Unknown error';
+      console.error('[WalletActivity] Failed to load activity:', msg);
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -91,7 +95,7 @@ export function WalletActivity({ walletAddress, limit = 50 }: Props) {
     return (
       <View style={s.errorState}>
         <AlertCircle size={32} color={colors.error} strokeWidth={1.5} />
-        <Text style={s.errorTitle}>Activity unavailable</Text>
+        <Text style={s.errorTitle}>Could not load activity</Text>
         <Text style={s.errorSub}>{error}</Text>
         <TouchableOpacity style={s.retryBtn} onPress={load} activeOpacity={0.8}>
           <RefreshCw size={14} color={colors.primary} strokeWidth={2} />
@@ -105,8 +109,8 @@ export function WalletActivity({ walletAddress, limit = 50 }: Props) {
     return (
       <View style={s.emptyState}>
         <Clock size={36} color={colors.textMuted} strokeWidth={1.5} />
-        <Text style={s.emptyTitle}>No transactions found</Text>
-        <Text style={s.emptySub}>Recent activity will appear here.</Text>
+        <Text style={s.emptyTitle}>No activity yet</Text>
+        <Text style={s.emptySub}>Your recent transactions will appear here.</Text>
       </View>
     );
   }

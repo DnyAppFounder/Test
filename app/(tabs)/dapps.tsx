@@ -650,10 +650,13 @@ export default function DawenCityPage() {
         <ImageBackground
           source={require('../../tour.jpeg')}
           style={pageStyles.header}
+          imageStyle={pageStyles.headerImage}
           resizeMode="cover"
         >
+          {/* Purple tint overlay */}
+          <View style={pageStyles.headerTint} />
           <LinearGradient
-            colors={['rgba(6,1,20,0.22)', 'rgba(10,2,30,0.70)']}
+            colors={['rgba(30,5,60,0.55)', 'rgba(10,2,30,0.88)']}
             style={StyleSheet.absoluteFill}
           />
           <View style={pageStyles.headerInner}>
@@ -695,6 +698,14 @@ const pageStyles = StyleSheet.create({
     height: 170,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: '#0D0520',
+  },
+  headerImage: {
+    opacity: 0.55,
+  },
+  headerTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(88,20,160,0.50)',
   },
   headerInner: {
     position: 'absolute',
