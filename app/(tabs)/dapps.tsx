@@ -657,8 +657,15 @@ export default function DawenCityPage() {
             style={StyleSheet.absoluteFill}
           />
           <View style={pageStyles.headerInner}>
-            <Text style={pageStyles.headerTitle}>Dawen City</Text>
-            <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
+            <View style={pageStyles.headerLogoRow}>
+              <View style={pageStyles.headerLogoBadge}>
+                <Text style={pageStyles.headerLogoText}>D</Text>
+              </View>
+              <View>
+                <Text style={pageStyles.headerTitle}>Dawen City</Text>
+                <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
+              </View>
+            </View>
           </View>
         </ImageBackground>
       )}
@@ -699,11 +706,36 @@ const pageStyles = StyleSheet.create({
     paddingTop: 56,
     justifyContent: 'flex-end',
   },
+  headerLogoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerLogoBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowRadius: 12,
+    shadowOpacity: 0.7,
+    elevation: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  headerLogoText: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#fff',
+    fontFamily: 'monospace',
+  },
   headerTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '900',
     color: '#FFFFFF',
-    marginBottom: 4,
+    marginBottom: 2,
     letterSpacing: 0.2,
     textShadowColor: 'rgba(139,92,246,0.9)',
     textShadowOffset: { width: 0, height: 0 },
