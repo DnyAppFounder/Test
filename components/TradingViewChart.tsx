@@ -242,7 +242,7 @@ export function TradingViewChart({
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
-  const [valueMode, setValueMode] = useState<ValueMode>('mcap');
+  const [valueMode, setValueMode] = useState<ValueMode>('price');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [livePrice, setLivePrice] = useState<number | null>(null);
@@ -486,6 +486,26 @@ export function TradingViewChart({
     hasAutoScrolledRef.current = false;
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
+
+  // Clear crosshair when chart type changes so stale crosshair state doesn't bleed across modes
+  useEffect(() => { setCrosshair(null); }, [mode]);
+
+  // Debug log on significant chart state changes (not fired every clock tick)
+  useEffect(() => {
+    if (candles.length === 0) return;
+    const vis = candles.filter(c => {
+      const bMs = BUCKET_MS[timeframe] ?? 3_600_000;
+      const vB  = VISIBLE_BUCKETS[timeframe] ?? 48;
+      const rT  = Date.now();
+      const lT  = rT - vB * bMs;
+      return c.timestamp >= lT && c.timestamp <= rT;
+    });
+    console.log(
+      `[TradingViewChart] mint=${tokenMint?.slice(0, 8)} tf=${timeframe} mode=${mode}` +
+      ` candles=${candles.length} visible≈${vis.length}` +
+      ` liveAt=${panOffsetCandles === 0}`
+    );
+  }, [tokenMint, timeframe, mode, candles.length]);
 
   // Connect WebSocket once we have the resolved pair address
   useEffect(() => {
@@ -756,17 +776,17 @@ export function TradingViewChart({
 
         if (isPanScrollRef.current) {
           const pw = plotWRef.current;
-          const n  = displayCandlesRef.current.length || 1;
-          const candlePx = pw / n;
+          // Use stable bucket pixel width — independent of how many carry-forward
+          // candles are in the current window, so panning speed is consistent.
+          const visibleBucketCount = Math.max(1, visibleMsRef.current / (bucketMsRef.current || 1));
+          const candlePx = pw / visibleBucketCount;
           // drag right (dx > 0) = scroll back in time = increase offset
           // drag left  (dx < 0) = scroll forward in time = decrease offset
           const deltaCandles = Math.round(gestureState.dx / candlePx);
+          const maxBack = Math.max(0, candlesRef.current.length + 20);
           const newOffset = Math.max(
             0,
-            Math.min(
-              Math.max(0, candlesRef.current.length - 1),
-              panStartOffsetRef.current + deltaCandles
-            )
+            Math.min(maxBack, panStartOffsetRef.current + deltaCandles)
           );
           panOffsetRef.current = newOffset;
           setPanOffsetCandles(newOffset);
@@ -1037,12 +1057,44 @@ export function TradingViewChart({
     );
   }
 
+  // Guard: if all candles fall outside the current visible window (brief race
+  // after auto-scroll fires, or user panned past all data), render a safe fallback.
+  if (n === 0) {
+    return (
+      <View style={styles.container}>
+        {header}
+        <View style={[styles.unavailableWrap, { height: CHART_H }]}>
+          <Text style={styles.unavailableText}>
+            {panOffsetCandles > 0 ? 'No data in this range' : 'No chart data in visible range'}
+          </Text>
+          {panOffsetCandles > 0 && (
+            <TouchableOpacity
+              style={[styles.returnLiveBtn, { marginTop: 10 }]}
+              onPress={() => { panOffsetRef.current = 0; setPanOffsetCandles(0); setCrosshair(null); }}
+            >
+              <Text style={styles.returnLiveText}>Return to Live</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  }
+
   // ── build paths ───────────────────────────────────────────────────────────
+  // Line path connects all candle close values in timestamp order.
+  // Carry-forward (volume=0) candles keep the line connected at last known price.
   const linePts = displayCandles
     .map((c, i) => `${i === 0 ? 'M' : 'L'}${xFn(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
     .join(' ');
-  const bottomY = (PAD.top + plotH).toFixed(1);
-  const areaPath = `${linePts} L${xFn(n-1).toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
+  const bottomY     = (PAD.top + plotH).toFixed(1);
+  const plotRightX  = PAD.left + plotW; // right edge of chart area
+  const lastCandleX = xFn(n - 1);
+  const lastCandleY = yOf(displayCandles[n - 1].close);
+  // When not panned, extend area fill to the right edge of the plot so it
+  // aligns with the dashed continuation segment (no visible gap on right side).
+  const areaFillRightX = panOffsetCandles === 0 && plotRightX > lastCandleX + 2
+    ? plotRightX : lastCandleX;
+  const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
 
   // Grid
   const gridLevels = 5;
@@ -1261,21 +1313,28 @@ export function TradingViewChart({
 
           {/* ── BAR ───────────────────────────────────────────────────────── */}
           {mode === 'bar' && displayCandles.map((c, i) => {
+            // Skip carry-forward (volume=0) candles — they have identical OHLC values
+            // and would render as a single horizontal tick with no wick, looking wrong.
+            if (c.volume === 0) return null;
             const up   = c.close >= c.open;
             const col  = up ? '#8B5CF6' : '#EC4899';
             const cx   = xOf(i);
-            const bw   = Math.max(isMobile ? 4 : 2, (plotW / n) * 0.5);
+            // Use the same stable bucket pixel width as candleW for consistent tick size
+            const bw   = Math.max(isMobile ? 4 : 2, pixelPerBucket * 0.45);
             return (
-              <G key={`bar${i}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.7} />
-                <Line x1={cx - bw / 2} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={1.5} />
-                <Line x1={cx}          y1={yOf(c.close)} x2={cx + bw / 2} y2={yOf(c.close)} stroke={col} strokeWidth={1.5} />
+              <G key={`bar${c.timestamp}`}>
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.8} />
+                <Line x1={cx - bw / 2} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
+                <Line x1={cx}          y1={yOf(c.close)} x2={cx + bw / 2} y2={yOf(c.close)} stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
               </G>
             );
           })}
 
           {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
           {mode === 'candlestick' && displayCandles.map((c, i) => {
+            // Skip carry-forward (volume=0) flat candles — open=high=low=close
+            // means zero-body/wick, which renders as noise dots across the chart.
+            if (c.volume === 0) return null;
             const up       = c.close >= c.open;
             const col      = up ? '#8B5CF6' : '#EC4899';
             const bodyTop  = yOf(Math.max(c.open, c.close));
@@ -1283,7 +1342,7 @@ export function TradingViewChart({
             const bodyH    = Math.max(1.5, bodyBot - bodyTop);
             const cx       = xOf(i);
             return (
-              <G key={`cs${i}`}>
+              <G key={`cs${c.timestamp}`}>
                 <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.8} />
                 <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
                   fill={col} opacity={0.9} rx={1} />
@@ -1332,12 +1391,14 @@ export function TradingViewChart({
 
           {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
           {showVolume && displayCandles.map((c, i) => {
-            const h     = volBarH(c.volume);
-            const vx    = xOf(i);
-            const isUp  = c.close >= c.open;
+            // Skip carry-forward candles — no real volume means no bar
+            if (c.volume === 0) return null;
+            const h      = volBarH(c.volume);
+            const vx     = xOf(i);
+            const isUp   = c.close >= c.open;
             const isLast = i === n - 1;
             return (
-              <Rect key={`v${i}`}
+              <Rect key={`v${c.timestamp}`}
                 x={vx - barW / 2}
                 y={CHART_H + (VOL_H - h - 2)}
                 width={Math.max(barW, 1.5)}
