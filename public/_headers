@@ -10,6 +10,10 @@
   Content-Encoding: br
   Content-Type: application/octet-stream
 
+/room-builder/Builds.datacop.br
+  Content-Encoding: br
+  Content-Type: application/octet-stream
+
 /room-builder/Builds.wasm
   Content-Type: application/wasm
 
