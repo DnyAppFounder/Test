@@ -818,11 +818,24 @@ export function TradingViewChart({
           const candlePx = pw / visibleBucketCount;
           // drag right (dx > 0) = scroll back in time = increase offset
           const deltaCandles = Math.round(gestureState.dx / candlePx);
-          // Clamp: forward limit = live (0), backward limit = 1 window past oldest candle.
-          const oldestTs  = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
-          const msToOldest = Math.max(0, Date.now() - oldestTs);
-          const maxBack   = Math.floor(msToOldest / (bucketMsRef.current || 1)) + Math.floor(visibleMsRef.current / (bucketMsRef.current || 1));
-          const newOffset = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
+          // Clamp: forward limit = live (0), backward limit = oldest candle 2 buckets
+          // from the LEFT edge of the visible window.
+          //
+          // Derivation:
+          //   rightTime = now - offset*bucketMs
+          //   leftTime  = rightTime - visibleMs
+          //   We want: oldestTs ≈ leftTime + 2*bucketMs
+          //   → offset ≈ (now - oldestTs - visibleMs + 2*bucketMs) / bucketMs
+          //            = msToOldest/bucketMs - visibleBuckets + 2
+          //
+          // Adding visibleBuckets (the previous, wrong formula) pushed the window
+          // an entire extra visible range past the oldest candle into empty space.
+          const oldestTs       = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
+          const msToOldest     = Math.max(0, Date.now() - oldestTs);
+          const bMs            = bucketMsRef.current || 1;
+          const visibleBuckets = Math.max(1, Math.round(visibleMsRef.current / bMs));
+          const maxBack        = Math.max(0, Math.floor(msToOldest / bMs) - visibleBuckets + 2);
+          const newOffset      = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
           panOffsetRef.current = newOffset;
           setPanOffsetCandles(newOffset);
         }
@@ -1195,6 +1208,14 @@ export function TradingViewChart({
   const contY      = lastY;
   const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
+  // "Start of available history" boundary indicator
+  const historyOldestTs   = candles.length > 0 ? candles[0].timestamp : Date.now();
+  const historyMsToOldest = Math.max(0, Date.now() - historyOldestTs);
+  const historyMaxPanBack = candles.length > 0
+    ? Math.max(0, Math.floor(historyMsToOldest / bucketMs) - visibleBuckets + 2)
+    : 0;
+  const atHistoryStart    = historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 1;
+
   // Crosshair display values
   const chPrice = crosshair ? crosshair.price : null;
   const chPct   = crosshair ? crosshair.pct   : null;
@@ -1490,6 +1511,18 @@ export function TradingViewChart({
               {fmtTime(ts, timeframe)}
             </SvgText>
           ))}
+
+          {/* ── Start of available history label ─────────────────────────── */}
+          {atHistoryStart && (
+            <SvgText
+              x={PAD.left + 6}
+              y={CHART_H - 8}
+              fontSize={9}
+              fill="rgba(255,255,255,0.25)"
+              textAnchor="start">
+              {'← Start of available history'}
+            </SvgText>
+          )}
 
           {/* ── Crosshair lines ───────────────────────────────────────────── */}
           {crosshair && (
