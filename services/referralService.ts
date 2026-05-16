@@ -45,6 +45,10 @@ export interface UserReward {
 // Keep legacy alias so rewards.tsx can import ReferralReward
 export type ReferralReward = UserReward;
 
+export type ApplyResult =
+  | { success: true;  reason: 'success' }
+  | { success: false; reason: 'already_applied' | 'invalid_code' | 'self_referral' | 'error' };
+
 export function buildReferralLink(code: string): string {
   return `${APP_BASE_URL}/?ref=${code}`;
 }
@@ -79,7 +83,7 @@ export class ReferralService {
 
       if (existing) return existing;
 
-      // Generate new DAWEN- prefixed code via updated RPC function
+      // Generate new secure DAWEN- prefixed code via CSPRNG-backed DB function
       const { data: codeStr } = await supabase.rpc('generate_referral_code', {
         p_user_id: profile.id,
       });
@@ -103,48 +107,64 @@ export class ReferralService {
   static async applyReferralCode(
     referredWalletAddress: string,
     referralCode: string,
-  ): Promise<boolean> {
+  ): Promise<ApplyResult> {
+    const normalized = referralCode.trim().toUpperCase();
+    console.log('[ReferralService] applyReferralCode submitted:', normalized);
+
     try {
       const referredProfile = await SocialService.getOrCreateProfile(referredWalletAddress);
-      if (!referredProfile) return false;
+      if (!referredProfile) {
+        console.error('[ReferralService] could not resolve referred profile');
+        return { success: false, reason: 'error' };
+      }
 
-      // Check user hasn't already used a referral code
+      // Check if this user already has a referrer
       const { data: existingReferral } = await supabase
         .from('referrals')
         .select('id')
         .eq('referred_id', referredProfile.id)
         .maybeSingle();
 
-      if (existingReferral) return false;
+      if (existingReferral) {
+        console.log('[ReferralService] referred user already has a referrer');
+        return { success: false, reason: 'already_applied' };
+      }
 
       // Look up the referral code
-      const normalizedCode = referralCode.trim().toUpperCase();
       const { data: codeData } = await supabase
         .from('referral_codes')
         .select('user_id')
-        .eq('code', normalizedCode)
+        .eq('code', normalized)
         .maybeSingle();
 
-      if (!codeData) return false;
+      if (!codeData) {
+        console.log('[ReferralService] referral code not found:', normalized);
+        return { success: false, reason: 'invalid_code' };
+      }
 
       // Prevent self-referral
-      if (codeData.user_id === referredProfile.id) return false;
+      if (codeData.user_id === referredProfile.id) {
+        console.log('[ReferralService] self-referral attempt blocked');
+        return { success: false, reason: 'self_referral' };
+      }
 
-      // Get referrer's wallet address
+      console.log('[ReferralService] referrer found, creating referral record');
+
+      // Get referrer wallet address for the reward record
       const { data: referrerProfile } = await supabase
         .from('user_profiles')
         .select('wallet_address')
         .eq('id', codeData.user_id)
         .maybeSingle();
 
-      // Create referral record (qualified immediately since user has wallet)
+      // Create referral record
       const now = new Date().toISOString();
       const { data: referralRow, error: referralErr } = await supabase
         .from('referrals')
         .insert({
           referrer_id: codeData.user_id,
           referred_id: referredProfile.id,
-          referral_code: normalizedCode,
+          referral_code: normalized,
           referred_wallet_address: referredWalletAddress,
           status: 'qualified',
           qualified_at: now,
@@ -152,36 +172,43 @@ export class ReferralService {
         .select()
         .single();
 
-      if (referralErr) throw referralErr;
+      if (referralErr) {
+        console.error('[ReferralService] referral insert error:', referralErr);
+        // If unique constraint fires, the user already has a referral
+        if (referralErr.code === '23505') {
+          return { success: false, reason: 'already_applied' };
+        }
+        throw referralErr;
+      }
 
-      // Increment code usage
-      await supabase.rpc('increment_referral_code_uses', { p_code: normalizedCode }).maybeSingle().catch(() => {
-        // Fallback if RPC not available
-        supabase.from('referral_codes')
-          .select('uses')
-          .eq('code', normalizedCode)
-          .single()
-          .then(({ data }) => {
-            if (data) {
-              supabase.from('referral_codes')
-                .update({ uses: data.uses + 1 })
-                .eq('code', normalizedCode);
-            }
-          });
-      });
+      console.log('[ReferralService] referral record created:', referralRow?.id);
 
-      // Create reward records via DB function
-      await supabase.rpc('create_referral_rewards', {
+      // Increment code usage (server-side, no race condition)
+      await supabase
+        .rpc('increment_referral_code_uses', { p_code: normalized })
+        .maybeSingle()
+        .catch(() => {});
+
+      // Create reward records for both parties via SECURITY DEFINER DB function
+      const { error: rewardErr } = await supabase.rpc('create_referral_rewards', {
         p_referrer_user_id: codeData.user_id,
         p_referrer_wallet: referrerProfile?.wallet_address || '',
         p_referred_user_id: referredProfile.id,
         p_referred_wallet: referredWalletAddress,
       });
 
-      return true;
+      if (rewardErr) {
+        console.error('[ReferralService] create_referral_rewards error:', rewardErr);
+        // Referral row was saved — still a success for the user; rewards will be
+        // back-filled or can be manually triggered. Don't fail the whole apply.
+      } else {
+        console.log('[ReferralService] referral rewards created (referrer 300 DWC + referred 150 DWC)');
+      }
+
+      return { success: true, reason: 'success' };
     } catch (err) {
-      console.error('[ReferralService] applyReferralCode:', err);
-      return false;
+      console.error('[ReferralService] applyReferralCode unexpected error:', err);
+      return { success: false, reason: 'error' };
     }
   }
 
@@ -248,11 +275,20 @@ export class ReferralService {
     }
   }
 
+  // Resets rewards stuck in 'claiming' for >3 minutes with no tx signature.
+  // Call on app/page startup to recover from crashed edge-function attempts.
+  static async resetStaleClaimingRewards(): Promise<void> {
+    try {
+      await supabase.rpc('reset_stale_claiming_rewards').maybeSingle();
+    } catch (err) {
+      console.warn('[ReferralService] resetStaleClaimingRewards:', err);
+    }
+  }
+
   static async getReferralStats(walletAddress: string): Promise<{
     totalReferrals: number;
     totalEarned: number;
     unclaimedAmount: number;
-    // legacy fields for backward compat
     totalRewards: number;
     unclaimedRewards: number;
   }> {
@@ -265,9 +301,9 @@ export class ReferralService {
         supabase.from('user_rewards').select('reward_amount, status').eq('wallet_address', walletAddress),
       ]);
 
-      const totalReferrals = referrals?.length || 0;
-      const totalEarned = rewards?.filter(r => r.status === 'sent').reduce((s, r) => s + r.reward_amount, 0) || 0;
-      const unclaimedAmount = rewards?.filter(r => r.status === 'ready').reduce((s, r) => s + r.reward_amount, 0) || 0;
+      const totalReferrals   = referrals?.length || 0;
+      const totalEarned      = rewards?.filter(r => r.status === 'sent').reduce((s, r) => s + r.reward_amount, 0) || 0;
+      const unclaimedAmount  = rewards?.filter(r => r.status === 'ready').reduce((s, r) => s + r.reward_amount, 0) || 0;
 
       return { totalReferrals, totalEarned, unclaimedAmount, totalRewards: totalEarned, unclaimedRewards: unclaimedAmount };
     } catch (err) {
@@ -278,10 +314,12 @@ export class ReferralService {
 
   static async isEarlyRewardPoolExhausted(): Promise<boolean> {
     try {
+      // Count only confirmed (sent) early rewards toward the 100-slot limit
       const { count, error } = await supabase
         .from('user_rewards')
         .select('id', { count: 'exact', head: true })
-        .eq('reason', 'early_user_first_100');
+        .eq('reason', 'early_user_first_100')
+        .eq('status', 'sent');
       if (error) return false;
       return (count ?? 0) >= 100;
     } catch {

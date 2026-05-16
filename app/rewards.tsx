@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star } from 'lucide-react-native';
+import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import {
@@ -28,38 +28,28 @@ import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/
 export default function RewardsScreen() {
   const router = useRouter();
   const { activeAddress } = useWallet();
-  const [loading, setLoading] = useState(true);
-  const [referralCode, setReferralCode] = useState('');
-  const [referrals, setReferrals] = useState<Referral[]>([]);
-  const [rewards, setRewards] = useState<UserReward[]>([]);
-  const [stats, setStats] = useState({ totalReferrals: 0, totalEarned: 0, unclaimedAmount: 0 });
-  const [copied, setCopied] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
+  const [loading, setLoading]                     = useState(true);
+  const [referralCode, setReferralCode]           = useState('');
+  const [referrals, setReferrals]                 = useState<Referral[]>([]);
+  const [rewards, setRewards]                     = useState<UserReward[]>([]);
+  const [stats, setStats]                         = useState({ totalReferrals: 0, totalEarned: 0, unclaimedAmount: 0 });
+  const [copied, setCopied]                       = useState(false);
+  const [copiedLink, setCopiedLink]               = useState(false);
   const [earlyRewardExhausted, setEarlyRewardExhausted] = useState(false);
-  const [inputCode, setInputCode] = useState('');
-  const [applyingCode, setApplyingCode] = useState(false);
-  const [codeApplied, setCodeApplied] = useState(false);
-  const [applyError, setApplyError] = useState('');
-  const [claimingId, setClaimingId] = useState<string | null>(null);
-  const [claimMessage, setClaimMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [inputCode, setInputCode]                 = useState('');
+  const [applyingCode, setApplyingCode]           = useState(false);
+  const [applySuccess, setApplySuccess]           = useState(false);
+  const [applyError, setApplyError]               = useState('');
+  const [claimingId, setClaimingId]               = useState<string | null>(null);
+  const [claimMessage, setClaimMessage]           = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, [activeAddress]);
-
-  // Pre-fill referral code from URL ?ref= param on web
-  useEffect(() => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      try {
-        const ref = new URL(window.location.href).searchParams.get('ref');
-        if (ref) setInputCode(ref.toUpperCase());
-      } catch {}
-    }
-  }, []);
-
-  const loadData = async () => {
+  // Reset stale 'claiming' DB records then load fresh data
+  const loadData = useCallback(async () => {
     if (!activeAddress) return;
     setLoading(true);
+
+    // Recover any rewards stuck in 'claiming' state by a prior crashed edge call
+    await ReferralService.resetStaleClaimingRewards();
 
     const [exhausted] = await Promise.all([
       ReferralService.isEarlyRewardPoolExhausted(),
@@ -79,7 +69,21 @@ export default function RewardsScreen() {
     setRewards(rwds);
     setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
     setLoading(false);
-  };
+  }, [activeAddress]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Pre-fill referral code from URL ?ref= param on web
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        const ref = new URL(window.location.href).searchParams.get('ref');
+        if (ref) setInputCode(ref.toUpperCase());
+      } catch {}
+    }
+  }, []);
 
   const handleCopyCode = async () => {
     if (!referralCode) return;
@@ -102,24 +106,38 @@ export default function RewardsScreen() {
   };
 
   const handleApplyCode = async () => {
-    if (!inputCode.trim() || !activeAddress) return;
+    const code = inputCode.trim().toUpperCase();
+    if (!code || !activeAddress) return;
+
+    // Always clear previous status before a new attempt
     setApplyError('');
+    setApplySuccess(false);
     setApplyingCode(true);
 
-    const success = await ReferralService.applyReferralCode(
-      activeAddress,
-      inputCode.trim().toUpperCase(),
-    );
+    const result = await ReferralService.applyReferralCode(activeAddress, code);
 
-    if (success) {
-      setCodeApplied(true);
+    setApplyingCode(false);
+
+    if (result.success) {
+      setApplySuccess(true);
       setInputCode('');
       await loadData();
-      setTimeout(() => setCodeApplied(false), 3000);
+      setTimeout(() => setApplySuccess(false), 4000);
     } else {
-      setApplyError('Invalid code or already applied.');
+      switch (result.reason) {
+        case 'already_applied':
+          setApplyError('Referral already applied to your account.');
+          break;
+        case 'self_referral':
+          setApplyError('You cannot use your own referral code.');
+          break;
+        case 'invalid_code':
+          setApplyError('Invalid referral code. Please check and try again.');
+          break;
+        default:
+          setApplyError('Something went wrong. Please try again.');
+      }
     }
-    setApplyingCode(false);
   };
 
   const handleClaimReward = async (reward: UserReward) => {
@@ -127,8 +145,12 @@ export default function RewardsScreen() {
     setClaimingId(reward.id);
     setClaimMessage(null);
 
+    // Race the edge-function call against a 75-second UI timeout
     const timeout = new Promise<{ success: false; error: string }>((resolve) =>
-      setTimeout(() => resolve({ success: false, error: 'Claim timed out. Please try again.' }), 70_000)
+      setTimeout(
+        () => resolve({ success: false, error: 'Claim is taking longer than expected. Please check again.' }),
+        75_000,
+      )
     );
 
     const result = await Promise.race([
@@ -137,16 +159,21 @@ export default function RewardsScreen() {
     ]);
 
     if (result.success) {
-      setClaimMessage({ type: 'success', text: 'Reward claimed! DWC sent to your wallet.' });
-      await loadData();
+      setClaimMessage({ type: 'success', text: `Reward claimed! ${reward.reward_amount.toLocaleString()} DWC sent to your wallet.` });
     } else {
       setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
     }
 
     setClaimingId(null);
-    setTimeout(() => setClaimMessage(null), 6000);
+
+    // Always reload from Supabase so the UI reflects the real claim status,
+    // including resetting any stale 'claiming' left by a timed-out edge call.
+    await loadData();
+
+    setTimeout(() => setClaimMessage(null), 8000);
   };
 
+  // ── No wallet ──────────────────────────────────────────────────────────────
   if (!activeAddress) {
     return (
       <View style={styles.container}>
@@ -163,6 +190,7 @@ export default function RewardsScreen() {
     );
   }
 
+  // ── Loading ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <View style={styles.container}>
@@ -179,6 +207,7 @@ export default function RewardsScreen() {
     );
   }
 
+  // ── Main content ───────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
       <LinearGradient colors={colors.gradient.primary} style={styles.header}>
@@ -191,11 +220,12 @@ export default function RewardsScreen() {
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
         {/* Claim status banner */}
         {claimMessage && (
-          <View style={[styles.claimBanner, claimMessage.type === 'success' ? styles.claimBannerSuccess : styles.claimBannerError]}>
-            <Text style={styles.claimBannerText}>{claimMessage.text}</Text>
+          <View style={[styles.statusBanner, claimMessage.type === 'success' ? styles.bannerSuccess : styles.bannerError]}>
+            <Text style={styles.statusBannerText}>{claimMessage.text}</Text>
           </View>
         )}
 
+        {/* Stats grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <Users size={24} color={colors.primary} />
@@ -214,6 +244,7 @@ export default function RewardsScreen() {
           </View>
         </View>
 
+        {/* Your referral code */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Your Referral Code</Text>
 
@@ -272,15 +303,20 @@ export default function RewardsScreen() {
           </Text>
         </View>
 
+        {/* Apply a referral code */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Have a Referral Code?</Text>
           <View style={styles.inputRow}>
             <TextInput
               style={styles.codeInput}
-              placeholder="e.g. DAWEN-AB12CD"
+              placeholder="e.g. DAWEN-X7K9P4Q2"
               placeholderTextColor={colors.textMuted}
               value={inputCode}
-              onChangeText={t => { setInputCode(t); setApplyError(''); }}
+              onChangeText={t => {
+                setInputCode(t);
+                setApplyError('');
+                setApplySuccess(false);
+              }}
               autoCapitalize="characters"
               maxLength={20}
             />
@@ -291,7 +327,7 @@ export default function RewardsScreen() {
             >
               {applyingCode ? (
                 <ActivityIndicator size="small" color={colors.white} />
-              ) : codeApplied ? (
+              ) : applySuccess ? (
                 <>
                   <Check size={16} color={colors.white} />
                   <Text style={styles.applyButtonText}>Applied!</Text>
@@ -301,50 +337,30 @@ export default function RewardsScreen() {
               )}
             </TouchableOpacity>
           </View>
-          {!!applyError && <Text style={styles.applyError}>{applyError}</Text>}
+          {applySuccess && (
+            <Text style={styles.applySuccessText}>Referral applied successfully! Your 150 DWC reward is ready to claim.</Text>
+          )}
+          {!!applyError && (
+            <Text style={styles.applyError}>{applyError}</Text>
+          )}
         </View>
 
+        {/* Reward cards */}
         {rewards.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Your Rewards</Text>
             {rewards.map((reward) => (
-              <View key={reward.id} style={styles.rewardCard}>
-                <View style={styles.rewardIcon}>
-                  <Star size={20} color={colors.warning} fill={colors.warning} />
-                </View>
-                <View style={styles.rewardInfo}>
-                  <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
-                  <Text style={styles.rewardAmount}>
-                    {reward.reward_amount.toLocaleString()} DWC
-                  </Text>
-                </View>
-                {reward.status === 'ready' ? (
-                  <TouchableOpacity
-                    style={[styles.claimButton, claimingId === reward.id && styles.claimButtonDisabled]}
-                    onPress={() => handleClaimReward(reward)}
-                    disabled={claimingId === reward.id}
-                  >
-                    {claimingId === reward.id ? (
-                      <ActivityIndicator size="small" color={colors.white} />
-                    ) : (
-                      <Text style={styles.claimButtonText}>Claim</Text>
-                    )}
-                  </TouchableOpacity>
-                ) : reward.status === 'sent' ? (
-                  <View style={styles.claimedBadge}>
-                    <Check size={14} color={colors.success} />
-                    <Text style={styles.claimedText}>Claimed</Text>
-                  </View>
-                ) : reward.status === 'claiming' ? (
-                  <View style={styles.claimedBadge}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  </View>
-                ) : null}
-              </View>
+              <RewardCard
+                key={reward.id}
+                reward={reward}
+                claimingId={claimingId}
+                onClaim={handleClaimReward}
+              />
             ))}
           </View>
         )}
 
+        {/* Referral list */}
         {referrals.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Your Referrals ({referrals.length})</Text>
@@ -372,6 +388,7 @@ export default function RewardsScreen() {
           </View>
         )}
 
+        {/* How it works */}
         <View style={styles.infoSection}>
           <Text style={styles.infoTitle}>How It Works</Text>
           <View style={styles.infoStep}>
@@ -386,11 +403,97 @@ export default function RewardsScreen() {
             <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
             <Text style={styles.stepText}>You earn 300 DWC, they earn 150 DWC — claimable as real DawenWorld tokens!</Text>
           </View>
+          <View style={styles.infoStep}>
+            <View style={styles.stepNumber}><Text style={styles.stepNumberText}>4</Text></View>
+            <Text style={styles.stepText}>First 100 members who join get an additional 10,000 DWC Early Member Reward!</Text>
+          </View>
         </View>
       </ScrollView>
     </View>
   );
 }
+
+// ── Reward card subcomponent ──────────────────────────────────────────────────
+
+interface RewardCardProps {
+  reward: UserReward;
+  claimingId: string | null;
+  onClaim: (reward: UserReward) => void;
+}
+
+function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
+  const isActivelyClaiming = claimingId === reward.id;
+
+  const action = (() => {
+    if (reward.status === 'sent') {
+      return (
+        <View style={styles.claimedBadge}>
+          <Check size={14} color={colors.success} />
+          <Text style={styles.claimedText}>Claimed</Text>
+        </View>
+      );
+    }
+    if (reward.status === 'failed') {
+      return (
+        <TouchableOpacity
+          style={[styles.claimButton, styles.claimButtonRetry]}
+          onPress={() => onClaim(reward)}
+          disabled={!!claimingId}
+        >
+          <Text style={[styles.claimButtonText, { fontSize: 11 }]}>Retry</Text>
+        </TouchableOpacity>
+      );
+    }
+    // 'claiming' — spinner (stale state was already reset by loadData,
+    // but show spinner if it just transitioned)
+    if (reward.status === 'claiming') {
+      return (
+        <View style={styles.claimedBadge}>
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
+      );
+    }
+    // 'ready'
+    return (
+      <TouchableOpacity
+        style={[styles.claimButton, (isActivelyClaiming || !!claimingId) && styles.claimButtonDisabled]}
+        onPress={() => onClaim(reward)}
+        disabled={isActivelyClaiming || !!claimingId}
+      >
+        {isActivelyClaiming ? (
+          <ActivityIndicator size="small" color={colors.white} />
+        ) : (
+          <Text style={styles.claimButtonText}>Claim</Text>
+        )}
+      </TouchableOpacity>
+    );
+  })();
+
+  return (
+    <View style={styles.rewardCard}>
+      <View style={styles.rewardIcon}>
+        <Star size={20} color={colors.warning} fill={colors.warning} />
+      </View>
+      <View style={styles.rewardInfo}>
+        <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
+        <Text style={styles.rewardAmount}>
+          {reward.reward_amount.toLocaleString()} DWC
+        </Text>
+        {reward.status === 'sent' && reward.transaction_signature && (
+          <Text style={styles.txHash} numberOfLines={1}>
+            tx: {reward.transaction_signature.slice(0, 20)}…
+          </Text>
+        )}
+        {reward.status === 'failed' && (
+          <Text style={styles.failedText}>Transfer failed — tap Retry</Text>
+        )}
+      </View>
+      {action}
+    </View>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: {
@@ -433,22 +536,22 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.textMuted,
   },
-  claimBanner: {
+  statusBanner: {
     borderRadius: borderRadius.md,
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
-  claimBannerSuccess: {
+  bannerSuccess: {
     backgroundColor: colors.successMuted,
     borderWidth: 1,
     borderColor: colors.success,
   },
-  claimBannerError: {
-    backgroundColor: colors.errorMuted ?? 'rgba(239,68,68,0.12)',
+  bannerError: {
+    backgroundColor: (colors as any).errorMuted ?? 'rgba(239,68,68,0.12)',
     borderWidth: 1,
-    borderColor: colors.error ?? '#EF4444',
+    borderColor: (colors as any).error ?? '#EF4444',
   },
-  claimBannerText: {
+  statusBannerText: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.textPrimary,
@@ -591,9 +694,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.white,
   },
+  applySuccessText: {
+    fontSize: fontSize.sm,
+    color: colors.success,
+    marginTop: spacing.sm,
+    fontWeight: '600',
+  },
   applyError: {
     fontSize: fontSize.xs,
-    color: colors.error ?? '#EF4444',
+    color: (colors as any).error ?? '#EF4444',
     marginTop: spacing.xs,
   },
   rewardCard: {
@@ -630,6 +739,17 @@ const styles = StyleSheet.create({
     color: colors.warning,
     marginTop: 2,
   },
+  txHash: {
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 2,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+  },
+  failedText: {
+    fontSize: 10,
+    color: (colors as any).error ?? '#EF4444',
+    marginTop: 2,
+  },
   claimButton: {
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
@@ -637,6 +757,9 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     minWidth: 64,
     alignItems: 'center',
+  },
+  claimButtonRetry: {
+    backgroundColor: (colors as any).error ?? '#EF4444',
   },
   claimButtonDisabled: {
     opacity: 0.6,
@@ -727,6 +850,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: spacing.md,
+    flexShrink: 0,
   },
   stepNumberText: {
     fontSize: fontSize.md,
