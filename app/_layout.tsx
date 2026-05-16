@@ -14,6 +14,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
 import { NotificationBanner } from '@/components/NotificationBanner';
 import { useProfile } from '@/contexts/ProfileContext';
+import { useWallet } from '@/contexts/WalletContext';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -21,7 +22,8 @@ if (Platform.OS !== 'web') {
 
 function InAppNotifications() {
   const { profile } = useProfile();
-  return <NotificationBanner userId={profile?.id ?? null} />;
+  const { activeAddress } = useWallet();
+  return <NotificationBanner userId={profile?.id ?? null} walletAddress={activeAddress} />;
 }
 
 export default function RootLayout() {

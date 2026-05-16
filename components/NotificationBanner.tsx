@@ -25,6 +25,8 @@ import {
   TrendingTokenNotification,
   trendingNotificationService,
 } from '@/services/trendingNotificationService';
+import { AlertsService, PriceAlert } from '@/services/alertsService';
+import { liveMarketService } from '@/services/liveMarketService';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, fontSize } from '@/constants/theme';
 import VerificationBadge from './VerificationBadge';
@@ -44,7 +46,13 @@ interface TrendingBannerItem {
   token: TrendingTokenNotification;
 }
 
-export type BannerItem = SocialBannerItem | TrendingBannerItem;
+interface PriceAlertBannerItem {
+  kind: 'price_alert';
+  alert: PriceAlert;
+  currentPrice: number;
+}
+
+export type BannerItem = SocialBannerItem | TrendingBannerItem | PriceAlertBannerItem;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -177,6 +185,50 @@ export default function NotificationBannerToast({ item, onDismiss, onPress }: To
     );
   }
 
+  // ── Price alert banner ────────────────────────────────────────────────────
+  if (item.kind === 'price_alert') {
+    const { alert, currentPrice } = item;
+    const isAbove = alert.alert_type === 'above';
+    const iconColor = isAbove ? '#10B981' : '#EF4444';
+
+    return (
+      <Animated.View
+        style={[styles.banner, { transform: [{ translateY: slideY }], opacity }]}
+        pointerEvents="box-none"
+      >
+        <TouchableOpacity style={styles.inner} onPress={onPress} activeOpacity={0.88}>
+          <View style={styles.avatarWrap}>
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Bell size={17} color={iconColor} strokeWidth={2.5} />
+            </View>
+            <View style={[styles.typeDot, { backgroundColor: iconColor }]} />
+          </View>
+
+          <View style={styles.textWrap}>
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>
+                {alert.token_symbol}
+                <Text style={styles.nameSub}> alert triggered</Text>
+              </Text>
+            </View>
+            <Text style={styles.msg} numberOfLines={1}>
+              {isAbove ? 'Crossed above' : 'Dropped below'} ${alert.target_price.toLocaleString()} — now ${fmtPrice(currentPrice)}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.dismissBtn}
+            onPress={onDismiss}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.dismissX}>✕</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  }
+
   // ── Social notification banner ────────────────────────────────────────────
   const { notification, actorProfile, actorLoading, msgPreview } = item;
   const { Icon: NotifIcon, color: iconColor } = notifIconProps(notification.type);
@@ -250,10 +302,11 @@ export default function NotificationBannerToast({ item, onDismiss, onPress }: To
 
 // ─── Self-contained named export ──────────────────────────────────────────────
 
-const TRENDING_INITIAL_DELAY = 30_000;      // 30 s before first check
-const TRENDING_INTERVAL      = 5 * 60_000;  // 5 min recurring check
+const TRENDING_INITIAL_DELAY  = 30_000;      // 30 s before first check
+const TRENDING_INTERVAL       = 5 * 60_000;  // 5 min recurring check
+const ALERT_CHECK_INTERVAL    = 60_000;      // 60 s price alert check
 
-export function NotificationBanner({ userId }: { userId: string | null }) {
+export function NotificationBanner({ userId, walletAddress }: { userId: string | null; walletAddress: string | null }) {
   const router = useRouter();
   const [item, setItem] = useState<BannerItem | null>(null);
   const itemRef = useRef<BannerItem | null>(null);
@@ -353,11 +406,49 @@ export function NotificationBanner({ userId }: { userId: string | null }) {
     return () => { clearTimeout(initialTimer); clearInterval(interval); };
   }, [userId]);
 
+  // ── Price alert monitoring ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!walletAddress) return;
+
+    const checkPriceAlerts = async () => {
+      if (itemRef.current) return; // don't interrupt a visible notification
+      try {
+        const userAlerts = await AlertsService.getUserAlerts(walletAddress, true);
+        if (userAlerts.length === 0) return;
+
+        const mints = [...new Set(userAlerts.map(a => a.token_mint || a.token_id).filter(Boolean))];
+        const priceMap = new Map<string, number>();
+
+        await Promise.all(mints.map(async (mint) => {
+          try {
+            const token = await liveMarketService.getTokenDetail(mint);
+            if (token?.price) priceMap.set(mint, token.price);
+          } catch {}
+        }));
+
+        if (priceMap.size === 0) return;
+
+        const triggered = await AlertsService.checkAlerts(walletAddress, priceMap);
+        if (triggered.length > 0) {
+          const first = triggered[0];
+          const currentPrice = priceMap.get(first.token_mint || first.token_id) ?? 0;
+          setItem({ kind: 'price_alert', alert: first, currentPrice });
+        }
+      } catch {}
+    };
+
+    const initialTimer = setTimeout(checkPriceAlerts, 15_000);
+    const interval = setInterval(checkPriceAlerts, ALERT_CHECK_INTERVAL);
+    return () => { clearTimeout(initialTimer); clearInterval(interval); };
+  }, [walletAddress]);
+
   // ── Navigation ─────────────────────────────────────────────────────────────
   const handlePress = useCallback(() => {
     if (!item) return;
 
-    if (item.kind === 'trending') {
+    if (item.kind === 'price_alert') {
+      router.push('/alerts' as any);
+    } else if (item.kind === 'trending') {
       console.log('[NotificationBanner] navigate to token-detail:', item.token.mint);
       trendingNotificationService.markSeen(item.token.mint);
       router.push(`/token-detail/${item.token.mint}` as any);

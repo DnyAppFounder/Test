@@ -34,6 +34,8 @@ export default function RewardsScreen() {
   const [rewards, setRewards] = useState<UserReward[]>([]);
   const [stats, setStats] = useState({ totalReferrals: 0, totalEarned: 0, unclaimedAmount: 0 });
   const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [earlyRewardExhausted, setEarlyRewardExhausted] = useState(false);
   const [inputCode, setInputCode] = useState('');
   const [applyingCode, setApplyingCode] = useState(false);
   const [codeApplied, setCodeApplied] = useState(false);
@@ -59,7 +61,11 @@ export default function RewardsScreen() {
     if (!activeAddress) return;
     setLoading(true);
 
-    await ReferralService.checkEarlyUserReward(activeAddress);
+    const [exhausted] = await Promise.all([
+      ReferralService.isEarlyRewardPoolExhausted(),
+      ReferralService.checkEarlyUserReward(activeAddress),
+    ]);
+    setEarlyRewardExhausted(exhausted);
 
     const [code, refs, rwds, sts] = await Promise.all([
       ReferralService.getOrCreateReferralCode(activeAddress),
@@ -76,10 +82,17 @@ export default function RewardsScreen() {
   };
 
   const handleCopyCode = async () => {
-    const link = buildReferralLink(referralCode);
-    await Clipboard.setStringAsync(link);
+    if (!referralCode) return;
+    await Clipboard.setStringAsync(referralCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyLink = async () => {
+    if (!referralCode) return;
+    await Clipboard.setStringAsync(buildReferralLink(referralCode));
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const handleShareCode = async () => {
@@ -114,17 +127,24 @@ export default function RewardsScreen() {
     setClaimingId(reward.id);
     setClaimMessage(null);
 
-    const result = await ReferralService.claimReward(reward.id, activeAddress);
+    const timeout = new Promise<{ success: false; error: string }>((resolve) =>
+      setTimeout(() => resolve({ success: false, error: 'Claim timed out. Please try again.' }), 70_000)
+    );
+
+    const result = await Promise.race([
+      ReferralService.claimReward(reward.id, activeAddress),
+      timeout,
+    ]);
 
     if (result.success) {
-      setClaimMessage({ type: 'success', text: 'Reward claimed successfully!' });
+      setClaimMessage({ type: 'success', text: 'Reward claimed! DWC sent to your wallet.' });
       await loadData();
     } else {
       setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
     }
 
     setClaimingId(null);
-    setTimeout(() => setClaimMessage(null), 5000);
+    setTimeout(() => setClaimMessage(null), 6000);
   };
 
   if (!activeAddress) {
@@ -196,32 +216,59 @@ export default function RewardsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Your Referral Code</Text>
+
+          {earlyRewardExhausted && (
+            <View style={styles.exhaustedBanner}>
+              <Text style={styles.exhaustedText}>Early reward fully claimed (100/100 users). Referral rewards still active!</Text>
+            </View>
+          )}
+
           <View style={styles.codeCard}>
             <View style={styles.codeDisplay}>
-              <Text style={styles.codeText}>{referralCode}</Text>
+              <Text style={styles.codeText}>{referralCode || 'Loading...'}</Text>
             </View>
+
+            {!!referralCode && (
+              <Text style={styles.referralLinkText} numberOfLines={1}>
+                {buildReferralLink(referralCode)}
+              </Text>
+            )}
+
             <View style={styles.codeActions}>
-              <TouchableOpacity style={styles.codeButton} onPress={handleCopyCode}>
+              <TouchableOpacity style={styles.codeButton} onPress={handleCopyCode} disabled={!referralCode}>
                 {copied ? (
                   <>
-                    <Check size={18} color={colors.success} />
+                    <Check size={16} color={colors.success} />
                     <Text style={[styles.codeButtonText, { color: colors.success }]}>Copied!</Text>
                   </>
                 ) : (
                   <>
-                    <Copy size={18} color={colors.primary} />
+                    <Copy size={16} color={colors.primary} />
+                    <Text style={styles.codeButtonText}>Copy Code</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.codeButton} onPress={handleCopyLink} disabled={!referralCode}>
+                {copiedLink ? (
+                  <>
+                    <Check size={16} color={colors.success} />
+                    <Text style={[styles.codeButtonText, { color: colors.success }]}>Copied!</Text>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={16} color={colors.primary} />
                     <Text style={styles.codeButtonText}>Copy Link</Text>
                   </>
                 )}
               </TouchableOpacity>
-              <TouchableOpacity style={styles.codeButton} onPress={handleShareCode}>
-                <Share2 size={18} color={colors.primary} />
+              <TouchableOpacity style={styles.codeButton} onPress={handleShareCode} disabled={!referralCode}>
+                <Share2 size={16} color={colors.primary} />
                 <Text style={styles.codeButtonText}>Share</Text>
               </TouchableOpacity>
             </View>
           </View>
           <Text style={styles.codeHint}>
-            Share your DAWEN code. Friends get 150 DWC, you get 300 DWC when they join!
+            Share your code or link. Friends get 150 DWC, you get 300 DWC when they join!
           </Text>
         </View>
 
@@ -484,6 +531,27 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.primary,
+  },
+  exhaustedBanner: {
+    backgroundColor: colors.warningMuted,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  exhaustedText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.warning,
+    textAlign: 'center',
+  },
+  referralLinkText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.sm,
   },
   codeHint: {
     fontSize: fontSize.sm,

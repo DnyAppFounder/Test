@@ -4,15 +4,19 @@ import { SocialService } from './socialService';
 export interface PriceAlert {
   id: string;
   user_id: string;
+  wallet_address: string;
   token_id: string;
+  token_mint: string;
   token_symbol: string;
   token_name: string;
   alert_type: 'above' | 'below';
   target_price: number;
+  current_price_at_creation: number;
   is_active: boolean;
   triggered: boolean;
   triggered_at: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export class AlertsService {
@@ -20,11 +24,12 @@ export class AlertsService {
 
   static async createAlert(
     walletAddress: string,
-    tokenId: string,
+    tokenMint: string,
     tokenSymbol: string,
     tokenName: string,
     alertType: 'above' | 'below',
-    targetPrice: number
+    targetPrice: number,
+    currentPrice: number = 0
   ): Promise<PriceAlert | null> {
     try {
       const profile = await SocialService.getOrCreateProfile(walletAddress);
@@ -34,11 +39,14 @@ export class AlertsService {
         .from('price_alerts')
         .insert({
           user_id: profile.id,
-          token_id: tokenId,
+          wallet_address: walletAddress,
+          token_id: tokenMint,
+          token_mint: tokenMint,
           token_symbol: tokenSymbol,
           token_name: tokenName,
           alert_type: alertType,
           target_price: targetPrice,
+          current_price_at_creation: currentPrice,
         })
         .select()
         .single();
@@ -108,7 +116,7 @@ export class AlertsService {
     try {
       const { error } = await this.supabase
         .from('price_alerts')
-        .update({ is_active: isActive })
+        .update({ is_active: isActive, updated_at: new Date().toISOString() })
         .eq('id', alertId);
 
       if (error) throw error;
@@ -143,7 +151,7 @@ export class AlertsService {
       const triggeredAlerts: PriceAlert[] = [];
 
       for (const alert of alerts) {
-        const currentPrice = currentPrices.get(alert.token_id);
+        const currentPrice = currentPrices.get(alert.token_mint || alert.token_id);
         if (!currentPrice) continue;
 
         const shouldTrigger =
@@ -157,6 +165,7 @@ export class AlertsService {
               triggered: true,
               triggered_at: new Date().toISOString(),
               is_active: false,
+              updated_at: new Date().toISOString(),
             })
             .eq('id', alert.id);
 

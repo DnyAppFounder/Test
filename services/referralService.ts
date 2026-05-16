@@ -276,6 +276,19 @@ export class ReferralService {
     }
   }
 
+  static async isEarlyRewardPoolExhausted(): Promise<boolean> {
+    try {
+      const { count, error } = await supabase
+        .from('user_rewards')
+        .select('id', { count: 'exact', head: true })
+        .eq('reason', 'early_user_signup');
+      if (error) return false;
+      return (count ?? 0) >= 100;
+    } catch {
+      return false;
+    }
+  }
+
   static async checkEarlyUserReward(walletAddress: string): Promise<void> {
     try {
       const profile = await SocialService.getOrCreateProfile(walletAddress);

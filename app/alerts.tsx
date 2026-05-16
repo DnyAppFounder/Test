@@ -10,7 +10,7 @@ import { useWallet } from '@/contexts/WalletContext';
 
 export default function PriceAlertsScreen() {
   const router = useRouter();
-  const { selectedAccount } = useWallet();
+  const { activeAddress } = useWallet();
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -29,7 +29,7 @@ export default function PriceAlertsScreen() {
 
   useEffect(() => {
     loadAlerts();
-  }, [selectedAccount]);
+  }, [activeAddress]);
 
   useEffect(() => {
     if (!showCreateModal) {
@@ -63,9 +63,9 @@ export default function PriceAlertsScreen() {
   }, [tokenSearch]);
 
   const loadAlerts = async () => {
-    if (!selectedAccount) return;
+    if (!activeAddress) return;
     setLoading(true);
-    const userAlerts = await AlertsService.getUserAlerts(selectedAccount.address);
+    const userAlerts = await AlertsService.getUserAlerts(activeAddress);
     setAlerts(userAlerts);
     setLoading(false);
   };
@@ -83,7 +83,7 @@ export default function PriceAlertsScreen() {
   };
 
   const handleCreateAlert = async () => {
-    if (!selectedAccount || !targetPrice || !selectedToken) return;
+    if (!activeAddress || !targetPrice || !selectedToken) return;
 
     setCreateError(null);
     setCreating(true);
@@ -96,12 +96,13 @@ export default function PriceAlertsScreen() {
       }
 
       const alert = await AlertsService.createAlert(
-        selectedAccount.address,
+        activeAddress,
         selectedToken.address,
         selectedToken.symbol.toUpperCase(),
         selectedToken.name,
         alertType,
-        parsedPrice
+        parsedPrice,
+        selectedToken.price
       );
 
       if (alert) {
