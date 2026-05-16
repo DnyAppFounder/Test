@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import bs58 from "npm:bs58@5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,6 +17,47 @@ const REWARD_TOKEN_DECIMALS = 6;
 const TOKEN_PROGRAM_ID_STR = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ASSOC_TOKEN_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8";
 const SYSTEM_PROGRAM_ID_STR = "11111111111111111111111111111111";
+const MIN_SOL_BALANCE = 0.002; // minimum SOL for fees
+
+function parsePrivateKey(raw: string): Uint8Array {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error("GAME_TREASURY_PRIVATE_KEY is not set");
+
+  // JSON array format: [12, 34, ...]
+  if (trimmed.startsWith("[")) {
+    let arr: number[];
+    try {
+      arr = JSON.parse(trimmed);
+    } catch {
+      throw new Error("GAME_TREASURY_PRIVATE_KEY: invalid JSON array format");
+    }
+    if (!Array.isArray(arr) || arr.length !== 64) {
+      throw new Error(`GAME_TREASURY_PRIVATE_KEY: JSON array must have 64 bytes, got ${Array.isArray(arr) ? arr.length : "non-array"}`);
+    }
+    return new Uint8Array(arr);
+  }
+
+  // Hex format: 128 hex characters
+  if (/^[0-9a-fA-F]{128}$/.test(trimmed)) {
+    const bytes = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) {
+      bytes[i] = parseInt(trimmed.slice(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
+  }
+
+  // Base58 format (standard Solana keypair export)
+  try {
+    const decoded = bs58.decode(trimmed);
+    if (decoded.length !== 64) {
+      throw new Error(`GAME_TREASURY_PRIVATE_KEY: base58 decoded to ${decoded.length} bytes, expected 64`);
+    }
+    return decoded;
+  } catch (e: any) {
+    if (e.message.startsWith("GAME_TREASURY_PRIVATE_KEY")) throw e;
+    throw new Error("GAME_TREASURY_PRIVATE_KEY: unrecognized format (expected JSON array, hex, or base58)");
+  }
+}
 
 async function solanaRpc(method: string, params: unknown[]): Promise<unknown> {
   if (!SOLANA_RPC_URL) throw new Error("SOLANA_RPC_URL not configured");
@@ -36,7 +78,7 @@ async function pollConfirmation(sig: string, timeoutMs = 60000): Promise<void> {
     const result = await solanaRpc("getSignatureStatuses", [[sig], { searchTransactionHistory: true }]) as any;
     const status = result?.value?.[0];
     if (status) {
-      if (status.err) throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
+      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
       if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") return;
     }
   }
@@ -44,13 +86,17 @@ async function pollConfirmation(sig: string, timeoutMs = 60000): Promise<void> {
 }
 
 async function sendRewardTokens(toWallet: string, mintAddress: string, amount: number): Promise<string> {
-  if (!TREASURY_PK_RAW) throw new Error("GAME_TREASURY_PRIVATE_KEY not set");
+  // Validate config early
+  if (!SOLANA_RPC_URL) throw new Error("SOLANA_RPC_URL is not configured");
+  if (!TREASURY_PK_RAW) throw new Error("GAME_TREASURY_PRIVATE_KEY is not configured");
+
+  const secretKey = parsePrivateKey(TREASURY_PK_RAW);
 
   const { Keypair, PublicKey, Transaction, TransactionInstruction } =
     await import("npm:@solana/web3.js@1.98.4");
 
-  const secretArray: number[] = JSON.parse(TREASURY_PK_RAW);
-  const treasury = Keypair.fromSecretKey(new Uint8Array(secretArray));
+  const treasury = Keypair.fromSecretKey(secretKey);
+  console.log(`[reward-claim] treasury wallet: ${treasury.publicKey.toBase58()}`);
 
   const tokenProgramId = new PublicKey(TOKEN_PROGRAM_ID_STR);
   const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
@@ -69,11 +115,36 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
   const treasuryATA = findATA(treasury.publicKey);
   const destinationATA = findATA(toPubkey);
 
-  // Check treasury token balance
-  const treasuryAccInfo = await solanaRpc("getTokenAccountBalance", [treasuryATA.toBase58()]) as any;
-  const treasuryBalance = Number(treasuryAccInfo?.value?.amount || "0") / Math.pow(10, REWARD_TOKEN_DECIMALS);
+  // Check treasury SOL balance for fees
+  const solBalResult = await solanaRpc("getBalance", [treasury.publicKey.toBase58(), { commitment: "confirmed" }]) as any;
+  const solBalance = Number(solBalResult ?? 0) / 1e9;
+  console.log(`[reward-claim] treasury SOL balance: ${solBalance}`);
+  if (solBalance < MIN_SOL_BALANCE) {
+    throw new Error(`INSUFFICIENT_SOL: treasury has ${solBalance.toFixed(6)} SOL, need at least ${MIN_SOL_BALANCE} SOL for fees`);
+  }
+
+  // Check treasury DWC token balance
+  let treasuryBalance = 0;
+  try {
+    const treasuryAccInfo = await solanaRpc("getTokenAccountBalance", [treasuryATA.toBase58()]) as any;
+    const uiAmount = treasuryAccInfo?.value?.uiAmount;
+    if (uiAmount != null) {
+      treasuryBalance = Number(uiAmount);
+    } else {
+      // Fallback: use raw amount
+      const rawAmt = Number(treasuryAccInfo?.value?.amount ?? "0");
+      treasuryBalance = rawAmt / Math.pow(10, REWARD_TOKEN_DECIMALS);
+    }
+  } catch {
+    // ATA doesn't exist — balance is 0
+    treasuryBalance = 0;
+  }
+
+  const rawAmount = BigInt(Math.round(amount * Math.pow(10, REWARD_TOKEN_DECIMALS)));
+  console.log(`[reward-claim] transfer: ${amount} DWC (${rawAmount} raw units), treasury balance: ${treasuryBalance}`);
+
   if (treasuryBalance < amount) {
-    throw new Error(`INSUFFICIENT_POOL: treasury has ${treasuryBalance} tokens, need ${amount}`);
+    throw new Error(`INSUFFICIENT_POOL: treasury has ${treasuryBalance} DWC, need ${amount} DWC`);
   }
 
   // Check if destination ATA exists
@@ -97,8 +168,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
     }));
   }
 
-  // Transfer instruction (SPL Token transfer: instruction 3)
-  const rawAmount = BigInt(Math.floor(amount * Math.pow(10, REWARD_TOKEN_DECIMALS)));
+  // SPL Token transfer instruction (instruction index 3)
   const transferData = new Uint8Array(9);
   transferData[0] = 3;
   const view = new DataView(transferData.buffer);
@@ -116,7 +186,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
 
   const bhResult = await solanaRpc("getLatestBlockhash", [{ commitment: "confirmed" }]) as any;
   const blockhash = bhResult?.value?.blockhash ?? bhResult?.blockhash;
-  if (!blockhash) throw new Error("Could not fetch blockhash");
+  if (!blockhash) throw new Error("Could not fetch blockhash from RPC");
 
   tx.recentBlockhash = blockhash;
   tx.feePayer = treasury.publicKey;
@@ -128,9 +198,11 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
     { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed" },
   ]) as string;
 
-  if (!sig || typeof sig !== "string") throw new Error("Invalid signature from RPC");
+  if (!sig || typeof sig !== "string") throw new Error("Invalid signature returned from RPC");
 
+  console.log(`[reward-claim] tx sent: ${sig}, waiting for confirmation...`);
   await pollConfirmation(sig);
+  console.log(`[reward-claim] confirmed: ${sig}`);
   return sig;
 }
 
@@ -149,26 +221,61 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Validate config before touching the DB
+    if (!SOLANA_RPC_URL) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Server configuration error: SOLANA_RPC_URL not set" }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (!TREASURY_PK_RAW) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Server configuration error: GAME_TREASURY_PRIVATE_KEY not set" }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
-    // Fetch reward — must be owned by this wallet and status = ready
-    const { data: reward, error: fetchErr } = await db
+    // Fetch reward with broader status check to give specific errors
+    const { data: rewardAny, error: fetchErr } = await db
       .from("user_rewards")
       .select("*")
       .eq("id", reward_id)
       .eq("wallet_address", wallet_address)
-      .eq("status", "ready")
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
-    if (!reward) {
+
+    if (!rewardAny) {
       return new Response(
-        JSON.stringify({ success: false, error: "Reward not found or already claimed" }),
+        JSON.stringify({ success: false, error: "Reward not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Atomic lock — only succeeds if still 'ready' (prevents concurrent double-claims)
+    if (rewardAny.status === "sent") {
+      return new Response(
+        JSON.stringify({ success: false, error: "Reward already claimed", signature: rewardAny.transaction_signature }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (rewardAny.status === "claiming") {
+      return new Response(
+        JSON.stringify({ success: false, error: "Reward claim already in progress, please wait" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (rewardAny.status !== "ready") {
+      return new Response(
+        JSON.stringify({ success: false, error: `Reward cannot be claimed (status: ${rewardAny.status})` }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Atomic lock — only succeeds if status is still 'ready'
     const { error: lockErr, count } = await db
       .from("user_rewards")
       .update({ status: "claiming", updated_at: new Date().toISOString() })
@@ -187,25 +294,40 @@ Deno.serve(async (req: Request) => {
     // Send tokens from treasury
     let signature: string;
     try {
-      signature = await sendRewardTokens(wallet_address, reward.reward_token_mint, reward.reward_amount);
+      signature = await sendRewardTokens(wallet_address, rewardAny.reward_token_mint, rewardAny.reward_amount);
     } catch (sendErr: any) {
+      const msg = String(sendErr?.message || sendErr);
+      console.error("[reward-claim] send failed:", msg);
+
       // Revert to ready so user can try again
       await db
         .from("user_rewards")
         .update({ status: "ready", updated_at: new Date().toISOString() })
         .eq("id", reward_id);
 
-      const msg = String(sendErr?.message || sendErr);
-      if (msg.startsWith("INSUFFICIENT_POOL")) {
+      if (msg.includes("INSUFFICIENT_SOL")) {
         return new Response(
-          JSON.stringify({ success: false, error: "Reward pool temporarily unavailable" }),
+          JSON.stringify({ success: false, error: "Treasury is low on SOL for transaction fees. Please try again later." }),
           { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
+      if (msg.includes("INSUFFICIENT_POOL")) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Reward pool temporarily unavailable. Please try again later." }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      if (msg.includes("not configured") || msg.includes("configuration error") || msg.includes("not set")) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Server configuration error. Please contact support." }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       throw sendErr;
     }
 
-    // Mark as sent
+    // Mark as sent with signature
     const now = new Date().toISOString();
     await db.from("user_rewards").update({
       status: "sent",
@@ -220,9 +342,9 @@ Deno.serve(async (req: Request) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err: any) {
-    console.error("[reward-claim]", err);
+    console.error("[reward-claim] unhandled error:", err);
     return new Response(
-      JSON.stringify({ success: false, error: err?.message || "Internal error" }),
+      JSON.stringify({ success: false, error: err?.message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
