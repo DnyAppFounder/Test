@@ -143,16 +143,17 @@ function parseTxRow(walletAddr: string, sig: string, blockTime: number | null, t
   const isSwap = hasTokenIn && hasTokenOut;
 
   if (isSwap) {
-    const outToken = tokenChanges.find(t => t.change < 0);
+    // Token-to-token trade — show as "Bought Y" since user acquired Y
     const inToken = tokenChanges.find(t => t.change > 0);
-    const outLabel = outToken?.symbol || shortAddr(outToken?.mint ?? null);
+    const outToken = tokenChanges.find(t => t.change < 0);
     const inLabel = inToken?.symbol || shortAddr(inToken?.mint ?? null);
-    const outAmt = outToken ? Math.abs(outToken.change).toFixed(4) : '';
     const inAmt = inToken ? inToken.change.toFixed(4) : '';
+    const outAmt = outToken ? Math.abs(outToken.change).toFixed(4) : '';
+    const outLabel = outToken?.symbol || shortAddr(outToken?.mint ?? null);
     return {
       signature: sig, blockTime, kind: 'swap', failed: false,
-      label: `Swap ${outLabel} → ${inLabel}`,
-      amount: outAmt ? `${outAmt} → ${inAmt}` : '',
+      label: `Bought ${inLabel}`,
+      amount: outAmt && inAmt ? `-${outAmt} ${outLabel} / +${inAmt} ${inLabel}` : inAmt ? `+${inAmt} ${inLabel}` : '',
       counterparty: null,
     };
   }
@@ -161,11 +162,13 @@ function parseTxRow(walletAddr: string, sig: string, blockTime: number | null, t
     const token = tokenChanges.find(t => t.change > 0)!;
     const sym = token.symbol || shortAddr(token.mint);
     const amt = token.change.toFixed(4);
+    // Negative SOL net = user paid SOL to receive token → Buy
+    const isBuy = solNet < -0.000001;
     return {
-      signature: sig, blockTime, kind: 'receive_token', failed: false,
-      label: `Received ${sym}`,
+      signature: sig, blockTime, kind: isBuy ? 'swap' : 'receive_token', failed: false,
+      label: isBuy ? `Bought ${sym}` : `Received ${sym}`,
       amount: `+${amt} ${token.symbol || ''}`.trim(),
-      counterparty,
+      counterparty: isBuy ? null : counterparty,
     };
   }
 
@@ -173,11 +176,13 @@ function parseTxRow(walletAddr: string, sig: string, blockTime: number | null, t
     const token = tokenChanges.find(t => t.change < 0)!;
     const sym = token.symbol || shortAddr(token.mint);
     const amt = Math.abs(token.change).toFixed(4);
+    // Positive SOL net = user received SOL for sending token → Sell
+    const isSell = solNet > 0.000001;
     return {
-      signature: sig, blockTime, kind: 'send_token', failed: false,
-      label: `Sent ${sym}`,
+      signature: sig, blockTime, kind: isSell ? 'swap' : 'send_token', failed: false,
+      label: isSell ? `Sold ${sym}` : `Sent ${sym}`,
       amount: `-${amt} ${token.symbol || ''}`.trim(),
-      counterparty,
+      counterparty: isSell ? null : counterparty,
     };
   }
 

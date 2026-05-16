@@ -128,7 +128,10 @@ function filterValidCandles(cs: CandleData[]): CandleData[] {
     if (!isFinite(c.close) || c.close <= 0) return false;
     if (!isFinite(c.high)  || c.high  <= 0) return false;
     if (!isFinite(c.low)   || c.low   <= 0) return false;
-    if (c.high < c.low || c.high < c.open || c.high < c.close) return false;
+    // Allow tiny float imprecision (1e-9 relative) so API candles with
+    // high ≈ close are not incorrectly discarded
+    const eps = c.high * 1e-8;
+    if (c.high < c.low - eps || c.high < c.open - eps || c.high < c.close - eps) return false;
     return true;
   });
 }
@@ -242,7 +245,7 @@ export function TradingViewChart({
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
-  const [valueMode, setValueMode] = useState<ValueMode>('price');
+  const [valueMode, setValueMode] = useState<ValueMode>('mcap');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [livePrice, setLivePrice] = useState<number | null>(null);

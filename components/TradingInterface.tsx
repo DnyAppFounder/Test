@@ -81,22 +81,30 @@ export function TradingInterface({
   const [status, setStatus] = useState<TradeStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [successMode, setSuccessMode] = useState<TradeMode>('buy');
   const [slippage] = useState(0.5);
   const [activePct, setActivePct] = useState<number | null>(null);
+  // Stale-quote guard: each fetch increments this; response is discarded if ID has changed
+  const quoteIdRef = useRef(0);
 
   const solToken = tokens.find(t => t.contract_address === SOL_MINT);
   const thisToken = tokens.find(t => t.contract_address === tokenMint);
+  // SOL balance is stored in UI units (SOL, not lamports)
   const realSolBalance = solToken ? parseFloat(solToken.balance || '0') : solBalance;
-  const realTokenBalance = thisToken ? parseFloat(thisToken.balance || '0') : tokenBalance;
+  // SPL token balance is stored in raw base-units — divide by 10^decimals to get UI amount
+  const rawTokenBalance = thisToken ? parseFloat(thisToken.balance || '0') : tokenBalance * Math.pow(10, tokenDecimals);
+  const tokenDec = thisToken?.decimals ?? tokenDecimals;
+  const realTokenBalance = rawTokenBalance / Math.pow(10, tokenDec);
 
   const fromSymbol = mode === 'buy' ? 'SOL' : tokenSymbol.toUpperCase();
   const toSymbol = mode === 'buy' ? tokenSymbol.toUpperCase() : 'SOL';
   const sym = tokenSymbol.toUpperCase();
 
-  // Debounced quote fetch
+  // Debounced quote fetch — clears stale quote immediately when input changes
   useEffect(() => {
     const parsed = parseFloat(amount);
     if (!amount || isNaN(parsed) || parsed <= 0) {
+      quoteIdRef.current++;
       setQuote(null);
       if (status === 'quote_ready' || status === 'fetching_quote') setStatus('idle');
       return;
@@ -105,8 +113,9 @@ export function TradingInterface({
     return () => clearTimeout(timer);
   }, [amount, mode, tokenMint]);
 
-  // Reset on mode change
+  // Reset on mode change — also cancel any in-flight quote request
   useEffect(() => {
+    quoteIdRef.current++;
     setQuote(null);
     setError(null);
     if (status !== 'idle') setStatus('idle');
@@ -115,15 +124,29 @@ export function TradingInterface({
   }, [mode]);
 
   const fetchQuote = async (inputAmount: number) => {
+    const myId = ++quoteIdRef.current;
     setStatus('fetching_quote');
     setError(null);
     try {
       const inputMint = mode === 'buy' ? SOL_MINT : tokenMint;
       const outputMint = mode === 'buy' ? tokenMint : SOL_MINT;
-      const decimals = mode === 'buy' ? 9 : tokenDecimals;
-      const amountIn = Math.floor(inputAmount * Math.pow(10, decimals));
+      // Buy: input is SOL (9 decimals → lamports). Sell: input is token UI amount → raw units
+      const inputDecimals = mode === 'buy' ? 9 : tokenDec;
+      const amountIn = Math.floor(inputAmount * Math.pow(10, inputDecimals));
+
+      console.log(`[TradingInterface] quote side=${mode} mint=${tokenMint?.slice(0,8)} decimals=${inputDecimals} uiAmt=${inputAmount} rawAmt=${amountIn}`);
+
       const q = await jupiterSwapService.getQuote(inputMint, outputMint, amountIn, Math.round(slippage * 100));
+
+      if (myId !== quoteIdRef.current) {
+        console.log(`[TradingInterface] stale quote ignored (id=${myId} cur=${quoteIdRef.current})`);
+        return;
+      }
+
       if (q) {
+        const outDecimals = mode === 'buy' ? tokenDec : 9;
+        const outUi = parseInt(q.outAmount) / Math.pow(10, outDecimals);
+        console.log(`[TradingInterface] quote OK outRaw=${q.outAmount} outUi=${outUi} impact=${(q as any).priceImpactPct}`);
         setQuote(q);
         setStatus('quote_ready');
       } else {
@@ -131,6 +154,7 @@ export function TradingInterface({
         setStatus('error');
       }
     } catch (err: any) {
+      if (myId !== quoteIdRef.current) return;
       setError(err.message || 'Failed to fetch quote');
       setStatus('error');
     }
@@ -158,8 +182,9 @@ export function TradingInterface({
 
   const getOutAmount = (): number => {
     if (!quote) return 0;
-    const decimals = mode === 'buy' ? tokenDecimals : 9;
-    return parseInt(quote.outAmount) / Math.pow(10, decimals);
+    // Buy: output is token, use token decimals. Sell: output is SOL (9 decimals).
+    const outDecimals = mode === 'buy' ? tokenDec : 9;
+    return parseInt(quote.outAmount) / Math.pow(10, outDecimals);
   };
 
   const getMinReceived = (): number => {
@@ -202,14 +227,17 @@ export function TradingInterface({
       if (mode === 'buy') {
         setError(`Need ${fmtSol(getTotalRequired())} SOL total (input + fees). Balance: ${fmtSol(realSolBalance)} SOL`);
       } else {
-        setError(`Insufficient ${sym}. Balance: ${fmtToken(realTokenBalance, tokenDecimals)}`);
+        setError(`Insufficient ${sym}. Balance: ${fmtToken(realTokenBalance, tokenDec)}`);
       }
       setStatus('error');
       return;
     }
 
-    if (!quote) { setError('Waiting for quote…'); return; }
+    if (!quote || status !== 'quote_ready') { setError('Waiting for price quote…'); return; }
 
+    // Capture trade direction so success message is correct even if mode changes
+    const tradeMode = mode;
+    setSuccessMode(tradeMode);
     setError(null);
     setStatus('signing');
     try {
@@ -262,7 +290,7 @@ export function TradingInterface({
   };
 
   const isProcessing = status === 'signing' || status === 'sending' || status === 'confirming';
-  const canExecute = !isProcessing && !!amount && parseFloat(amount) > 0 && !hasInsufficientBalance();
+  const canExecute = !isProcessing && !!amount && parseFloat(amount) > 0 && !hasInsufficientBalance() && status === 'quote_ready' && !!quote;
   const priceImpact = getPriceImpact();
   const outAmt = getOutAmount();
   const minReceived = getMinReceived();
@@ -296,7 +324,7 @@ export function TradingInterface({
           disabled={isProcessing}
           activeOpacity={0.8}
         >
-          <Text style={[s.modeBtnText, mode === 'sell' && s.modeBtnSellActive]}>SELL</Text>
+          <Text style={[s.modeBtnText, mode === 'sell' && s.modeBtnActive]}>SELL</Text>
         </TouchableOpacity>
       </View>
 
@@ -308,7 +336,7 @@ export function TradingInterface({
         <Text style={s.balanceValue}>
           {mode === 'buy'
             ? `${fmtSol(realSolBalance)} SOL`
-            : `${fmtToken(realTokenBalance, tokenDecimals)} ${sym}`}
+            : `${fmtToken(realTokenBalance, tokenDec)} ${sym}`}
         </Text>
       </View>
 
@@ -367,12 +395,12 @@ export function TradingInterface({
           <View style={s.breakdownDivider} />
           <QuoteRow
             label="You receive"
-            value={`≈ ${fmtToken(outAmt, mode === 'buy' ? tokenDecimals : 9)} ${toSymbol}`}
+            value={`≈ ${fmtToken(outAmt, mode === 'buy' ? tokenDec : 9)} ${toSymbol}`}
             highlight
           />
           <QuoteRow
             label={`Min. received (${slippage}% slip)`}
-            value={`≈ ${fmtToken(minReceived, mode === 'buy' ? tokenDecimals : 9)} ${toSymbol}`}
+            value={`≈ ${fmtToken(minReceived, mode === 'buy' ? tokenDec : 9)} ${toSymbol}`}
             muted
           />
           {priceImpact > 0.01 && (
@@ -429,7 +457,9 @@ export function TradingInterface({
       {status === 'success' && txSignature && (
         <View style={s.successRow}>
           <CheckCircle size={13} color="#10B981" />
-          <Text style={s.successLabel}>Transaction confirmed</Text>
+          <Text style={s.successLabel}>
+            {successMode === 'buy' ? `Bought ${sym} successfully` : `Sold ${sym} successfully`}
+          </Text>
           <Text style={s.successSig} numberOfLines={1} ellipsizeMode="middle">
             {txSignature.slice(0, 8)}…{txSignature.slice(-6)}
           </Text>
@@ -457,12 +487,16 @@ export function TradingInterface({
             ? <ActivityIndicator size="small" color="#fff" />
             : <Text style={s.execBtnText}>
                 {status === 'success'
-                  ? `Swapped ${sym} successfully`
+                  ? (successMode === 'buy' ? `Bought ${sym}` : `Sold ${sym}`)
                   : hasInsufficientBalance() && parseFloat(amount) > 0
                     ? 'Insufficient Balance'
-                    : mode === 'buy'
-                      ? `Buy ${sym}`
-                      : `Sell ${sym}`}
+                    : status === 'fetching_quote' || (parseFloat(amount) > 0 && status === 'idle')
+                      ? (mode === 'buy' ? `Buy ${sym}` : `Sell ${sym}`)
+                      : status === 'error' && error === 'No route found — low liquidity'
+                        ? 'No Route — Low Liquidity'
+                        : mode === 'buy'
+                          ? `Buy ${sym}`
+                          : `Sell ${sym}`}
               </Text>}
         </LinearGradient>
       </TouchableOpacity>
