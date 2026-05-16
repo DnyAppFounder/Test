@@ -281,7 +281,7 @@ export class ReferralService {
       const { count, error } = await supabase
         .from('user_rewards')
         .select('id', { count: 'exact', head: true })
-        .eq('reason', 'early_user_signup');
+        .eq('reason', 'early_user_first_100');
       if (error) return false;
       return (count ?? 0) >= 100;
     } catch {
