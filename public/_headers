@@ -9,3 +9,12 @@
 /room-builder/Builds.data.br
   Content-Encoding: br
   Content-Type: application/octet-stream
+
+/room-builder/Builds.wasm
+  Content-Type: application/wasm
+
+/room-builder/Builds.framework.js
+  Content-Type: application/javascript
+
+/room-builder/Builds.data
+  Content-Type: application/octet-stream

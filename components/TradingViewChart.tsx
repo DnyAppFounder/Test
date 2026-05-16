@@ -1458,39 +1458,51 @@ export function TradingViewChart({
 
           {/* ── BAR ───────────────────────────────────────────────────────── */}
           {mode === 'bar' && displayCandles.map((c, i) => {
-            // Skip carry-forward (volume=0) candles — they have identical OHLC values
-            // and would render as a single horizontal tick with no wick, looking wrong.
             if (c.volume === 0) return null;
-            const up   = c.close >= c.open;
-            const col  = up ? '#8B5CF6' : '#EC4899';
-            const cx   = xOf(i);
-            // Use the same stable bucket pixel width as candleW for consistent tick size
-            const bw   = Math.max(isMobile ? 4 : 2, pixelPerBucket * 0.45);
+            const up  = c.close >= c.open;
+            const col = up ? '#8B5CF6' : '#EC4899';
+            const cx  = xOf(i);
+            const bw  = Math.max(isMobile ? 5 : 3, pixelPerBucket * 0.5);
+            const sw  = isMobile ? 1.5 : 1;
             return (
               <G key={`bar${c.timestamp}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.8} />
-                <Line x1={cx - bw / 2} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
-                <Line x1={cx}          y1={yOf(c.close)} x2={cx + bw / 2} y2={yOf(c.close)} stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
+                {/* vertical wick: high → low */}
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={sw} />
+                {/* left tick: open */}
+                <Line x1={cx - bw} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={sw} />
+                {/* right tick: close */}
+                <Line x1={cx} y1={yOf(c.close)} x2={cx + bw} y2={yOf(c.close)} stroke={col} strokeWidth={sw} />
               </G>
             );
           })}
 
           {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
           {mode === 'candlestick' && displayCandles.map((c, i) => {
-            // Skip carry-forward (volume=0) flat candles — open=high=low=close
-            // means zero-body/wick, which renders as noise dots across the chart.
             if (c.volume === 0) return null;
-            const up       = c.close >= c.open;
-            const col      = up ? '#8B5CF6' : '#EC4899';
-            const bodyTop  = yOf(Math.max(c.open, c.close));
-            const bodyBot  = yOf(Math.min(c.open, c.close));
-            const bodyH    = Math.max(1.5, bodyBot - bodyTop);
-            const cx       = xOf(i);
+            const up      = c.close >= c.open;
+            const col     = up ? '#8B5CF6' : '#EC4899';
+            const cx      = xOf(i);
+            const wickW   = isMobile ? 1.5 : 1;
+            const bodyTop = yOf(Math.max(c.open, c.close));
+            const bodyBot = yOf(Math.min(c.open, c.close));
+            const rawH    = bodyBot - bodyTop;
+            const isDoji  = rawH < 1;
             return (
               <G key={`cs${c.timestamp}`}>
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={isMobile ? 2 : 1} opacity={0.8} />
-                <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
-                  fill={col} opacity={0.9} rx={1} />
+                {/* wick drawn behind body */}
+                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
+                {isDoji ? (
+                  /* doji: horizontal line at close price */
+                  <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
+                    stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
+                ) : (
+                  /* solid body — no rounded corners, no opacity */
+                  <Rect
+                    x={cx - candleW / 2} y={bodyTop}
+                    width={candleW} height={Math.max(1, rawH)}
+                    fill={col}
+                  />
+                )}
               </G>
             );
           })}
