@@ -276,15 +276,15 @@ Deno.serve(async (req: Request) => {
     }
 
     // Atomic lock — only succeeds if status is still 'ready'
-    const { error: lockErr, count } = await db
+    const { error: lockErr, data: lockData } = await db
       .from("user_rewards")
       .update({ status: "claiming", updated_at: new Date().toISOString() })
       .eq("id", reward_id)
       .eq("status", "ready")
-      .select("id", { count: "exact", head: true });
+      .select("id");
 
     if (lockErr) throw lockErr;
-    if (!count || count === 0) {
+    if (!lockData || lockData.length === 0) {
       return new Response(
         JSON.stringify({ success: false, error: "Reward is being claimed or already sent" }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
