@@ -296,6 +296,10 @@ export function TradingViewChart({
   const prevMintRef   = useRef<string | undefined>(undefined);
   // Prevents duplicate auto-scroll; reset on every token or timeframe change.
   const hasAutoScrolledRef = useRef(false);
+  // Tracks current timeframe inside callbacks without stale closure.
+  const timeframeRef  = useRef<TimeFrame | 'ALL'>('1H');
+  // Tracks last external price pushed to applyLivePrice to avoid redundant calls.
+  const prevExternalPriceRef = useRef<number>(0);
 
   // Live time engine refs — updated every second to slide chart forward in real time
   const [clockTick, setClockTick] = useState(0);
@@ -307,6 +311,7 @@ export function TradingViewChart({
   useEffect(() => { livePriceRef.current = livePrice; }, [livePrice]);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
   useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
+  useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
 
   // Resolve best pair address from DexScreener when token mint changes
   useEffect(() => {
@@ -375,14 +380,36 @@ export function TradingViewChart({
           if (!silent) return data;
           if (prev.length === 0) return data;
           const lp = livePriceRef.current;
-          if (lp == null) return data;
-          const merged = [...data];
-          const last = { ...merged[merged.length - 1] };
-          last.close = lp;
-          last.high  = Math.max(last.high, lp);
-          last.low   = Math.min(last.low, lp);
-          merged[merged.length - 1] = last;
-          return merged;
+          if (lp == null || lp <= 0) return data;
+          // Only patch API's last candle if it is the current active bucket.
+          // If the API returned only closed candles, applyLivePrice already appended
+          // a synthetic active-bucket candle — do not overwrite or revert it.
+          const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
+          const activeBucketStart = Math.floor(Date.now() / bMs) * bMs;
+          const apiLast = data[data.length - 1];
+          const apiLastBucket = Math.floor(apiLast.timestamp / bMs) * bMs;
+          if (apiLastBucket >= activeBucketStart) {
+            // API returned the active bucket — safe to apply live price to it
+            const merged = [...data];
+            const last = { ...merged[merged.length - 1] };
+            last.close = lp;
+            last.high  = Math.max(last.high, lp);
+            last.low   = Math.min(last.low, lp);
+            merged[merged.length - 1] = last;
+            return merged;
+          }
+          // API only returned closed candles; check if prev already has a synthetic
+          // active-bucket candle appended by applyLivePrice — if so, preserve it.
+          if (prev.length > 0) {
+            const prevLast = prev[prev.length - 1];
+            const prevLastBucket = Math.floor(prevLast.timestamp / bMs) * bMs;
+            if (prevLastBucket >= activeBucketStart) {
+              // Re-apply latest live price to the synthetic candle in case it drifted
+              const synth = { ...prevLast, close: lp, high: Math.max(prevLast.high, lp), low: Math.min(prevLast.low, lp) };
+              return [...data, synth];
+            }
+          }
+          return data;
         });
         setHasData(true);
       } else {
@@ -402,7 +429,9 @@ export function TradingViewChart({
     }
   }, [tokenMint]);
 
-  // Apply a live price update to state — updates last candle in-place and pushes to shared store
+  // Apply a live price update — only mutates the ACTIVE (current) bucket.
+  // If the last candle is a closed historical bucket, a synthetic live candle is appended.
+  // Historical candles are NEVER modified.
   const applyLivePrice = useCallback((price: number) => {
     if (!price || price <= 0) return;
     const prev = livePriceRef.current;
@@ -410,18 +439,37 @@ export function TradingViewChart({
     livePriceRef.current = price;
     setLivePrice(price);
     if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
+
+    const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
+    const activeBucketStart = Math.floor(Date.now() / bMs) * bMs;
+
     setCandles(cs => {
       if (!cs.length) return cs;
       const last = cs[cs.length - 1];
-      if (last.close === price) return cs;
-      const updated = [...cs];
-      updated[updated.length - 1] = {
-        ...last,
+      const lastBucketStart = Math.floor(last.timestamp / bMs) * bMs;
+
+      if (lastBucketStart >= activeBucketStart) {
+        // Active bucket — update in-place; guard against no-op
+        if (last.close === price && last.high >= price && last.low <= price) return cs;
+        const updated = [...cs];
+        updated[updated.length - 1] = {
+          ...last,
+          close: price,
+          high:  Math.max(last.high, price),
+          low:   Math.min(last.low, price),
+        };
+        return updated;
+      }
+      // Closed historical bucket — append a synthetic live candle; never mutate history
+      console.log(`[LiveSync] append synthetic candle tf=${timeframeRef.current} bucket=${new Date(activeBucketStart).toISOString()} price=${price}`);
+      return [...cs, {
+        timestamp: activeBucketStart,
+        open:  last.close,
+        high:  Math.max(last.close, price),
+        low:   Math.min(last.close, price),
         close: price,
-        high:  Math.max(last.high, price),
-        low:   Math.min(last.low, price),
-      };
-      return updated;
+        volume: 0,
+      }];
     });
   }, [tokenMint]);
 
@@ -561,6 +609,18 @@ export function TradingViewChart({
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, [tokenMint, applyLivePrice]);
+
+  // External price sync: when the parent's tokenInfo.price updates (e.g. liveTokenStore 10s poll),
+  // push it into applyLivePrice so the chart tip, bubble, and header all stay in sync.
+  // Deduplicated by prevExternalPriceRef to avoid unnecessary renders.
+  useEffect(() => {
+    const externalPrice = resolvedInfo?.price;
+    if (!externalPrice || externalPrice <= 0) return;
+    if (externalPrice === prevExternalPriceRef.current) return;
+    console.log(`[LiveSync] external price update: ${externalPrice} (prev=${prevExternalPriceRef.current})`);
+    prevExternalPriceRef.current = externalPrice;
+    applyLivePrice(externalPrice);
+  }, [resolvedInfo?.price, applyLivePrice]);
 
   // Auto-scroll: after first data load, if all candles fall before the current
   // visible window (token hasn't traded recently), pan back so the last real
@@ -882,12 +942,13 @@ export function TradingViewChart({
   const sym              = resolvedInfo?.symbol ?? 'TOKEN';
   const contractAddr     = resolvedInfo?.address ?? tokenMint ?? '';
   const shortContractAddr = contractAddr ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}` : '';
-  // Single source of truth: latest real close from candles (updated by applyLivePrice).
-  // Never use livePrice state directly for display — applyLivePrice keeps candles in sync.
+  // livePrice is set by applyLivePrice (WS, REST poll, and external sync) and is always
+  // the freshest known price. Use it as primary; fall back to candle close, then prop.
+  // livePrice is reset to null on token change so stale values never bleed across tokens.
   const latestClose     = candles.length > 0 ? candles[candles.length - 1].close : 0;
-  const displayPriceVal = latestClose > 0 ? latestClose
-    : (livePrice != null && livePrice > 0 ? livePrice : 0)
-    || (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
+  const displayPriceVal = (livePrice != null && livePrice > 0) ? livePrice
+    : latestClose > 0 ? latestClose
+    : (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
   const mcapVal    = resolvedInfo?.marketCap ?? null;
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
