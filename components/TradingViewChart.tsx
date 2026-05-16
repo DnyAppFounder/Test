@@ -269,7 +269,12 @@ export function TradingViewChart({
   const panOffsetRef       = useRef(0);
   const plotWRef           = useRef(0);
   const panStartOffsetRef  = useRef(0);
-  const isPanScrollRef     = useRef(false);
+  // Three-state gesture tracker: 'idle' → 'crosshair' (tap/longpress) or 'pan' (horizontal drag).
+  // Once a mode is chosen it stays locked until touch is released.
+  const gestureModeRef     = useRef<'idle' | 'crosshair' | 'pan'>('idle');
+  const touchStartXRef     = useRef(0);
+  const touchStartYRef     = useRef(0);
+  const touchStartTimeRef  = useRef(0);
 
   // Stable price scale — recomputed only when visible candle set changes, NOT on every clock tick.
   // This prevents the Y axis from jumping during horizontal time animation.
@@ -749,53 +754,91 @@ export function TradingViewChart({
   };
 
   const applyTouchToCrosshair = (pageX: number, pageY: number) => {
-    svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
-      svgOffsetRef.current = { x: px, y: py };
-      updateCrosshairAt(pageX - px, pageY - py);
-    });
+    // On web use cached getBoundingClientRect offset (already stored by onMouseMove/onLayout).
+    // On native use async measure and update the cached offset.
+    if (Platform.OS === 'web') {
+      const webEl = svgContainerRef.current as any;
+      if (webEl?.getBoundingClientRect) {
+        const rect = webEl.getBoundingClientRect();
+        svgOffsetRef.current = { x: rect.left, y: rect.top };
+      }
+      updateCrosshairAt(pageX - svgOffsetRef.current.x, pageY - svgOffsetRef.current.y);
+    } else {
+      svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
+        svgOffsetRef.current = { x: px, y: py };
+        updateCrosshairAt(pageX - px, pageY - py);
+      });
+    }
   };
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: (e) => {
-        panStartOffsetRef.current = panOffsetRef.current;
-        isPanScrollRef.current = false;
-        // Show crosshair immediately on touch
-        applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
-      },
-      onPanResponderMove: (e, gestureState) => {
-        const adx = Math.abs(gestureState.dx);
-        const ady = Math.abs(gestureState.dy);
 
-        if (!isPanScrollRef.current && adx > 10 && adx > ady * 1.5) {
-          isPanScrollRef.current = true;
-          setCrosshair(null);
+      onPanResponderGrant: (e) => {
+        panStartOffsetRef.current  = panOffsetRef.current;
+        gestureModeRef.current     = 'idle';
+        touchStartXRef.current     = e.nativeEvent.pageX;
+        touchStartYRef.current     = e.nativeEvent.pageY;
+        touchStartTimeRef.current  = Date.now();
+        // Do NOT show crosshair on grant — wait until we know intent (tap vs pan).
+      },
+
+      onPanResponderMove: (e, gestureState) => {
+        const adx     = Math.abs(gestureState.dx);
+        const ady     = Math.abs(gestureState.dy);
+        const elapsed = Date.now() - touchStartTimeRef.current;
+
+        // — Determine gesture intent once, then lock for the rest of the touch ——
+        if (gestureModeRef.current === 'idle') {
+          if (adx > 12 && adx > ady * 1.8) {
+            // Strong horizontal drag → pan mode. Never re-enter crosshair this touch.
+            gestureModeRef.current = 'pan';
+            setCrosshair(null);
+          } else if (elapsed > 200 && adx < 8 && ady < 8) {
+            // Long-press with minimal movement → crosshair mode.
+            gestureModeRef.current = 'crosshair';
+            applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+          }
+          // else: still undecided, do nothing until threshold is met
+          return;
         }
 
-        if (isPanScrollRef.current) {
-          const pw = plotWRef.current;
-          // Use stable bucket pixel width — independent of how many carry-forward
-          // candles are in the current window, so panning speed is consistent.
+        // — Crosshair mode: ONLY update crosshair, never pan ————————————————
+        if (gestureModeRef.current === 'crosshair') {
+          applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+          return;
+        }
+
+        // — Pan mode: ONLY move the chart window ————————————————————————————
+        if (gestureModeRef.current === 'pan') {
+          const pw   = plotWRef.current;
           const visibleBucketCount = Math.max(1, visibleMsRef.current / (bucketMsRef.current || 1));
           const candlePx = pw / visibleBucketCount;
           // drag right (dx > 0) = scroll back in time = increase offset
-          // drag left  (dx < 0) = scroll forward in time = decrease offset
           const deltaCandles = Math.round(gestureState.dx / candlePx);
-          const maxBack = Math.max(0, candlesRef.current.length + 20);
-          const newOffset = Math.max(
-            0,
-            Math.min(maxBack, panStartOffsetRef.current + deltaCandles)
-          );
+          // Clamp: forward limit = live (0), backward limit = 1 window past oldest candle.
+          const oldestTs  = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
+          const msToOldest = Math.max(0, Date.now() - oldestTs);
+          const maxBack   = Math.floor(msToOldest / (bucketMsRef.current || 1)) + Math.floor(visibleMsRef.current / (bucketMsRef.current || 1));
+          const newOffset = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
           panOffsetRef.current = newOffset;
           setPanOffsetCandles(newOffset);
-        } else {
-          applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
         }
       },
-      onPanResponderRelease: () => {
-        isPanScrollRef.current = false;
+
+      onPanResponderRelease: (e) => {
+        const totalMovement = Math.hypot(
+          e.nativeEvent.pageX - touchStartXRef.current,
+          e.nativeEvent.pageY - touchStartYRef.current
+        );
+        const elapsed = Date.now() - touchStartTimeRef.current;
+        // Tap detection: minimal movement, short press, no prior mode lock → show crosshair
+        if (gestureModeRef.current === 'idle' && totalMovement < 10 && elapsed < 600) {
+          applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+        }
+        gestureModeRef.current = 'idle';
       },
     })
   ).current;
@@ -1057,24 +1100,44 @@ export function TradingViewChart({
     );
   }
 
-  // Guard: if all candles fall outside the current visible window (brief race
-  // after auto-scroll fires, or user panned past all data), render a safe fallback.
+  // Guard: if displayCandles is empty but we have raw candle history, the visible
+  // window has drifted outside the loaded data range (e.g. brief state-update race
+  // after auto-scroll fires, or the user scrolled past the clamped maximum — which
+  // shouldn't happen but is guarded anyway). Auto-correct the offset so the last
+  // real candle is near the right side of the visible window, rather than showing a
+  // confusing "No data" message for data that genuinely exists.
+  if (n === 0 && candles.length > 0) {
+    const bMs         = BUCKET_MS[timeframe] ?? 3_600_000;
+    const vB          = VISIBLE_BUCKETS[timeframe] ?? 48;
+    const lastTs      = candles[candles.length - 1].timestamp;
+    const targetRight = lastTs + bMs * Math.floor(vB * 0.1);
+    const msBehind    = Date.now() - targetRight;
+    const corrected   = Math.max(0, Math.round(msBehind / bMs));
+    if (corrected !== panOffsetCandles) {
+      // Defer to avoid render loop — this fires at most once per bad state
+      setTimeout(() => {
+        panOffsetRef.current = corrected;
+        setPanOffsetCandles(corrected);
+      }, 0);
+    }
+    // Show spinner briefly while the offset corrects
+    return (
+      <View style={styles.container}>
+        {header}
+        <View style={[styles.loadingWrap, { height: CHART_H }]}>
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
+      </View>
+    );
+  }
+
+  // True no-data: we have zero candles and zero raw data for this range.
   if (n === 0) {
     return (
       <View style={styles.container}>
         {header}
         <View style={[styles.unavailableWrap, { height: CHART_H }]}>
-          <Text style={styles.unavailableText}>
-            {panOffsetCandles > 0 ? 'No data in this range' : 'No chart data in visible range'}
-          </Text>
-          {panOffsetCandles > 0 && (
-            <TouchableOpacity
-              style={[styles.returnLiveBtn, { marginTop: 10 }]}
-              onPress={() => { panOffsetRef.current = 0; setPanOffsetCandles(0); setCrosshair(null); }}
-            >
-              <Text style={styles.returnLiveText}>Return to Live</Text>
-            </TouchableOpacity>
-          )}
+          <Text style={styles.unavailableText}>No chart data available for this timeframe</Text>
         </View>
       </View>
     );
