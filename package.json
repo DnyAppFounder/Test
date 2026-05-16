@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "EXPO_NO_TELEMETRY=1 expo start",
-    "build:web": "expo export --platform web",
+    "build:web": "expo export --platform web && cp public/_headers dist/_headers && cp public/_redirects dist/_redirects && cp -r public/room-builder/. dist/room-builder/ && cp -r public/avatar-gen/. dist/avatar-gen/",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit"
   },
