@@ -50,6 +50,8 @@ import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TokenAboutCard } from '@/components/TokenAboutCard';
+import { TokenPositionPanel } from '@/components/TokenPositionPanel';
+import { SocialService } from '@/services/socialService';
 import {
   resolveAddressLabel,
   batchResolveOwnerPrograms,
@@ -99,6 +101,12 @@ export default function TokenDetailScreen() {
   const [holdersLoading, setHoldersLoading] = useState(false);
   const [totalSupply, setTotalSupply] = useState<number>(0);
   const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
+
+  // Share to Pulse
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareText, setShareText] = useState('');
+  const [sharePosting, setSharePosting] = useState(false);
+  const [shareSuccess, setShareSuccess] = useState(false);
 
   // Price alerts
   const [showAlertsModal, setShowAlertsModal] = useState(false);
@@ -247,6 +255,33 @@ export default function TokenDetailScreen() {
       setSharedToken(true);
       setTimeout(() => setSharedToken(false), 2000);
     } catch {}
+  };
+
+  const postToPulse = async () => {
+    if (!profile || !token || sharePosting) return;
+    setSharePosting(true);
+    try {
+      const postContent = shareText.trim()
+        ? `${shareText.trim()}\n\n${token.symbol?.toUpperCase() ?? ''} — check it out on DAWEN`
+        : `${token.symbol?.toUpperCase() ?? ''} — check it out on DAWEN`;
+      await SocialService.createPost(profile.id, postContent, {
+        tokenAddress: token.address,
+        tokenSymbol: token.symbol ?? '',
+        tokenPrice: token.price,
+        tokenChange24h: token.priceChange24h,
+        tokenLogoUri: token.image,
+      });
+      setShareSuccess(true);
+      setShareText('');
+      setTimeout(() => {
+        setShareSuccess(false);
+        setShowShareModal(false);
+      }, 1500);
+    } catch (e) {
+      console.warn('[TokenDetail] postToPulse error:', e);
+    } finally {
+      setSharePosting(false);
+    }
   };
 
   const checkWatchlistStatus = async () => {
@@ -435,11 +470,11 @@ export default function TokenDetailScreen() {
         </TouchableOpacity>
         <View style={styles.topBarRight}>
           <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => setActiveBottomTab('chat')}
+            style={[styles.iconBtn, shareSuccess && styles.iconBtnActive]}
+            onPress={() => setShowShareModal(true)}
             activeOpacity={0.7}
           >
-            <MessageSquare size={16} color={activeBottomTab === 'chat' ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
+            <MessageSquare size={16} color={shareSuccess ? '#A78BFA' : colors.textMuted} strokeWidth={2} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.iconBtn, sharedToken && styles.iconBtnActive]}
@@ -551,6 +586,16 @@ export default function TokenDetailScreen() {
             />
           </ErrorBoundary>
         </View>
+
+        {/* Token position */}
+        <TokenPositionPanel
+          rawTokenBalance={tokenBalance}
+          tokenDecimals={9}
+          tokenPrice={token.price}
+          tokenSymbol={token.symbol ?? ''}
+          totalSupply={totalSupply > 0 ? totalSupply : undefined}
+          activeAddress={activeAddress}
+        />
 
         {/* Stats row */}
         <View style={styles.statsRow}>
@@ -747,6 +792,73 @@ export default function TokenDetailScreen() {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+
+      {/* Share to Dawen Pulse Modal */}
+      <Modal visible={showShareModal} animationType="slide" transparent onRequestClose={() => setShowShareModal(false)}>
+        <View style={shareStyles.overlay}>
+          <View style={shareStyles.sheet}>
+            <View style={shareStyles.handle} />
+            <View style={shareStyles.header}>
+              <MessageSquare size={18} color={colors.primary} strokeWidth={2} />
+              <Text style={shareStyles.title}>Share to Dawen Pulse</Text>
+              <TouchableOpacity onPress={() => setShowShareModal(false)} activeOpacity={0.7}>
+                <X size={20} color={colors.textPrimary} strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Token preview card */}
+            <View style={shareStyles.tokenCard}>
+              {token.image ? (
+                <Image source={{ uri: token.image }} style={shareStyles.tokenLogo} />
+              ) : (
+                <View style={shareStyles.tokenLogoFallback}>
+                  <Text style={shareStyles.tokenLogoText}>{(token.symbol ?? '??').slice(0, 2).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={shareStyles.tokenCardInfo}>
+                <Text style={shareStyles.tokenCardName}>{token.name}</Text>
+                <Text style={shareStyles.tokenCardSymbol}>{token.symbol?.toUpperCase()}</Text>
+              </View>
+              <View style={shareStyles.tokenCardPrice}>
+                <Text style={shareStyles.tokenCardPriceVal}>${fmtTokenPrice(token.price)}</Text>
+                <Text style={[shareStyles.tokenCardChange, { color: (token.priceChange24h ?? 0) >= 0 ? '#14F195' : '#FF4D4F' }]}>
+                  {(token.priceChange24h ?? 0) >= 0 ? '+' : ''}{(token.priceChange24h ?? 0).toFixed(2)}%
+                </Text>
+              </View>
+            </View>
+
+            {/* Compose */}
+            <TextInput
+              style={shareStyles.composeInput}
+              placeholder="Add a comment... (optional)"
+              placeholderTextColor={colors.textMuted}
+              value={shareText}
+              onChangeText={setShareText}
+              multiline
+              maxLength={280}
+            />
+
+            <TouchableOpacity
+              style={[shareStyles.postBtn, (sharePosting || shareSuccess) && shareStyles.postBtnDisabled]}
+              onPress={postToPulse}
+              disabled={sharePosting || shareSuccess}
+              activeOpacity={0.8}
+            >
+              {sharePosting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : shareSuccess ? (
+                <CheckCircle2 size={18} color="#fff" strokeWidth={2} />
+              ) : (
+                <Text style={shareStyles.postBtnText}>Post to Pulse</Text>
+              )}
+            </TouchableOpacity>
+
+            {!profile && (
+              <Text style={shareStyles.loginHint}>Connect wallet to post</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* Price Alerts Modal */}
       <Modal visible={showAlertsModal} animationType="slide" transparent onRequestClose={() => setShowAlertsModal(false)}>
@@ -1400,4 +1512,71 @@ const alertStyles = StyleSheet.create({
   alertText: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
   deleteBtn: { padding: 6 },
   emptyText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center', paddingVertical: 20 },
+});
+
+const shareStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: spacing.xl,
+    paddingBottom: 40,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    gap: spacing.lg,
+  },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.2)', alignSelf: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  title: { flex: 1, fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
+  tokenCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0A0A0F',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  tokenLogo: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#1A1A28' },
+  tokenLogoFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  tokenLogoText: { fontSize: 14, fontWeight: '900', color: colors.primary },
+  tokenCardInfo: { flex: 1, gap: 2 },
+  tokenCardName: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  tokenCardSymbol: { fontSize: fontSize.xs, fontWeight: '600', color: colors.textMuted },
+  tokenCardPrice: { alignItems: 'flex-end', gap: 2 },
+  tokenCardPriceVal: { fontSize: fontSize.sm, fontWeight: '800', color: colors.textPrimary },
+  tokenCardChange: { fontSize: fontSize.xs, fontWeight: '700' },
+  composeInput: {
+    backgroundColor: '#0A0A0F',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 12,
+    fontSize: fontSize.md,
+    color: colors.textPrimary,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  postBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  postBtnDisabled: { opacity: 0.45 },
+  postBtnText: { fontSize: fontSize.md, fontWeight: '800', color: '#fff' },
+  loginHint: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center' },
 });

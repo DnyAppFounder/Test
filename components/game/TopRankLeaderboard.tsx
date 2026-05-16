@@ -4,6 +4,7 @@ import {
   Image, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { Trophy, Star, Swords, TrendingUp } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { getLeaderboard } from '@/services/game/duelEntryService';
 
@@ -26,6 +27,7 @@ function fmtSol(n: number): string {
 }
 
 export function TopRankLeaderboard() {
+  const router = useRouter();
   const [sort, setSort] = useState<RankSort>('score');
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,8 +112,14 @@ export function TopRankLeaderboard() {
           {rows.map((row, i) => {
             const medal = rankMedal(i);
             const displayName = row.username || shortAddr(row.wallet_address);
+            const profileId = row.id || row.wallet_address;
             return (
-              <View key={row.wallet_address} style={[styles.row, i === 0 && styles.rowTop]}>
+              <TouchableOpacity
+                key={row.wallet_address || row.id || i}
+                style={[styles.row, i === 0 && styles.rowTop]}
+                activeOpacity={0.75}
+                onPress={() => profileId && router.push(`/profile/${profileId}` as any)}
+              >
                 {/* Rank */}
                 <View style={styles.rankCell}>
                   {medal ? (
@@ -168,7 +176,7 @@ export function TopRankLeaderboard() {
                     </>
                   )}
                 </View>
-              </View>
+              </TouchableOpacity>
             );
           })}
           <View style={{ height: 32 }} />

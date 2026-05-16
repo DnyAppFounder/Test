@@ -118,6 +118,28 @@ export interface Message {
   created_at: string;
   sender?: UserProfile;
   receiver?: UserProfile;
+  media_url?: string;
+  media_type?: 'image' | 'video';
+  media_thumbnail_url?: string;
+}
+
+export interface GroupTopic {
+  id: string;
+  group_id: string;
+  name: string;
+  created_by: string;
+  is_default: boolean;
+  created_at: string;
+}
+
+export interface GroupPin {
+  id: string;
+  group_id: string;
+  message_id: string;
+  pinned_by: string;
+  pinned_at: string;
+  message?: any;
+  pinned_by_profile?: UserProfile;
 }
 
 export interface Conversation {
@@ -1517,5 +1539,158 @@ export class SocialService {
     } catch {
       return [];
     }
+  }
+
+  // ─── Media Messages (DM) ──────────────────────────────────────────────────
+
+  static async sendMessageWithMedia(
+    senderId: string,
+    receiverId: string,
+    content: string,
+    mediaUrl?: string,
+    mediaType?: 'image' | 'video',
+  ): Promise<Message | null> {
+    const payload: any = { sender_id: senderId, receiver_id: receiverId, content };
+    if (mediaUrl) { payload.media_url = mediaUrl; payload.media_type = mediaType ?? 'image'; }
+    const { data } = await supabase.from('messages').insert(payload).select().maybeSingle();
+    return data as Message | null;
+  }
+
+  static async uploadChatMedia(
+    file: { uri: string; type: string; name: string },
+    bucket = 'post-media',
+  ): Promise<string | null> {
+    try {
+      const ext = file.name.split('.').pop() ?? 'jpg';
+      const path = `chat/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const resp = await fetch(file.uri);
+      const blob = await resp.blob();
+      const { error } = await supabase.storage.from(bucket).upload(path, blob, {
+        contentType: file.type,
+        upsert: false,
+      });
+      if (error) { console.warn('[SocialService] uploadChatMedia error:', error); return null; }
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data.publicUrl;
+    } catch (e) {
+      console.warn('[SocialService] uploadChatMedia exception:', e);
+      return null;
+    }
+  }
+
+  // ─── Group Topics ─────────────────────────────────────────────────────────
+
+  static async getGroupTopics(groupId: string): Promise<GroupTopic[]> {
+    const { data } = await supabase
+      .from('group_topics')
+      .select('*')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: true });
+    return (data as GroupTopic[]) ?? [];
+  }
+
+  static async createGroupTopic(groupId: string, name: string, creatorId: string): Promise<GroupTopic | null> {
+    const { data } = await supabase
+      .from('group_topics')
+      .insert({ group_id: groupId, name, created_by: creatorId, is_default: false })
+      .select()
+      .maybeSingle();
+    return data as GroupTopic | null;
+  }
+
+  static async ensureDefaultTopic(groupId: string, creatorId: string): Promise<GroupTopic | null> {
+    const { data: existing } = await supabase
+      .from('group_topics')
+      .select('*')
+      .eq('group_id', groupId)
+      .eq('is_default', true)
+      .maybeSingle();
+    if (existing) return existing as GroupTopic;
+    const { data } = await supabase
+      .from('group_topics')
+      .insert({ group_id: groupId, name: 'General', created_by: creatorId, is_default: true })
+      .select()
+      .maybeSingle();
+    return data as GroupTopic | null;
+  }
+
+  static async renameGroupTopic(topicId: string, name: string): Promise<boolean> {
+    const { error } = await supabase.from('group_topics').update({ name, updated_at: new Date().toISOString() }).eq('id', topicId);
+    return !error;
+  }
+
+  static async deleteGroupTopic(topicId: string): Promise<boolean> {
+    const { error } = await supabase.from('group_topics').delete().eq('id', topicId).eq('is_default', false);
+    return !error;
+  }
+
+  // ─── Group Pins ───────────────────────────────────────────────────────────
+
+  static async getGroupPins(groupId: string): Promise<GroupPin[]> {
+    const { data } = await supabase
+      .from('group_pins')
+      .select('*, message:group_messages(*)')
+      .eq('group_id', groupId)
+      .order('pinned_at', { ascending: false })
+      .limit(5);
+    return (data as GroupPin[]) ?? [];
+  }
+
+  static async pinMessage(groupId: string, messageId: string, pinnedBy: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_pins')
+      .insert({ group_id: groupId, message_id: messageId, pinned_by: pinnedBy });
+    return !error;
+  }
+
+  static async unpinMessage(pinId: string): Promise<boolean> {
+    const { error } = await supabase.from('group_pins').delete().eq('id', pinId);
+    return !error;
+  }
+
+  // ─── Group Members (admin) ────────────────────────────────────────────────
+
+  static async isGroupCreator(groupId: string, userId: string): Promise<boolean> {
+    const { data } = await supabase
+      .from('group_conversations')
+      .select('creator_id')
+      .eq('id', groupId)
+      .maybeSingle();
+    return (data as any)?.creator_id === userId;
+  }
+
+  static async addGroupMember(groupId: string, userId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_members')
+      .insert({ group_id: groupId, user_id: userId });
+    return !error;
+  }
+
+  static async removeGroupMember(groupId: string, userId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_members')
+      .delete()
+      .eq('group_id', groupId)
+      .eq('user_id', userId);
+    return !error;
+  }
+
+  // ─── Group Messages with media + topic ───────────────────────────────────
+
+  static async sendGroupMessageFull(
+    groupId: string,
+    senderId: string,
+    content: string,
+    topicId?: string,
+    mediaUrl?: string,
+    mediaType?: 'image' | 'video',
+  ): Promise<boolean> {
+    try {
+      const payload: any = { group_id: groupId, sender_id: senderId, content };
+      if (topicId) payload.topic_id = topicId;
+      if (mediaUrl) { payload.media_url = mediaUrl; payload.media_type = mediaType ?? 'image'; }
+      const { error } = await supabase.from('group_messages').insert(payload);
+      return !error;
+    } catch { return false; }
   }
 }

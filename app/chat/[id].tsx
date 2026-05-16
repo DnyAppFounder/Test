@@ -14,7 +14,8 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send, Plus, Check, User } from 'lucide-react-native';
+import { ArrowLeft, Phone, Video, MoveHorizontal as MoreHorizontal, Smile, Send, Image as ImageIcon, Check, User } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, Message, UserProfile } from '@/services/socialService';
@@ -83,6 +84,8 @@ export default function ChatScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id, otherId]);
 
+  const [uploading, setUploading] = useState(false);
+
   const send = async () => {
     const text = input.trim();
     if (!text || !profile || !otherId || sending) return;
@@ -109,6 +112,49 @@ export default function ChatScreen() {
       setMessages(prev => prev.filter(m => m.id !== optimistic.id));
     } finally {
       setSending(false);
+    }
+  };
+
+  const pickAndSendImage = async () => {
+    if (!profile || !otherId || uploading) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setUploading(true);
+    const optimistic: Message = {
+      id: `opt-img-${Date.now()}`,
+      sender_id: profile.id,
+      receiver_id: otherId,
+      content: '',
+      media_url: asset.uri,
+      media_type: 'image',
+      read: false,
+      created_at: new Date().toISOString(),
+      sender: profile,
+    };
+    setMessages(prev => [...prev, optimistic]);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+    try {
+      const ext = asset.uri.split('.').pop() ?? 'jpg';
+      const publicUrl = await SocialService.uploadChatMedia({
+        uri: asset.uri,
+        type: asset.mimeType ?? 'image/jpeg',
+        name: `photo.${ext}`,
+      });
+      if (!publicUrl) { setMessages(prev => prev.filter(m => m.id !== optimistic.id)); return; }
+      const sent = await SocialService.sendMessageWithMedia(profile.id, otherId, '', publicUrl, 'image');
+      if (sent) {
+        setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...sent, sender: profile } : m));
+      }
+    } catch (e) {
+      console.error('[Chat] pickAndSendImage error:', e);
+      setMessages(prev => prev.filter(m => m.id !== optimistic.id));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -140,7 +186,25 @@ export default function ChatScreen() {
           </View>
         )}
         <View style={[styles.bubbleWrap, mine ? styles.bubbleWrapRight : styles.bubbleWrapLeft]}>
-          {mine ? (
+          {item.media_url ? (
+            mine ? (
+              <View style={styles.imgBubbleMine}>
+                <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                <View style={[styles.bubbleMeta, { paddingHorizontal: 8, paddingBottom: 6 }]}>
+                  <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
+                  <View style={styles.readRow}>
+                    <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />
+                    <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} style={{ marginLeft: -5 }} />
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.imgBubbleOther}>
+                <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                <Text style={[styles.bubbleTimeOther, { paddingHorizontal: 8, paddingBottom: 6 }]}>{formatTime(item.created_at)}</Text>
+              </View>
+            )
+          ) : mine ? (
             <LinearGradient
               colors={['#8B5CF6', '#6D28D9']}
               start={{ x: 0, y: 0 }}
@@ -245,8 +309,12 @@ export default function ChatScreen() {
 
           {/* Input bar */}
           <View style={styles.inputBar}>
-            <TouchableOpacity style={styles.plusBtn} activeOpacity={0.8}>
-              <Plus size={22} color={colors.white} strokeWidth={2.5} />
+            <TouchableOpacity style={styles.plusBtn} activeOpacity={0.8} onPress={pickAndSendImage} disabled={uploading}>
+              {uploading ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <ImageIcon size={20} color={colors.white} strokeWidth={2.5} />
+              )}
             </TouchableOpacity>
 
             <View style={styles.inputWrap}>
@@ -470,6 +538,25 @@ const styles = StyleSheet.create({
   readRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  msgImage: {
+    width: 220,
+    height: 160,
+    borderRadius: 12,
+  },
+  imgBubbleMine: {
+    backgroundColor: 'transparent',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderBottomRightRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+  },
+  imgBubbleOther: {
+    backgroundColor: '#1E1E2E',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderBottomLeftRadius: 4,
   },
 
   inputBar: {
