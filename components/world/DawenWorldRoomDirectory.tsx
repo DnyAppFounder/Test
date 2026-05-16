@@ -12,7 +12,7 @@ import {
   saveRoomLayout, fetchRoomWithLayout,
 } from '@/services/worldService';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
-import { DawenRoomBuilder } from './DawenRoomBuilder';
+import { UnityRoomBuilder } from './UnityRoomBuilder';
 
 const VISIBILITY_ICON: Record<string, any> = {
   public: Globe, private: Lock, invite_only: UserCheck,
@@ -302,11 +302,12 @@ export function DawenWorldRoomDirectory({
         </View>
       </Modal>
 
-      {/* Room Builder — full-screen overlay */}
+      {/* Room Builder — full-screen overlay using Origins Room Builder (Unity WebGL) */}
       {builderOpen && builderRoom && (
         <View style={StyleSheet.absoluteFillObject}>
-          <DawenRoomBuilder
-            room={builderRoom}
+          <UnityRoomBuilder
+            roomName={builderRoom.name}
+            roomId={builderRoom.id}
             onSave={async (layout) => { await handleBuilderSave(layout); }}
             onCancel={handleBuilderCancel}
           />
