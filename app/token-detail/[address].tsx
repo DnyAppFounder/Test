@@ -50,6 +50,11 @@ import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TokenAboutCard } from '@/components/TokenAboutCard';
+import {
+  resolveAddressLabel,
+  batchResolveOwnerPrograms,
+  AddressLabel,
+} from '@/services/knownAddressResolver';
 
 type BottomTab = 'chat' | 'activity' | 'transactions' | 'holders';
 
@@ -85,7 +90,12 @@ export default function TokenDetailScreen() {
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [checkingWatchlist, setCheckingWatchlist] = useState(true);
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTab>('chat');
-  const [holders, setHolders] = useState<{ address: string; amount: number; uiAmount: number }[]>([]);
+  const [holders, setHolders] = useState<{
+    address: string;
+    amount: number;
+    uiAmount: number;
+    label: AddressLabel;
+  }[]>([]);
   const [holdersLoading, setHoldersLoading] = useState(false);
   const [totalSupply, setTotalSupply] = useState<number>(0);
   const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
@@ -303,17 +313,18 @@ export default function TokenDetailScreen() {
         rpc.rpcCall('getTokenLargestAccounts', [address, { commitment: 'confirmed' }]),
         rpc.rpcCall('getTokenSupply', [address, { commitment: 'confirmed' }]).catch(() => null),
       ]);
-      const accounts: any[] = result?.value ?? [];
+      const accounts: any[] = (result?.value ?? []).filter((a: any) => (a.uiAmount ?? 0) > 0);
       const supply = supplyResult?.value?.uiAmount ?? 0;
       setTotalSupply(supply);
+
+      console.log(`[Holders] mint=${address.slice(0, 8)} accounts=${accounts.length} supply=${supply}`);
 
       if (accounts.length === 0) {
         setHolders([]);
         return;
       }
 
-      // Resolve the OWNER wallet address from each token account (ATA).
-      // getTokenLargestAccounts returns token program account addresses, not wallet addresses.
+      // Step 1: Resolve owner wallet from each token account (ATA)
       const ataInfos = await rpc.batchRpcCall(
         accounts.map((a: any) => ({
           method: 'getAccountInfo',
@@ -321,19 +332,36 @@ export default function TokenDetailScreen() {
         }))
       ).catch(() => [] as any[]);
 
-      setHolders(accounts.map((a: any, i: number) => {
+      const ownerWallets: string[] = accounts.map((a: any, i: number) => {
         const info = ataInfos[i];
-        const ownerWallet: string =
-          info?.data?.parsed?.info?.owner ?? a.address;
+        return info?.data?.parsed?.info?.owner ?? a.address;
+      });
+
+      console.log(`[Holders] resolved ${ownerWallets.length} owner wallets`);
+
+      // Step 2: Resolve owner programs for each wallet (to label protocol PDAs)
+      const ownerProgramMap = await batchResolveOwnerPrograms(ownerWallets);
+      console.log(`[Holders] owner program map size: ${ownerProgramMap.size}`);
+
+      // Step 3: Build label for each holder
+      const resolved = accounts.map((a: any, i: number) => {
+        const wallet = ownerWallets[i];
+        const ownerProgram = ownerProgramMap.get(wallet);
+        const label = resolveAddressLabel(wallet, ownerProgram);
         return {
-          address: ownerWallet,
+          address: wallet,
           amount: Number(a.amount),
           uiAmount: a.uiAmount ?? 0,
+          label,
         };
-      }));
+      });
+
+      const protocolCount = resolved.filter(h => h.label.isKnownProtocol).length;
+      console.log(`[Holders] labeled ${protocolCount} protocol accounts`);
+
+      setHolders(resolved);
     } catch (e) {
       console.warn('[Holders] Failed to load holders:', e);
-      // Keep existing holders rather than clearing on network error
     } finally {
       setHoldersLoading(false);
     }
@@ -662,17 +690,40 @@ export default function TokenDetailScreen() {
               ) : (
                 holders.map((h, idx) => {
                   const pct = totalSupply > 0 ? (h.uiAmount / totalSupply) * 100 : 0;
-                  const shortH = `${h.address.slice(0, 6)}...${h.address.slice(-4)}`;
                   const isTop3 = idx < 3;
+                  const lbl = h.label;
+                  const barColor = isTop3
+                    ? (lbl.isKnownProtocol ? '#38BDF8' : colors.primary)
+                    : 'rgba(255,255,255,0.18)';
                   return (
-                    <View key={h.address} style={[styles.holderRow, idx < holders.length - 1 && styles.holderRowBorder]}>
+                    <View key={`${h.address}-${idx}`} style={[styles.holderRow, idx < holders.length - 1 && styles.holderRowBorder]}>
                       <View style={[styles.holderRank, isTop3 && styles.holderRankTop]}>
                         <Text style={[styles.holderRankText, isTop3 && styles.holderRankTextTop]}>#{idx + 1}</Text>
                       </View>
                       <View style={styles.holderInfo}>
-                        <Text style={styles.holderAddr}>{shortH}</Text>
+                        <View style={styles.holderNameRow}>
+                          <Text
+                            style={[
+                              styles.holderAddr,
+                              lbl.isKnownProtocol && styles.holderAddrProtocol,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {lbl.displayName}
+                          </Text>
+                          {lbl.badgeLabel && (
+                            <View style={[
+                              styles.holderBadge,
+                              lbl.type === 'bonding_curve' && styles.holderBadgePump,
+                              lbl.type === 'pool' && styles.holderBadgePool,
+                              lbl.type === 'protocol' && styles.holderBadgeProtocol,
+                            ]}>
+                              <Text style={styles.holderBadgeText}>{lbl.badgeLabel}</Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={styles.holderBar}>
-                          <View style={[styles.holderBarFill, { width: `${Math.min(100, pct)}%` as any, backgroundColor: isTop3 ? colors.primary : colors.textMuted }]} />
+                          <View style={[styles.holderBarFill, { width: `${Math.min(100, pct)}%` as any, backgroundColor: barColor }]} />
                         </View>
                       </View>
                       <View style={styles.holderRight}>
@@ -682,7 +733,7 @@ export default function TokenDetailScreen() {
                             : h.uiAmount >= 1e3 ? `${(h.uiAmount / 1e3).toFixed(1)}K`
                             : h.uiAmount.toFixed(2)}
                         </Text>
-                        <Text style={[styles.holderPct, { color: isTop3 ? colors.primary : colors.textMuted }]}>
+                        <Text style={[styles.holderPct, { color: isTop3 ? (lbl.isKnownProtocol ? '#38BDF8' : colors.primary) : colors.textMuted }]}>
                           {pct > 0 ? `${pct.toFixed(2)}%` : '—'}
                         </Text>
                       </View>
@@ -1246,6 +1297,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textPrimary,
     fontFamily: 'SpaceMono-Regular',
+    flexShrink: 1,
+  },
+  holderAddrProtocol: {
+    fontFamily: undefined,
+    color: '#38BDF8',
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  holderNameRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    flexWrap: 'nowrap' as const,
+  },
+  holderBadge: {
+    borderRadius: 4,
+    borderWidth: 1,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    flexShrink: 0,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  holderBadgePump: {
+    borderColor: 'rgba(34,197,94,0.4)',
+    backgroundColor: 'rgba(34,197,94,0.1)',
+  },
+  holderBadgePool: {
+    borderColor: 'rgba(56,189,248,0.4)',
+    backgroundColor: 'rgba(56,189,248,0.1)',
+  },
+  holderBadgeProtocol: {
+    borderColor: 'rgba(167,139,250,0.4)',
+    backgroundColor: 'rgba(167,139,250,0.1)',
+  },
+  holderBadgeText: {
+    fontSize: 8,
+    fontWeight: '700' as const,
+    color: 'rgba(255,255,255,0.6)',
+    letterSpacing: 0.3,
   },
   holderBar: {
     height: 3,

@@ -1,11 +1,16 @@
 import { SolanaConnectionService } from '@/services/solana/connectionService';
+import { detectTxProtocol, resolveAddressLabel } from '@/services/knownAddressResolver';
 
 export interface TokenTrade {
   id: string;
-  type: 'buy' | 'sell' | 'transfer' | 'liquidity';
+  type: 'buy' | 'sell' | 'transfer' | 'liquidity' | 'mint' | 'burn';
   walletAddress: string;
-  amount: number;
-  tokenAmount: number;
+  walletLabel: string;      // resolved display name (protocol or shortened wallet)
+  isProtocol: boolean;      // true when walletAddress is a known program/pool
+  protocolSource: string;   // e.g. "Pump.fun", "Raydium", "" for unknown
+  amount: number;           // USD value
+  tokenAmount: number;      // token UI units
+  solAmount: number;        // SOL change (positive = received, negative = sent)
   priceUsd: number;
   timestamp: number;
   txSignature: string;
@@ -18,14 +23,14 @@ interface CacheEntry {
 
 class TokenActivityService {
   private cache = new Map<string, CacheEntry>();
-  private readonly CACHE_DURATION = 20 * 1000;
+  private readonly CACHE_DURATION = 20_000;
 
   async getTokenTrades(
     tokenMint: string,
     pairAddress: string | undefined,
     tokenPrice: number,
     tokenDecimals: number,
-    limit = 25,
+    limit = 30,
   ): Promise<TokenTrade[]> {
     const key = `${tokenMint}:${pairAddress || ''}`;
     const cached = this.cache.get(key);
@@ -37,7 +42,6 @@ class TokenActivityService {
       const rpc = SolanaConnectionService.getInstance();
       const queryAddress = pairAddress || tokenMint;
 
-      // Step 1: get recent confirmed signatures
       const sigsResult = await rpc.rpcCall('getSignaturesForAddress', [
         queryAddress,
         { limit, commitment: 'confirmed' },
@@ -49,7 +53,6 @@ class TokenActivityService {
       const validSigs = sigs.filter(s => !s.err && s.signature && s.blockTime != null);
       if (validSigs.length === 0) return [];
 
-      // Step 2: batch fetch full transactions
       const batchReqs = validSigs.map(s => ({
         method: 'getTransaction',
         params: [s.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
@@ -67,28 +70,47 @@ class TokenActivityService {
         const blockTime = tx.blockTime ?? sig.blockTime;
         if (!blockTime) continue;
 
-        const preBalances: any[] = tx.meta?.preTokenBalances ?? [];
-        const postBalances: any[] = tx.meta?.postTokenBalances ?? [];
+        const preTokenBal: any[] = tx.meta?.preTokenBalances ?? [];
+        const postTokenBal: any[] = tx.meta?.postTokenBalances ?? [];
+        const preSolBal: number[] = tx.meta?.preBalances ?? [];
+        const postSolBal: number[] = tx.meta?.postBalances ?? [];
 
-        // Find token balance changes for our mint
-        const changes = computeTokenChanges(tokenMint, preBalances, postBalances);
+        // Get account keys for protocol detection and SOL delta mapping
+        const rawKeys: any[] = tx.transaction?.message?.accountKeys ?? [];
+        const accountKeys: string[] = rawKeys.map((k: any) =>
+          typeof k === 'string' ? k : (k.pubkey ?? '')
+        );
+
+        const protocol = detectTxProtocol(accountKeys);
+
+        const changes = computeTokenChanges(tokenMint, preTokenBal, postTokenBal);
         if (changes.length === 0) continue;
 
         for (const change of changes) {
           if (Math.abs(change.delta) < 0.000001) continue;
 
-          const isBuy = change.delta > 0;
-          const isSell = change.delta < 0;
-          const type: TokenTrade['type'] = isBuy ? 'buy' : isSell ? 'sell' : 'transfer';
+          // SOL delta for this owner's wallet (if their key appears in account keys)
+          const ownerIdx = accountKeys.indexOf(change.owner);
+          const preSol = ownerIdx >= 0 ? (preSolBal[ownerIdx] ?? 0) : 0;
+          const postSol = ownerIdx >= 0 ? (postSolBal[ownerIdx] ?? 0) : 0;
+          const solDelta = (postSol - preSol) / 1e9;
+
+          const type = classifyType(change.delta, solDelta);
           const tokenAmount = Math.abs(change.delta);
           const usdAmount = tokenAmount * tokenPrice;
+
+          const label = resolveAddressLabel(change.owner);
 
           trades.push({
             id: `${sig.signature}-${change.owner.slice(0, 8)}`,
             type,
             walletAddress: change.owner,
+            walletLabel: label.displayName,
+            isProtocol: label.isKnownProtocol,
+            protocolSource: protocol,
             amount: usdAmount,
             tokenAmount,
+            solAmount: solDelta,
             priceUsd: tokenPrice,
             timestamp: blockTime * 1000,
             txSignature: sig.signature,
@@ -97,9 +119,9 @@ class TokenActivityService {
       }
 
       trades.sort((a, b) => b.timestamp - a.timestamp);
-
       const result = trades.slice(0, 50);
       this.cache.set(key, { data: result, timestamp: Date.now() });
+      console.log(`[TokenActivity] ${tokenMint.slice(0, 8)} — ${result.length} events`);
       return result;
     } catch (e) {
       console.warn('[TokenActivityService] Error fetching trades:', e);
@@ -132,6 +154,14 @@ class TokenActivityService {
     return amount.toPrecision(4);
   }
 
+  formatSol(sol: number): string {
+    const abs = Math.abs(sol);
+    if (abs < 0.0001) return '';
+    if (abs >= 1000) return `${abs.toFixed(0)} SOL`;
+    if (abs >= 1) return `${abs.toFixed(3)} SOL`;
+    return `${abs.toFixed(5)} SOL`;
+  }
+
   formatTimeAgo(timestamp: number): string {
     const seconds = Math.floor((Date.now() - timestamp) / 1000);
     if (seconds < 60) return `${seconds}s`;
@@ -139,6 +169,28 @@ class TokenActivityService {
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
     return `${Math.floor(seconds / 86400)}d`;
   }
+}
+
+function classifyType(
+  tokenDelta: number,
+  solDelta: number,
+): TokenTrade['type'] {
+  const solThreshold = 0.00001; // ignore dust SOL changes
+
+  const tokenIn = tokenDelta > 0;
+  const tokenOut = tokenDelta < 0;
+  const solIn = solDelta > solThreshold;
+  const solOut = solDelta < -solThreshold;
+
+  if (tokenIn && solOut) return 'buy';
+  if (tokenOut && solIn) return 'sell';
+
+  // Mint: token supply increases, no counterparty SOL
+  if (tokenIn && !solOut && !solIn) return 'transfer';
+  if (tokenOut && !solIn && !solOut) return 'transfer';
+
+  // Fallback
+  return tokenDelta > 0 ? 'buy' : 'sell';
 }
 
 interface BalanceChange {
@@ -184,8 +236,8 @@ function computeTokenChanges(
     }
   }
 
-  // For each tx, keep only the largest change (the primary trader)
   if (changes.length <= 1) return changes;
+  // Keep the side with the largest absolute delta (the primary trader)
   changes.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
   return [changes[0]];
 }
