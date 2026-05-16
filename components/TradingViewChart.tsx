@@ -64,6 +64,9 @@ interface TradingViewChartProps {
   tokenMint?: string;
   chartHeight?: number;
   hideTokenHeader?: boolean;
+  /** Controlled value mode — when provided the parent owns PRICE/MCAP state */
+  valueMode?: ValueMode;
+  onValueModeChange?: (v: ValueMode) => void;
 }
 
 const ALL_TIMEFRAMES: { key: TimeFrame | 'ALL'; label: string }[] = [
@@ -228,6 +231,8 @@ export function TradingViewChart({
   tokenMint,
   chartHeight,
   hideTokenHeader = false,
+  valueMode: externalValueMode,
+  onValueModeChange,
 }: TradingViewChartProps) {
   const { width: screenWidth } = useWindowDimensions();
   const chartWidth = Math.min(screenWidth - 32, 600);
@@ -245,7 +250,14 @@ export function TradingViewChart({
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
-  const [valueMode, setValueMode] = useState<ValueMode>('mcap');
+  // Internal state used only when parent does NOT provide a controlled valueMode prop.
+  const [internalValueMode, setInternalValueMode] = useState<ValueMode>('price');
+  // Effective valueMode: controlled (parent prop) wins over internal state.
+  const valueMode: ValueMode = externalValueMode ?? internalValueMode;
+  const setValueMode = (v: ValueMode) => {
+    if (onValueModeChange) onValueModeChange(v);
+    else setInternalValueMode(v);
+  };
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [livePrice, setLivePrice] = useState<number | null>(null);
@@ -358,19 +370,24 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Visual time engine — snaps rightTime to the next bucket boundary so the viewport doesn't
-  // slide continuously; only the live candle's right edge grows within its fixed bucket slot.
+  // Continuous visual time engine — uses requestAnimationFrame so rightTimeRef always
+  // equals real wall-clock time. The viewport slides smoothly left as time advances.
+  // React re-renders are throttled to ~200 ms (5 fps) to balance smoothness vs cost.
+  // The ref is read during render so every render always sees the current time.
   useEffect(() => {
-    const snap = () => {
-      const bMs = Math.max(1, bucketMsRef.current);
-      rightTimeRef.current = Math.ceil(Date.now() / bMs) * bMs;
+    let rafId = 0;
+    let lastRender = 0;
+    const RENDER_INTERVAL = 200; // ms between React re-renders
+    const tick = (now: number) => {
+      rightTimeRef.current = Date.now();
+      if (now - lastRender >= RENDER_INTERVAL) {
+        lastRender = now;
+        setClockTick(t => t + 1);
+      }
+      rafId = requestAnimationFrame(tick);
     };
-    snap();
-    const id = setInterval(() => {
-      snap();
-      setClockTick(t => t + 1);
-    }, 1000);
-    return () => clearInterval(id);
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
@@ -680,13 +697,14 @@ export function TradingViewChart({
 
   bucketMsRef.current  = bucketMs;
 
-  // Build the complete time-bucketed candle array.
-  // fillBuckets ensures EVERY slot from leftTime→rightTime exists:
-  //   • real data where trades happened
-  //   • flat carry-forward (volume=0) for empty buckets
-  // This eliminates gaps in the line and removes 1W/1M spike artifacts.
+  // Only use real (volume > 0 or synthetic live) candles — no carry-forward fill.
+  // Candles are filtered to the visible window (+1 bucket buffer on each side so
+  // the line connects correctly near the edges). Gaps in trading show as diagonal
+  // segments in line/area modes, which is accurate and expected.
   const validRaw       = filterValidCandles(candles);
-  const filledRaw      = fillBuckets(validRaw, bucketMs, leftTime, rightTime);
+  const filledRaw      = validRaw.filter(c =>
+    c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+  );
   const displayCandles = mcapScale !== 1
     ? filledRaw.map(c => ({
         ...c,
@@ -1008,7 +1026,7 @@ export function TradingViewChart({
 
         {/* Price + change (right) */}
         <View style={styles.tokenPriceRight}>
-          <TouchableOpacity onPress={() => setValueMode(v => v === 'mcap' ? 'price' : 'mcap')} activeOpacity={0.8}>
+          <TouchableOpacity onPress={() => setValueMode(valueMode === 'mcap' ? 'price' : 'mcap')} activeOpacity={0.8}>
             <Text style={styles.tokenBigPrice}>{headerValue}</Text>
           </TouchableOpacity>
           <View style={styles.tokenChangeRow}>
@@ -1466,7 +1484,7 @@ export function TradingViewChart({
 
           {/* ── BAR ───────────────────────────────────────────────────────── */}
           {mode === 'bar' && displayCandles.map((c, i) => {
-            if (c.volume === 0) return null;
+            if (c.volume === 0 && i !== n - 1) return null; // skip gaps; always draw live candle
             const up  = c.close >= c.open;
             const col = up ? '#8B5CF6' : '#EC4899';
             const cx  = xOf(i);
@@ -1486,7 +1504,7 @@ export function TradingViewChart({
 
           {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
           {mode === 'candlestick' && displayCandles.map((c, i) => {
-            if (c.volume === 0) return null;
+            if (c.volume === 0 && i !== n - 1) return null; // skip gaps; always draw live candle
             const up      = c.close >= c.open;
             const col     = up ? '#8B5CF6' : '#EC4899';
             const cx      = xOf(i);

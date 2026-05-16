@@ -502,6 +502,8 @@ export default function TokenDetailScreen() {
               tokenMint={token.address}
               hideTokenHeader={true}
               chartHeight={dynamicChartH}
+              valueMode={priceMode}
+              onValueModeChange={setPriceMode}
             />
           </ErrorBoundary>
         </View>
