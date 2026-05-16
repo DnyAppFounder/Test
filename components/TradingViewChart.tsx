@@ -358,11 +358,16 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Visual time engine — advances rightTime once per second; horizontal viewport slides smoothly
+  // Visual time engine — snaps rightTime to the next bucket boundary so the viewport doesn't
+  // slide continuously; only the live candle's right edge grows within its fixed bucket slot.
   useEffect(() => {
-    rightTimeRef.current = Date.now();
+    const snap = () => {
+      const bMs = Math.max(1, bucketMsRef.current);
+      rightTimeRef.current = Math.ceil(Date.now() / bMs) * bMs;
+    };
+    snap();
     const id = setInterval(() => {
-      rightTimeRef.current = Date.now();
+      snap();
       setClockTick(t => t + 1);
     }, 1000);
     return () => clearInterval(id);
