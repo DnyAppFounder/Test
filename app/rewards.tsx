@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Share,
   Platform,
+  Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -28,7 +29,7 @@ import { formatTokenAmount } from '@/lib/format';
 
 export default function RewardsScreen() {
   const router = useRouter();
-  const { activeAddress } = useWallet();
+  const { activeAddress, refreshPortfolio } = useWallet();
   const [loading, setLoading]                     = useState(true);
   const [referralCode, setReferralCode]           = useState('');
   const [referrals, setReferrals]                 = useState<Referral[]>([]);
@@ -43,6 +44,7 @@ export default function RewardsScreen() {
   const [applyError, setApplyError]               = useState('');
   const [claimingId, setClaimingId]               = useState<string | null>(null);
   const [claimMessage, setClaimMessage]           = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [claimSignature, setClaimSignature]       = useState<string | null>(null);
 
   // Reset stale 'claiming' DB records then load fresh data
   const loadData = useCallback(async () => {
@@ -160,8 +162,13 @@ export default function RewardsScreen() {
     ]);
 
     if (result.success) {
-      setClaimMessage({ type: 'success', text: `Reward claimed! ${formatTokenAmount(reward.reward_amount)} DWC sent to your wallet.` });
+      const sig = (result as any).signature as string | undefined;
+      setClaimSignature(sig ?? null);
+      setClaimMessage({ type: 'success', text: `Claim successful — ${formatTokenAmount(reward.reward_amount)} DWC sent to your wallet.` });
+      // Refresh DWC balance after confirmed transfer
+      refreshPortfolio().catch(() => {});
     } else {
+      setClaimSignature(null);
       setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
     }
 
@@ -171,7 +178,7 @@ export default function RewardsScreen() {
     // including resetting any stale 'claiming' left by a timed-out edge call.
     await loadData();
 
-    setTimeout(() => setClaimMessage(null), 8000);
+    setTimeout(() => { setClaimMessage(null); setClaimSignature(null); }, 10000);
   };
 
   // ── No wallet ──────────────────────────────────────────────────────────────
@@ -223,6 +230,23 @@ export default function RewardsScreen() {
         {claimMessage && (
           <View style={[styles.statusBanner, claimMessage.type === 'success' ? styles.bannerSuccess : styles.bannerError]}>
             <Text style={styles.statusBannerText}>{claimMessage.text}</Text>
+            {claimMessage.type === 'success' && claimSignature && (
+              <TouchableOpacity
+                onPress={() => {
+                  const url = `https://solscan.io/tx/${claimSignature}`;
+                  if (Platform.OS === 'web') {
+                    (window as any).open(url, '_blank', 'noopener,noreferrer');
+                  } else {
+                    Linking.openURL(url).catch(() => {});
+                  }
+                }}
+                style={styles.solscanLink}
+                activeOpacity={0.7}
+              >
+                <ExternalLink size={13} color={colors.success} strokeWidth={2} />
+                <Text style={styles.solscanLinkText}>View transaction on Solscan</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -481,9 +505,23 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
           {formatTokenAmount(reward.reward_amount)} DWC
         </Text>
         {reward.status === 'sent' && reward.transaction_signature && (
-          <Text style={styles.txHash} numberOfLines={1}>
-            tx: {reward.transaction_signature.slice(0, 20)}…
-          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              const url = `https://solscan.io/tx/${reward.transaction_signature}`;
+              if (Platform.OS === 'web') {
+                (window as any).open(url, '_blank', 'noopener,noreferrer');
+              } else {
+                Linking.openURL(url).catch(() => {});
+              }
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 }}
+            activeOpacity={0.7}
+          >
+            <ExternalLink size={11} color={colors.primary} strokeWidth={2} />
+            <Text style={styles.txHash} numberOfLines={1}>
+              {reward.transaction_signature.slice(0, 18)}…
+            </Text>
+          </TouchableOpacity>
         )}
         {reward.status === 'failed' && (
           <Text style={styles.failedText}>Transfer failed — tap Retry</Text>
@@ -557,6 +595,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textPrimary,
     textAlign: 'center',
+  },
+  solscanLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  solscanLinkText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.success,
+    textDecorationLine: 'underline',
   },
   statsGrid: {
     flexDirection: 'row',

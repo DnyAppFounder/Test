@@ -3,10 +3,11 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { X, ExternalLink, Swords, CircleAlert as AlertCircle } from 'lucide-react-native';
+import { X, ExternalLink, Swords, CircleAlert as AlertCircle, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { DuelEntry, DuelMatch, cancelDuelEntryAndRefund } from '@/services/game/duelEntryService';
 import { useSolDuelMatchmaking } from '@/hooks/useSolDuelMatchmaking';
+import { useWallet } from '@/contexts/WalletContext';
 
 interface Props {
   entry: DuelEntry;
@@ -27,6 +28,7 @@ export function SolDuelWaitingQueue({ entry, walletAddress, onMatched, onCancell
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [refundTx, setRefundTx] = useState<string | null>(null);
 
+  const { refreshPortfolio } = useWallet();
   const { state, match, pollCount } = useSolDuelMatchmaking(entry.id, walletAddress);
 
   useEffect(() => {
@@ -56,7 +58,8 @@ export function SolDuelWaitingQueue({ entry, walletAddress, onMatched, onCancell
     try {
       const result = await cancelDuelEntryAndRefund({ entryId: entry.id, walletAddress });
       setRefundTx(result.refund_tx_signature);
-      onCancelled();
+      // Refresh SOL balance after confirmed refund
+      refreshPortfolio().catch(() => {});
     } catch (e: any) {
       setCancelError(e.message ?? 'Refund failed');
     } finally {
@@ -68,14 +71,18 @@ export function SolDuelWaitingQueue({ entry, walletAddress, onMatched, onCancell
     return (
       <View style={styles.container}>
         <View style={styles.refundCard}>
-          <LinearGradient colors={['rgba(139,92,246,0.12)', 'rgba(0,0,0,0)']} style={StyleSheet.absoluteFill} />
-          <Text style={styles.refundTitle}>Refund Sent</Text>
+          <LinearGradient colors={['rgba(16,185,129,0.12)', 'rgba(0,0,0,0)']} style={StyleSheet.absoluteFill} />
+          <CheckCircle size={40} color={colors.success} strokeWidth={1.5} />
+          <Text style={styles.refundTitle}>Refund Successful</Text>
           <Text style={styles.refundText}>
-            Your {entry.entry_amount_sol} SOL has been refunded to your wallet.
+            {entry.entry_amount_sol} SOL has been sent back to your wallet.
           </Text>
           <TouchableOpacity onPress={() => openSolscan(refundTx)} style={styles.txLink} activeOpacity={0.7}>
-            <ExternalLink size={12} color={colors.primary} strokeWidth={2} />
-            <Text style={styles.txText}>{refundTx.slice(0, 12)}…{refundTx.slice(-8)}</Text>
+            <ExternalLink size={13} color={colors.primary} strokeWidth={2} />
+            <Text style={[styles.txText, { color: colors.primary }]}>View on Solscan: {refundTx.slice(0, 12)}…{refundTx.slice(-8)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onCancelled} style={styles.doneBtn} activeOpacity={0.8}>
+            <Text style={styles.doneBtnText}>Done</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -271,6 +278,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
   },
-  refundTitle: { fontSize: fontSize.xl, fontWeight: '800', color: colors.primary },
-  refundText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', fontWeight: '500' },
+  refundTitle: { fontSize: fontSize.xl, fontWeight: '800', color: colors.success },
+  refundText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', fontWeight: '500', lineHeight: 20 },
+  doneBtn: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.success,
+    paddingHorizontal: spacing.xxxl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+  },
+  doneBtnText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.white },
 });

@@ -262,6 +262,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Early member reward: enforce 100-user cap
+    if (rewardAny.reason === "early_user_first_100") {
+      const { count: sentCount } = await db
+        .from("user_rewards")
+        .select("id", { count: "exact", head: true })
+        .eq("reason", "early_user_first_100")
+        .eq("status", "sent");
+      if ((sentCount ?? 0) >= 100) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Early member claim limit reached (100/100 users)" }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     // Atomic lock — only succeeds if status is still 'ready'
     const { error: lockErr, data: lockData } = await db
       .from("user_rewards")
