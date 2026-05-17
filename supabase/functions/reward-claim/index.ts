@@ -11,52 +11,29 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL") || "";
-const TREASURY_PK_RAW = Deno.env.get("GAME_TREASURY_PRIVATE_KEY") || "";
+const TREASURY_PRIVATE_KEY_B58 = Deno.env.get("TREASURY_PRIVATE_KEY_BASE58") || "";
+const TREASURY_PUBLIC_KEY = Deno.env.get("TREASURY_PUBLIC_KEY") || "";
+const DWC_MINT_ENV = Deno.env.get("DWC_MINT") || "";
+const DWC_DECIMALS_ENV = parseInt(Deno.env.get("DWC_DECIMALS") || "6", 10);
 
-const REWARD_TOKEN_DECIMALS = 6;
 const TOKEN_PROGRAM_ID_STR = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ASSOC_TOKEN_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8";
 const SYSTEM_PROGRAM_ID_STR = "11111111111111111111111111111111";
-const MIN_SOL_BALANCE = 0.002; // minimum SOL for fees
+const MIN_SOL_BALANCE = 0.002;
 
-function parsePrivateKey(raw: string): Uint8Array {
-  const trimmed = raw.trim();
-  if (!trimmed) throw new Error("GAME_TREASURY_PRIVATE_KEY is not set");
-
-  // JSON array format: [12, 34, ...]
-  if (trimmed.startsWith("[")) {
-    let arr: number[];
-    try {
-      arr = JSON.parse(trimmed);
-    } catch {
-      throw new Error("GAME_TREASURY_PRIVATE_KEY: invalid JSON array format");
-    }
-    if (!Array.isArray(arr) || arr.length !== 64) {
-      throw new Error(`GAME_TREASURY_PRIVATE_KEY: JSON array must have 64 bytes, got ${Array.isArray(arr) ? arr.length : "non-array"}`);
-    }
-    return new Uint8Array(arr);
-  }
-
-  // Hex format: 128 hex characters
-  if (/^[0-9a-fA-F]{128}$/.test(trimmed)) {
-    const bytes = new Uint8Array(64);
-    for (let i = 0; i < 64; i++) {
-      bytes[i] = parseInt(trimmed.slice(i * 2, i * 2 + 2), 16);
-    }
-    return bytes;
-  }
-
-  // Base58 format (standard Solana keypair export)
+function loadTreasuryKeypairBytes(): Uint8Array {
+  const raw = TREASURY_PRIVATE_KEY_B58.trim();
+  if (!raw) throw new Error("TREASURY_PRIVATE_KEY_BASE58 is not set");
+  let decoded: Uint8Array;
   try {
-    const decoded = bs58.decode(trimmed);
-    if (decoded.length !== 64) {
-      throw new Error(`GAME_TREASURY_PRIVATE_KEY: base58 decoded to ${decoded.length} bytes, expected 64`);
-    }
-    return decoded;
-  } catch (e: any) {
-    if (e.message.startsWith("GAME_TREASURY_PRIVATE_KEY")) throw e;
-    throw new Error("GAME_TREASURY_PRIVATE_KEY: unrecognized format (expected JSON array, hex, or base58)");
+    decoded = bs58.decode(raw);
+  } catch {
+    throw new Error("Invalid TREASURY_PRIVATE_KEY_BASE58: not valid base58");
   }
+  if (decoded.length !== 64) {
+    throw new Error(`Invalid TREASURY_PRIVATE_KEY_BASE58: decoded to ${decoded.length} bytes, expected 64`);
+  }
+  return decoded;
 }
 
 async function solanaRpc(method: string, params: unknown[]): Promise<unknown> {
@@ -86,17 +63,22 @@ async function pollConfirmation(sig: string, timeoutMs = 60000): Promise<void> {
 }
 
 async function sendRewardTokens(toWallet: string, mintAddress: string, amount: number): Promise<string> {
-  // Validate config early
   if (!SOLANA_RPC_URL) throw new Error("SOLANA_RPC_URL is not configured");
-  if (!TREASURY_PK_RAW) throw new Error("GAME_TREASURY_PRIVATE_KEY is not configured");
+  if (!TREASURY_PRIVATE_KEY_B58) throw new Error("TREASURY_PRIVATE_KEY_BASE58 is not configured");
 
-  const secretKey = parsePrivateKey(TREASURY_PK_RAW);
+  const secretKey = loadTreasuryKeypairBytes();
+  const decimals = DWC_DECIMALS_ENV;
 
   const { Keypair, PublicKey, Transaction, TransactionInstruction } =
     await import("npm:@solana/web3.js@1.98.4");
 
   const treasury = Keypair.fromSecretKey(secretKey);
   console.log(`[reward-claim] treasury wallet: ${treasury.publicKey.toBase58()}`);
+
+  // Verify treasury public key if env var is set
+  if (TREASURY_PUBLIC_KEY && treasury.publicKey.toBase58() !== TREASURY_PUBLIC_KEY) {
+    throw new Error(`Treasury keypair mismatch: derived ${treasury.publicKey.toBase58()}, expected ${TREASURY_PUBLIC_KEY}`);
+  }
 
   const tokenProgramId = new PublicKey(TOKEN_PROGRAM_ID_STR);
   const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
@@ -123,7 +105,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
     throw new Error(`INSUFFICIENT_SOL: treasury has ${solBalance.toFixed(6)} SOL, need at least ${MIN_SOL_BALANCE} SOL for fees`);
   }
 
-  // Check treasury DWC token balance
+  // Check treasury token balance
   let treasuryBalance = 0;
   try {
     const treasuryAccInfo = await solanaRpc("getTokenAccountBalance", [treasuryATA.toBase58()]) as any;
@@ -131,16 +113,14 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
     if (uiAmount != null) {
       treasuryBalance = Number(uiAmount);
     } else {
-      // Fallback: use raw amount
       const rawAmt = Number(treasuryAccInfo?.value?.amount ?? "0");
-      treasuryBalance = rawAmt / Math.pow(10, REWARD_TOKEN_DECIMALS);
+      treasuryBalance = rawAmt / Math.pow(10, decimals);
     }
   } catch {
-    // ATA doesn't exist — balance is 0
     treasuryBalance = 0;
   }
 
-  const rawAmount = BigInt(Math.round(amount * Math.pow(10, REWARD_TOKEN_DECIMALS)));
+  const rawAmount = BigInt(Math.round(amount * Math.pow(10, decimals)));
   console.log(`[reward-claim] transfer: ${amount} DWC (${rawAmount} raw units), treasury balance: ${treasuryBalance}`);
 
   if (treasuryBalance < amount) {
@@ -152,7 +132,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string, amount: n
 
   const tx = new Transaction();
 
-  // Create destination ATA if missing (treasury pays the rent)
+  // Create destination ATA if missing
   if (!destInfo?.value) {
     tx.add(new TransactionInstruction({
       programId: assocTokenProgramId,
@@ -221,23 +201,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Validate config before touching the DB
     if (!SOLANA_RPC_URL) {
       return new Response(
         JSON.stringify({ success: false, error: "Server configuration error: SOLANA_RPC_URL not set" }),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    if (!TREASURY_PK_RAW) {
+    if (!TREASURY_PRIVATE_KEY_B58) {
       return new Response(
-        JSON.stringify({ success: false, error: "Server configuration error: GAME_TREASURY_PRIVATE_KEY not set" }),
+        JSON.stringify({ success: false, error: "Server configuration error: TREASURY_PRIVATE_KEY_BASE58 not set" }),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
     const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
-    // Fetch reward with broader status check to give specific errors
     const { data: rewardAny, error: fetchErr } = await db
       .from("user_rewards")
       .select("*")
@@ -275,6 +253,15 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Resolve mint: use env var DWC_MINT if reward record doesn't have one
+    const mintAddress = rewardAny.reward_token_mint || DWC_MINT_ENV;
+    if (!mintAddress) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Server configuration error: DWC_MINT not set and reward has no mint" }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     // Atomic lock — only succeeds if status is still 'ready'
     const { error: lockErr, data: lockData } = await db
       .from("user_rewards")
@@ -291,15 +278,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Send tokens from treasury
     let signature: string;
     try {
-      signature = await sendRewardTokens(wallet_address, rewardAny.reward_token_mint, rewardAny.reward_amount);
+      signature = await sendRewardTokens(wallet_address, mintAddress, rewardAny.reward_amount);
     } catch (sendErr: any) {
       const msg = String(sendErr?.message || sendErr);
       console.error("[reward-claim] send failed:", msg);
 
-      // Revert to ready so user can try again
       await db
         .from("user_rewards")
         .update({ status: "ready", updated_at: new Date().toISOString() })
@@ -317,9 +302,9 @@ Deno.serve(async (req: Request) => {
           { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      if (msg.includes("not configured") || msg.includes("configuration error") || msg.includes("not set")) {
+      if (msg.includes("mismatch") || msg.includes("not configured") || msg.includes("not set") || msg.includes("Invalid TREASURY")) {
         return new Response(
-          JSON.stringify({ success: false, error: "Server configuration error. Please contact support." }),
+          JSON.stringify({ success: false, error: `Server configuration error: ${msg}` }),
           { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -327,7 +312,6 @@ Deno.serve(async (req: Request) => {
       throw sendErr;
     }
 
-    // Mark as sent with signature
     const now = new Date().toISOString();
     await db.from("user_rewards").update({
       status: "sent",
