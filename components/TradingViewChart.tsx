@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -11,7 +11,6 @@ import {
   ScrollView,
   PanResponder,
   Platform,
-  GestureResponderEvent,
 } from 'react-native';
 import Svg, {
   Path,
@@ -64,7 +63,6 @@ interface TradingViewChartProps {
   tokenMint?: string;
   chartHeight?: number;
   hideTokenHeader?: boolean;
-  /** Controlled value mode — when provided the parent owns PRICE/MCAP state */
   valueMode?: ValueMode;
   onValueModeChange?: (v: ValueMode) => void;
 }
@@ -92,7 +90,6 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
 
 const TIME_H = 18;
 
-// Milliseconds per candle bucket
 const BUCKET_MS: Record<string, number> = {
   '1m':  60_000,
   '5m':  300_000,
@@ -105,25 +102,20 @@ const BUCKET_MS: Record<string, number> = {
   'ALL': 86_400_000,
 };
 
-// Fixed number of visible buckets per timeframe — defines the x-axis window width.
-// Every slot in [now - VISIBLE_BUCKETS*bucketMs .. now] is always rendered,
-// with carry-forward fill for missing buckets so the chart never compresses.
 const VISIBLE_BUCKETS: Record<string, number> = {
-  '1m':  60,   // last 60 minutes
-  '5m':  72,   // last 6 hours
-  '15m': 48,   // last 12 hours
-  '1H':  48,   // last 2 days
-  '4H':  42,   // last 7 days
-  '1D':  30,   // last 30 days
-  '1W':  26,   // last ~6 months
-  '1M':  12,   // last 12 months
-  'ALL': 60,   // last 60 days
+  '1m':  60,
+  '5m':  72,
+  '15m': 48,
+  '1H':  48,
+  '4H':  42,
+  '1D':  30,
+  '1W':  26,
+  '1M':  12,
+  'ALL': 60,
 };
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-/** Remove candles that have zero, NaN, Infinity, or structurally invalid prices.
- *  Prevents 1W/1M edge-case spikes and scale corruption from bad API rows. */
 function filterValidCandles(cs: CandleData[]): CandleData[] {
   return cs.filter(c => {
     if (!c || !isFinite(c.timestamp) || c.timestamp <= 0) return false;
@@ -131,14 +123,25 @@ function filterValidCandles(cs: CandleData[]): CandleData[] {
     if (!isFinite(c.close) || c.close <= 0) return false;
     if (!isFinite(c.high)  || c.high  <= 0) return false;
     if (!isFinite(c.low)   || c.low   <= 0) return false;
-    // Allow tiny float imprecision (1e-9 relative) so API candles with
-    // high ≈ close are not incorrectly discarded
     const eps = c.high * 1e-8;
     if (c.high < c.low - eps || c.high < c.open - eps || c.high < c.close - eps) return false;
     return true;
   });
 }
 
+// Keep the best real candle per bucket (highest volume wins; real beats synthetic vol=0).
+function dedupByBucket(cs: CandleData[], bucketMs: number): CandleData[] {
+  if (cs.length === 0) return cs;
+  const map = new Map<number, CandleData>();
+  for (const c of cs) {
+    const bucket = Math.floor(c.timestamp / bucketMs) * bucketMs;
+    const existing = map.get(bucket);
+    if (!existing || c.volume > existing.volume) {
+      map.set(bucket, { ...c, timestamp: bucket });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
 
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
@@ -184,8 +187,6 @@ export function TradingViewChart({
 }: TradingViewChartProps) {
   const { width: screenWidth } = useWindowDimensions();
   const chartWidth = Math.min(screenWidth - 32, 600);
-
-  // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
   const CHART_H  = chartHeight ?? (isMobile ? 460 : 240);
   const VOL_H    = isMobile ? 60  : 40;
@@ -195,12 +196,15 @@ export function TradingViewChart({
     name: symbol, symbol, price: currentPrice ?? 0, priceChange24h: 0, pairAddress,
   } : undefined);
 
+  // Historical OHLCV from API — never modified by live price updates.
   const [candles, setCandles] = useState<CandleData[]>([]);
+  // Active live candle for the current bucket — tracked separately so real history stays immutable.
+  const [activeLiveCandle, setActiveLiveCandle] = useState<CandleData | null>(null);
+  const activeLiveCandleRef = useRef<CandleData | null>(null);
+
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
-  // Internal state used only when parent does NOT provide a controlled valueMode prop.
   const [internalValueMode, setInternalValueMode] = useState<ValueMode>('mcap');
-  // Effective valueMode: controlled (parent prop) wins over internal state.
   const valueMode: ValueMode = externalValueMode ?? internalValueMode;
   const setValueMode = (v: ValueMode) => {
     if (onValueModeChange) onValueModeChange(v);
@@ -216,55 +220,48 @@ export function TradingViewChart({
   const [showPriceLine, setShowPriceLine] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [copiedAddr, setCopiedAddr] = useState(false);
-  // Resolved best pair address for this token (used for WS + price polling)
   const [resolvedPairAddr, setResolvedPairAddr] = useState<string | null>(pairAddress ?? null);
-
-  // Crosshair state
   const [crosshair, setCrosshair] = useState<{
     x: number; y: number; idx: number; price: number; ts: number; pct: number;
   } | null>(null);
+  // When this is non-zero, the pan correction useEffect fires.
+  const [pendingPanCorrection, setPendingPanCorrection] = useState<number | null>(null);
 
-  // Animated values
   const dotPulse = useRef(new Animated.Value(1)).current;
 
-  // Historical scroll state
   const [panOffsetCandles, setPanOffsetCandles] = useState(0);
-  const panOffsetRef       = useRef(0);
-  const plotWRef           = useRef(0);
-  const panStartOffsetRef  = useRef(0);
-  // Three-state gesture tracker: 'idle' → 'crosshair' (tap/longpress) or 'pan' (horizontal drag).
-  // Once a mode is chosen it stays locked until touch is released.
-  const gestureModeRef     = useRef<'idle' | 'crosshair' | 'pan'>('idle');
-  const touchStartXRef     = useRef(0);
-  const touchStartYRef     = useRef(0);
-  const touchStartTimeRef  = useRef(0);
+  const panOffsetRef        = useRef(0);
+  const plotWRef            = useRef(0);
+  const panStartOffsetRef   = useRef(0);
+  // 'idle' → 'crosshair' or 'pan' — locked until touch release.
+  const gestureModeRef      = useRef<'idle' | 'crosshair' | 'pan'>('idle');
+  const touchStartXRef      = useRef(0);
+  const touchStartYRef      = useRef(0);
+  const touchStartTimeRef   = useRef(0);
 
-  // Stable price scale — recomputed only when visible candle set changes, NOT on every clock tick.
-  // This prevents the Y axis from jumping during horizontal time animation.
+  // Stable price scale — recomputed only when visible candle set changes, not on clock tick.
   const priceScaleRef    = useRef({ maxP: 0, minP: 0, priceRange: 1, maxVol: 1 });
   const priceScaleKeyRef = useRef('');
 
-  const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wsRef         = useRef<WebSocket | null>(null);
-  const livePriceRef  = useRef<number | null>(null);
-  const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef          = useRef<WebSocket | null>(null);
+  const livePriceRef   = useRef<number | null>(null);
+  const wsDebounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const svgContainerRef = useRef<View>(null);
-  const svgOffsetRef  = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const candlesRef        = useRef<CandleData[]>([]);
+  const svgOffsetRef   = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const candlesRef     = useRef<CandleData[]>([]);
   const displayCandlesRef = useRef<CandleData[]>([]);
-  const pairAddrRef   = useRef<string | null>(pairAddress ?? null);
-  // Request ID — incremented on every loadData call; stale responses are discarded.
-  const reqIdRef      = useRef(0);
-  // Track previous mint to detect token changes (vs timeframe changes).
-  const prevMintRef   = useRef<string | undefined>(undefined);
-  // Prevents duplicate auto-scroll; reset on every token or timeframe change.
+  const pairAddrRef    = useRef<string | null>(pairAddress ?? null);
+  const reqIdRef       = useRef(0);
+  const prevMintRef    = useRef<string | undefined>(undefined);
   const hasAutoScrolledRef = useRef(false);
-  // Tracks current timeframe inside callbacks without stale closure.
-  const timeframeRef  = useRef<TimeFrame | 'ALL'>('1H');
-  // Tracks last external price pushed to applyLivePrice to avoid redundant calls.
+  const timeframeRef   = useRef<TimeFrame | 'ALL'>('1H');
   const prevExternalPriceRef = useRef<number>(0);
 
-  // Live time engine refs — updated every second to slide chart forward in real time
+  // Centralized price pipeline: track timestamp of latest accepted price to prevent
+  // stale API responses from overwriting fresher live prices.
+  const latestPriceTsRef = useRef<number>(0);
+
   const [clockTick, setClockTick] = useState(0);
   const rightTimeRef  = useRef<number>(Date.now());
   const leftTimeRef   = useRef<number>(Date.now() - 3_600_000 * 60);
@@ -275,11 +272,11 @@ export function TradingViewChart({
   useEffect(() => { candlesRef.current = candles; }, [candles]);
   useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
   useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
+  useEffect(() => { activeLiveCandleRef.current = activeLiveCandle; }, [activeLiveCandle]);
 
   // Resolve best pair address from DexScreener when token mint changes
   useEffect(() => {
     if (!tokenMint) return;
-    // If we already have a pairAddress prop, use it directly
     if (pairAddress) {
       setResolvedPairAddr(pairAddress);
       pairAddrRef.current = pairAddress;
@@ -298,11 +295,7 @@ export function TradingViewChart({
         if (pairs.length === 0 || cancelled) return;
         pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
         const addr = pairs[0].pairAddress;
-        console.log(`[TradingViewChart] Resolved pair ${addr} for mint=${tokenMint?.slice(0, 8)}`);
-        if (!cancelled) {
-          setResolvedPairAddr(addr);
-          pairAddrRef.current = addr;
-        }
+        if (!cancelled) { setResolvedPairAddr(addr); pairAddrRef.current = addr; }
       } catch {}
     })();
     return () => { cancelled = true; };
@@ -318,25 +311,133 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Continuous visual time engine — uses requestAnimationFrame so rightTimeRef always
-  // equals real wall-clock time. The viewport slides smoothly left as time advances.
-  // React re-renders are throttled to ~200 ms (5 fps) to balance smoothness vs cost.
-  // The ref is read during render so every render always sees the current time.
+  // Live time engine — RAF slides the viewport forward in real time.
+  // Throttled to 5fps (200ms) to avoid overheating.
+  // Paused when the browser tab is hidden (Page Visibility API).
   useEffect(() => {
     let rafId = 0;
     let lastRender = 0;
-    const RENDER_INTERVAL = 50; // ms between React re-renders (~20fps)
+    const RENDER_INTERVAL = 200; // 5fps — balance smooth movement vs CPU cost
+    let tabHidden = false;
+
+    const onVisChange = () => {
+      tabHidden = typeof document !== 'undefined' ? document.hidden : false;
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisChange);
+      tabHidden = document.hidden;
+    }
+
     const tick = (now: number) => {
       rightTimeRef.current = Date.now();
-      if (now - lastRender >= RENDER_INTERVAL) {
+      if (!tabHidden && now - lastRender >= RENDER_INTERVAL) {
         lastRender = now;
         setClockTick(t => t + 1);
       }
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisChange);
+      }
+    };
   }, []);
+
+  // ── Single price pipeline ────────────────────────────────────────────────────
+  // All price sources funnel through applyLivePrice. Each call carries a timestamp
+  // so that a late-arriving REST response never overwrites a fresher live price.
+  // The active live candle (current bucket only) is updated separately from history.
+  const applyLivePrice = useCallback((price: number, sourceTs?: number) => {
+    if (!price || price <= 0) return;
+    const ts = sourceTs ?? Date.now();
+    // Reject if this update is more than 1s older than the last accepted price.
+    if (ts < latestPriceTsRef.current - 1000) return;
+    if (livePriceRef.current === price && ts <= latestPriceTsRef.current) return;
+    latestPriceTsRef.current = Math.max(latestPriceTsRef.current, ts);
+    livePriceRef.current = price;
+    setLivePrice(price);
+    if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
+
+    const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
+    const activeBucket = Math.floor(Date.now() / bMs) * bMs;
+    const hist = candlesRef.current;
+    const lastHistClose = hist.length > 0 ? hist[hist.length - 1].close : price;
+
+    setActiveLiveCandle(prev => {
+      const prevBucket = prev ? Math.floor(prev.timestamp / bMs) * bMs : -1;
+      if (prevBucket !== activeBucket) {
+        // New bucket — create a fresh synthetic candle; never mutate real history.
+        return {
+          timestamp: activeBucket,
+          open:   lastHistClose,
+          high:   Math.max(lastHistClose, price),
+          low:    Math.min(lastHistClose, price),
+          close:  price,
+          volume: 0,
+        };
+      }
+      // Same bucket — update in place.
+      if (prev!.close === price && prev!.high >= price && prev!.low <= price) return prev;
+      return { ...prev!, close: price, high: Math.max(prev!.high, price), low: Math.min(prev!.low, price) };
+    });
+  }, [tokenMint]);
+
+  const connectWebSocket = useCallback((pairAddr: string) => {
+    if (typeof WebSocket === 'undefined') return;
+    if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+    try {
+      const wsUrl = `wss://io.dexscreener.com/dex/screener/pair/solana/${pairAddr}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onopen  = () => { setWsConnected(true); };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const np = msg?.pair?.priceUsd ? parseFloat(msg.pair.priceUsd) : null;
+          if (!np || isNaN(np) || np <= 0) return;
+          // WS is live — use current time as high-priority source
+          const now = Date.now();
+          if (wsDebounceRef.current) {
+            // Keep latest value during debounce window
+            livePriceRef.current = np;
+            latestPriceTsRef.current = Math.max(latestPriceTsRef.current, now);
+            return;
+          }
+          wsDebounceRef.current = setTimeout(() => {
+            wsDebounceRef.current = null;
+            const price = livePriceRef.current ?? np;
+            applyLivePrice(price, Date.now());
+          }, 400);
+          livePriceRef.current = np;
+        } catch {}
+      };
+      ws.onerror = () => { try { setWsConnected(false); } catch {} };
+      ws.onclose = () => {
+        try { setWsConnected(false); } catch {}
+        wsRef.current = null;
+        const t = setTimeout(() => {
+          if (pairAddrRef.current && wsRef.current === null) connectWebSocket(pairAddrRef.current);
+        }, 5000);
+        if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
+        (wsRef as any)._reconnectTimer = t;
+      };
+    } catch { setWsConnected(false); }
+  }, [applyLivePrice]);
+
+  // On token mint change: clear all chart state so new token starts fresh.
+  useEffect(() => {
+    if (prevMintRef.current === tokenMint) return;
+    prevMintRef.current = tokenMint;
+    setCandles([]);
+    setActiveLiveCandle(null);
+    setHasData(false);
+    setLivePrice(null);
+    livePriceRef.current = null;
+    latestPriceTsRef.current = 0;
+    hasAutoScrolledRef.current = false;
+  }, [tokenMint]);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
     if (!tokenMint) { if (!silent) setLoading(false); return; }
@@ -346,194 +447,41 @@ export function TradingViewChart({
       const effectiveTf: TimeFrame = tf === 'ALL' ? '1D' : tf;
       const limitOverride = tf === 'ALL' ? 365 : undefined;
       const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
-      // Discard stale results — a newer request (different token or timeframe) is already in flight.
       if (myId !== reqIdRef.current) return;
       if (data && data.length > 0) {
-        setCandles(prev => {
-          if (!silent) return data;
-          if (prev.length === 0) return data;
-          const lp = livePriceRef.current;
-          if (lp == null || lp <= 0) return data;
-          // Only patch API's last candle if it is the current active bucket.
-          // If the API returned only closed candles, applyLivePrice already appended
-          // a synthetic active-bucket candle — do not overwrite or revert it.
-          const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
-          const activeBucketStart = Math.floor(Date.now() / bMs) * bMs;
-          const apiLast = data[data.length - 1];
-          const apiLastBucket = Math.floor(apiLast.timestamp / bMs) * bMs;
-          if (apiLastBucket >= activeBucketStart) {
-            // API returned the active bucket — safe to apply live price to it
-            const merged = [...data];
-            const last = { ...merged[merged.length - 1] };
-            last.close = lp;
-            last.high  = Math.max(last.high, lp);
-            last.low   = Math.min(last.low, lp);
-            merged[merged.length - 1] = last;
-            return merged;
-          }
-          // API only returned closed candles; check if prev already has a synthetic
-          // active-bucket candle appended by applyLivePrice — if so, preserve it.
-          if (prev.length > 0) {
-            const prevLast = prev[prev.length - 1];
-            const prevLastBucket = Math.floor(prevLast.timestamp / bMs) * bMs;
-            if (prevLastBucket >= activeBucketStart) {
-              // Re-apply latest live price to the synthetic candle in case it drifted
-              const synth = { ...prevLast, close: lp, high: Math.max(prevLast.high, lp), low: Math.min(prevLast.low, lp) };
-              return [...data, synth];
-            }
-          }
-          return data;
-        });
+        // Store real historical candles only — never include the active live bucket here.
+        // The activeLiveCandle is maintained separately and merged at render time.
+        const bMs = BUCKET_MS[tf === 'ALL' ? '1D' : tf] ?? 3_600_000;
+        const activeBucket = Math.floor(Date.now() / bMs) * bMs;
+        // Exclude any candle that falls in the current active bucket — activeLiveCandle owns it.
+        const historicalOnly = data.filter(c => Math.floor(c.timestamp / bMs) * bMs < activeBucket);
+        setCandles(historicalOnly.length > 0 ? historicalOnly : data);
         setHasData(true);
       } else {
-        if (!silent) {
-          setHasData(false);
-          setCandles([]);
-        }
+        if (!silent) { setHasData(false); setCandles([]); }
       }
     } catch {
       if (myId !== reqIdRef.current) return;
-      if (!silent) {
-        setHasData(false);
-        // On error, keep existing candles so we don't wipe a working chart
-      }
+      if (!silent) setHasData(false);
     } finally {
       if (myId === reqIdRef.current && !silent) setLoading(false);
     }
   }, [tokenMint]);
 
-  // Apply a live price update — only mutates the ACTIVE (current) bucket.
-  // If the last candle is a closed historical bucket, a synthetic live candle is appended.
-  // Historical candles are NEVER modified.
-  const applyLivePrice = useCallback((price: number) => {
-    if (!price || price <= 0) return;
-    const prev = livePriceRef.current;
-    if (prev === price) return;
-    livePriceRef.current = price;
-    setLivePrice(price);
-    if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
-
-    const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
-    const activeBucketStart = Math.floor(Date.now() / bMs) * bMs;
-
-    setCandles(cs => {
-      if (!cs.length) return cs;
-      const last = cs[cs.length - 1];
-      const lastBucketStart = Math.floor(last.timestamp / bMs) * bMs;
-
-      if (lastBucketStart >= activeBucketStart) {
-        // Active bucket — update in-place; guard against no-op
-        if (last.close === price && last.high >= price && last.low <= price) return cs;
-        const updated = [...cs];
-        updated[updated.length - 1] = {
-          ...last,
-          close: price,
-          high:  Math.max(last.high, price),
-          low:   Math.min(last.low, price),
-        };
-        return updated;
-      }
-      // Closed historical bucket — append a synthetic live candle; never mutate history
-      console.log(`[LiveSync] append synthetic candle tf=${timeframeRef.current} bucket=${new Date(activeBucketStart).toISOString()} price=${price}`);
-      return [...cs, {
-        timestamp: activeBucketStart,
-        open:  last.close,
-        high:  Math.max(last.close, price),
-        low:   Math.min(last.close, price),
-        close: price,
-        volume: 0,
-      }];
-    });
-  }, [tokenMint]);
-
-  const connectWebSocket = useCallback((pairAddr: string) => {
-    if (typeof WebSocket === 'undefined') return;
-    if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
-    try {
-      // DexScreener WS uses pair address, not token mint
-      const wsUrl = `wss://io.dexscreener.com/dex/screener/pair/solana/${pairAddr}`;
-      console.log(`[TradingViewChart] WS connecting to pair=${pairAddr.slice(0, 8)}`);
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      ws.onopen = () => {
-        setWsConnected(true);
-        console.log(`[TradingViewChart] WS connected pair=${pairAddr.slice(0, 8)}`);
-      };
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          // DexScreener sends { pair: { priceUsd: "0.001234", ... } }
-          const np = msg?.pair?.priceUsd ? parseFloat(msg.pair.priceUsd) : null;
-          if (!np || isNaN(np) || np <= 0) return;
-          if (wsDebounceRef.current) {
-            livePriceRef.current = np;
-            return;
-          }
-          wsDebounceRef.current = setTimeout(() => {
-            wsDebounceRef.current = null;
-            const price = livePriceRef.current ?? np;
-            applyLivePrice(price);
-          }, 400);
-          livePriceRef.current = np;
-        } catch {}
-      };
-      ws.onerror = () => { try { setWsConnected(false); } catch {} };
-      ws.onclose = () => {
-        try { setWsConnected(false); } catch {}
-        wsRef.current = null;
-        const reconnectTimer = setTimeout(() => {
-          const currentPair = pairAddrRef.current;
-          if (currentPair && wsRef.current === null) connectWebSocket(currentPair);
-        }, 5000);
-        if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
-        (wsRef as any)._reconnectTimer = reconnectTimer;
-      };
-    } catch { setWsConnected(false); }
-  }, [applyLivePrice]);
-
-  // When the token mint changes, clear candle state immediately so the new token
-  // starts with a blank chart (first-load spinner) rather than flashing the old token's data.
-  // Timeframe changes do NOT clear candles — old data stays visible under the loading overlay.
   useEffect(() => {
-    if (prevMintRef.current === tokenMint) return;
-    prevMintRef.current = tokenMint;
-    setCandles([]);
-    setHasData(false);
-    setLivePrice(null);
-    hasAutoScrolledRef.current = false;
-  }, [tokenMint]);
-
-  useEffect(() => {
-    console.log(`[TradingViewChart] Timeframe → ${timeframe}  mint=${tokenMint?.slice(0, 8) ?? 'none'}`);
     setCrosshair(null);
     setPanOffsetCandles(0);
     panOffsetRef.current = 0;
     priceScaleKeyRef.current = '';
     hasAutoScrolledRef.current = false;
+    // Reset active live candle on timeframe change so it matches the new bucket size.
+    setActiveLiveCandle(null);
     loadData(timeframe, false);
   }, [tokenMint, timeframe]);
 
-  // Clear crosshair when chart type changes so stale crosshair state doesn't bleed across modes
   useEffect(() => { setCrosshair(null); }, [mode]);
 
-  // Debug log on significant chart state changes (not fired every clock tick)
-  useEffect(() => {
-    if (candles.length === 0) return;
-    const vis = candles.filter(c => {
-      const bMs = BUCKET_MS[timeframe] ?? 3_600_000;
-      const vB  = VISIBLE_BUCKETS[timeframe] ?? 48;
-      const rT  = Date.now();
-      const lT  = rT - vB * bMs;
-      return c.timestamp >= lT && c.timestamp <= rT;
-    });
-    console.log(
-      `[TradingViewChart] mint=${tokenMint?.slice(0, 8)} tf=${timeframe} mode=${mode}` +
-      ` candles=${candles.length} visible≈${vis.length}` +
-      ` liveAt=${panOffsetCandles === 0}`
-    );
-  }, [tokenMint, timeframe, mode, candles.length]);
-
-  // Connect WebSocket once we have the resolved pair address
+  // Connect WebSocket once pair address is resolved
   useEffect(() => {
     if (!resolvedPairAddr) return;
     connectWebSocket(resolvedPairAddr);
@@ -541,8 +489,7 @@ export function TradingViewChart({
       if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
       if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
       if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.onerror = null;
+        wsRef.current.onclose = null; wsRef.current.onerror = null;
         wsRef.current.onmessage = null;
         try { wsRef.current.close(); } catch {}
         wsRef.current = null;
@@ -551,14 +498,14 @@ export function TradingViewChart({
     };
   }, [resolvedPairAddr]);
 
-  // REST price polling fallback — runs every 10s regardless of WS state
-  // Ensures the price line moves even if WS is blocked or pair is low-activity
+  // REST price fallback — 10s interval. Only updates if newer than last accepted price.
   useEffect(() => {
     if (!tokenMint) return;
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
     const fetchPrice = async () => {
-      // Primary: Jupiter Price API (keyless, Solana-native aggregator)
+      const startTs = Date.now();
+      // Primary: Jupiter Price API
       try {
         const jupRes = await fetch(
           `https://api.jup.ag/price/v2?ids=${tokenMint}`,
@@ -567,7 +514,7 @@ export function TradingViewChart({
         if (jupRes.ok) {
           const jupData = await jupRes.json();
           const jupPrice = Number(jupData?.data?.[tokenMint!]?.price ?? 0);
-          if (jupPrice > 0) { applyLivePrice(jupPrice); return; }
+          if (jupPrice > 0) { applyLivePrice(jupPrice, startTs); return; }
         }
       } catch {}
       // Fallback: DexScreener REST
@@ -582,44 +529,41 @@ export function TradingViewChart({
         const pairData = data.pair ?? data.pairs?.[0];
         if (!pairData) return;
         const p = parseFloat(pairData.priceUsd || '0');
-        if (p > 0) applyLivePrice(p);
+        if (p > 0) applyLivePrice(p, startTs);
       } catch {}
     };
 
-    // First poll after 1.5s, then every 5s for a livelier chart
     const firstPoll = setTimeout(fetchPrice, 1500);
-    pollTimerRef.current = setInterval(fetchPrice, 5_000);
-
+    // Poll every 10s — less aggressive than before, reduces mobile CPU usage
+    pollTimerRef.current = setInterval(fetchPrice, 10_000);
     return () => {
       clearTimeout(firstPoll);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, [tokenMint, applyLivePrice]);
 
-  // External price sync: when the parent's tokenInfo.price updates (e.g. liveTokenStore 10s poll),
-  // push it into applyLivePrice so the chart tip, bubble, and header all stay in sync.
-  // Deduplicated by prevExternalPriceRef to avoid unnecessary renders.
+  // External price from parent tokenInfo — lower priority than WS, higher than nothing
   useEffect(() => {
     const externalPrice = resolvedInfo?.price;
     if (!externalPrice || externalPrice <= 0) return;
     if (externalPrice === prevExternalPriceRef.current) return;
-    console.log(`[LiveSync] external price update: ${externalPrice} (prev=${prevExternalPriceRef.current})`);
     prevExternalPriceRef.current = externalPrice;
-    applyLivePrice(externalPrice);
+    // External price carries its own (older) timestamp context — use a slightly older ts
+    // so it doesn't overwrite a fresher live WS price
+    applyLivePrice(externalPrice, Date.now() - 2000);
   }, [resolvedInfo?.price, applyLivePrice]);
 
-  // Subscribe to liveTokenStore for higher-priority price updates pushed by other parts of the app
+  // liveTokenStore subscription — pushed by other parts of the app
   useEffect(() => {
     if (!tokenMint) return;
     const unsub = liveTokenStore.watch(tokenMint, (price) => {
-      if (price > 0) applyLivePrice(price);
+      if (price > 0) applyLivePrice(price, Date.now() - 500);
     });
     return unsub;
   }, [tokenMint, applyLivePrice]);
 
-  // Auto-scroll: after first data load, if all candles fall before the current
-  // visible window (token hasn't traded recently), pan back so the last real
-  // candle lands near the right edge rather than showing an empty chart.
+  // Auto-scroll: when data loads but all candles are before the visible window,
+  // pan back so the last real candle is visible near the right edge.
   useEffect(() => {
     if (!hasData || candles.length === 0) return;
     if (hasAutoScrolledRef.current) return;
@@ -629,8 +573,6 @@ export function TradingViewChart({
     const now   = Date.now();
     const lastRealTs = candles[candles.length - 1].timestamp;
     if (lastRealTs > 0 && lastRealTs < now - visMs - bMs) {
-      // Last real candle is before the left edge of the current window.
-      // Scroll back so the last real candle sits ~90% from the left edge.
       const targetRight = lastRealTs + visMs * 0.1;
       const msBack      = now - targetRight;
       const bucketsBack = Math.max(0, Math.round(msBack / bMs));
@@ -639,14 +581,25 @@ export function TradingViewChart({
     }
   }, [hasData, candles, timeframe]);
 
+  // Pan correction useEffect — fires when displayCandles is empty but candles exist.
+  // Moved out of render to avoid setState-during-render violations.
+  useEffect(() => {
+    if (pendingPanCorrection === null) return;
+    if (pendingPanCorrection !== panOffsetCandles) {
+      panOffsetRef.current = pendingPanCorrection;
+      setPanOffsetCandles(pendingPanCorrection);
+    }
+    setPendingPanCorrection(null);
+  }, [pendingPanCorrection]);
+
   // ── chart geometry ────────────────────────────────────────────────────────
-  // MCAP scale factor — converts USD price candles to market-cap values when
-  // the user selects MCAP display mode. ratio = marketCap / currentPrice ≈ supply
-  const _earlyPrice = livePrice ?? (currentPrice != null && currentPrice > 0 ? currentPrice
-    : (candles.length > 0 ? candles[candles.length - 1].close : 0));
-  const _earlyMcap  = resolvedInfo?.marketCap ?? null;
-  const mcapScale   = valueMode === 'mcap' && _earlyMcap != null && _earlyMcap > 0 && _earlyPrice > 0
-    ? _earlyMcap / _earlyPrice
+  // MCAP scale: use a stable ratio from the same snapshot (marketCap / price).
+  // This ensures header, axis, bubble, and crosshair all use the same scale.
+  const _snapshotPrice = resolvedInfo?.price;
+  const _snapshotMcap  = resolvedInfo?.marketCap ?? null;
+  const mcapScale = valueMode === 'mcap' && _snapshotMcap != null && _snapshotMcap > 0 &&
+                    _snapshotPrice != null && _snapshotPrice > 0
+    ? _snapshotMcap / _snapshotPrice
     : 1;
 
   const plotW = chartWidth - PAD.left - PAD.right;
@@ -655,26 +608,35 @@ export function TradingViewChart({
   const plotHRef = useRef(plotH);
   plotHRef.current = plotH;
 
-  // ── Live time engine geometry ─────────────────────────────────────────────
-  // rightTime is always the current wall-clock time minus any historical scroll offset.
-  // visibleMs is FIXED per timeframe so the x-axis window is consistent.
+  // ── Live time geometry ────────────────────────────────────────────────────
   const bucketMs       = BUCKET_MS[timeframe] ?? 3_600_000;
   const visibleBuckets = VISIBLE_BUCKETS[timeframe] ?? 48;
   const scrollOffsetMs = panOffsetCandles * bucketMs;
   const rightTime      = rightTimeRef.current - scrollOffsetMs;
   const visibleMs      = visibleBuckets * bucketMs;
   const leftTime       = rightTime - visibleMs;
-
   bucketMsRef.current  = bucketMs;
 
-  // Only use real (volume > 0 or synthetic live) candles — no carry-forward fill.
-  // Candles are filtered to the visible window (+1 bucket buffer on each side so
-  // the line connects correctly near the edges). Gaps in trading show as diagonal
-  // segments in line/area modes, which is accurate and expected.
-  const validRaw       = filterValidCandles(candles);
-  const filledRaw      = validRaw.filter(c =>
+  // Merge real historical candles + active live candle at render time.
+  // Real candles are immutable; only the active live candle updates on price change.
+  const mergedCandles = useMemo(() => {
+    const valid = filterValidCandles(candles);
+    const deduped = dedupByBucket(valid, bucketMs);
+    if (!activeLiveCandle) return deduped;
+    const liveB = Math.floor(activeLiveCandle.timestamp / bucketMs) * bucketMs;
+    // Remove any historical candle in the same bucket (live price owns that bucket)
+    const withoutSameBucket = deduped.filter(
+      c => Math.floor(c.timestamp / bucketMs) * bucketMs !== liveB
+    );
+    return [...withoutSameBucket, activeLiveCandle].sort((a, b) => a.timestamp - b.timestamp);
+  }, [candles, activeLiveCandle, bucketMs]);
+
+  // Filter to visible window + 1 buffer bucket on each side
+  const filledRaw = mergedCandles.filter(c =>
     c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
   );
+
+  // Apply MCAP scale for rendering
   const displayCandles = mcapScale !== 1
     ? filledRaw.map(c => ({
         ...c,
@@ -685,72 +647,72 @@ export function TradingViewChart({
       }))
     : filledRaw;
 
-  // Sync ref so the crosshair handler always sees the current visible set
   displayCandlesRef.current = displayCandles;
   const n = displayCandles.length;
 
   // ── Adaptive x-range ─────────────────────────────────────────────────────
-  // For tokens whose trade history is shorter than the visible window, the
-  // data would normally appear compressed into the right portion of the chart
-  // (the left is empty because the token didn't exist yet). Instead, shift the
-  // left boundary so that the first real candle sits ~2 buckets from the left
-  // edge, filling the chart naturally — exactly like DexScreener.
-  // Only applied when not manually scrolled (panOffset = 0) so dragging still works.
-  let xLeft       = leftTime;
-  let xVisibleMs  = visibleMs;
+  let xLeft      = leftTime;
+  let xVisibleMs = visibleMs;
   if (displayCandles.length > 0 && panOffsetCandles === 0) {
     const firstDataTs = displayCandles[0].timestamp;
-    // If the first real candle starts more than 35% into the window from the left,
-    // anchor the left boundary 2 buckets before the first candle.
     if (firstDataTs > leftTime + visibleMs * 0.35) {
       xLeft      = firstDataTs - bucketMs * 2;
       xVisibleMs = rightTime - xLeft;
     }
   }
-
-  // Sync refs — crosshair + panResponder stale closures read these
   leftTimeRef.current  = xLeft;
   visibleMsRef.current = xVisibleMs;
 
-  // Convert a Unix-ms timestamp to a chart x-coordinate
   function tsToX(ts: number): number {
     return PAD.left + ((ts - xLeft) / xVisibleMs) * plotW;
   }
 
-  // ── Stable price scale ───────────────────────────────────────────────────
-  // Use only real candles (volume > 0) for scale bounds so carry-forward flat
-  // buckets don't incorrectly widen the y-axis.
+  // ── Stable price scale ────────────────────────────────────────────────────
+  // Keyed on visible window boundaries and visible min/max so scale fits exactly
+  // what's on screen when panning. Live spike expands scale in-place.
   {
-    const dcLen = displayCandles.length;
+    const dcLen   = displayCandles.length;
     const dcFirst = displayCandles[0];
-    const dcLast = displayCandles[dcLen - 1];
-    const key = `${timeframe}|${valueMode}|${panOffsetCandles}|${dcLen}|${dcFirst?.timestamp ?? 0}|${dcLast?.timestamp ?? 0}`;
+    const dcLast  = displayCandles[dcLen - 1];
+    // Restrict to visible window for scale computation
+    const visibleOnly = displayCandles.filter(
+      c => c.timestamp >= leftTime && c.timestamp <= rightTime
+    );
+    const scaleBase   = visibleOnly.length > 0 ? visibleOnly : displayCandles;
+    // Real candles (volume > 0) take priority for scale; synthetic live (volume=0) expands it
+    const realVisible = scaleBase.filter(c => c.volume > 0);
+    const scaleSource = realVisible.length > 0 ? realVisible : scaleBase;
+    const visMinLow  = scaleSource.length > 0 ? Math.min(...scaleSource.map(c => c.low))  : 0;
+    const visMaxHigh = scaleSource.length > 0 ? Math.max(...scaleSource.map(c => c.high)) : 1;
+
+    const key = [
+      timeframe, valueMode, panOffsetCandles,
+      dcLen,
+      dcFirst?.timestamp ?? 0, dcLast?.timestamp ?? 0,
+      Math.round(xLeft / 1000), Math.round(rightTime / 1000),
+      visMinLow.toPrecision(4), visMaxHigh.toPrecision(4),
+    ].join('|');
+
     if (key !== priceScaleKeyRef.current && displayCandles.length > 0) {
       priceScaleKeyRef.current = key;
-      // Restrict to the strictly visible window — buffer candles outside [leftTime, rightTime]
-      // must not inflate or corrupt the Y-scale bounds.
-      const visibleOnly = displayCandles.filter(c => c.timestamp >= leftTime && c.timestamp <= rightTime);
-      const scaleBase   = visibleOnly.length > 0 ? visibleOnly : displayCandles;
-      const realCandles = scaleBase.filter(c => c.volume > 0);
-      const scaleSource = realCandles.length > 0 ? realCandles : scaleBase;
-      const rMax = Math.max(...scaleSource.map(c => c.high));
-      const rMin = Math.min(...scaleSource.map(c => c.low));
-      const safeMax = isFinite(rMax) && rMax > 0 ? rMax : 1;
-      const safeMin = isFinite(rMin) && rMin >= 0 ? rMin : 0;
-      const range = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
-      const pad   = range * 0.15;
-      const realVols = displayCandles.filter(c => c.volume > 0).map(c => c.volume);
+      const safeMax  = isFinite(visMaxHigh) && visMaxHigh > 0 ? visMaxHigh : 1;
+      const safeMin  = isFinite(visMinLow)  && visMinLow  >= 0 ? visMinLow : 0;
+      const range    = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
+      const pad      = range * 0.15;
+      // Volume scale from visible real candles only; synthetic vol=0 ignored
+      const realVols   = scaleBase.filter(c => c.volume > 0).map(c => c.volume);
       const sortedVols = [...realVols].sort((a, b) => a - b);
-      const p90idx = Math.min(Math.floor(sortedVols.length * 0.9), sortedVols.length - 1);
-      const cappedMaxVol = sortedVols.length > 0 ? Math.max(sortedVols[p90idx] * 1.5, 1) : 1;
+      const p90idx     = Math.min(Math.floor(sortedVols.length * 0.9), sortedVols.length - 1);
+      const cappedVol  = sortedVols.length > 0 ? Math.max(sortedVols[p90idx] * 1.5, 1) : 1;
       priceScaleRef.current = {
         maxP:       safeMax + pad,
         minP:       Math.max(0, safeMin - pad),
         priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
-        maxVol:     cappedMaxVol,
+        maxVol:     cappedVol,
       };
     }
-    // Expand scale in-place when the live candle exceeds current bounds
+
+    // Expand scale in-place only when live candle exceeds bounds
     const liveC = n > 0 ? displayCandles[n - 1] : null;
     if (liveC) {
       const { maxP: cMax, minP: cMin, maxVol } = priceScaleRef.current;
@@ -759,11 +721,7 @@ export function TradingViewChart({
       if (liveHigh > cMax || liveLow < cMin) {
         const newMax = Math.max(cMax, liveHigh * 1.05);
         const newMin = Math.max(0, Math.min(cMin, liveLow * 0.95));
-        priceScaleRef.current = {
-          maxP: newMax, minP: newMin,
-          priceRange: (newMax - newMin) || 1,
-          maxVol,
-        };
+        priceScaleRef.current = { maxP: newMax, minP: newMin, priceRange: (newMax - newMin) || 1, maxVol };
       }
     }
   }
@@ -772,7 +730,6 @@ export function TradingViewChart({
   const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
   const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
 
-  // candle center x — uses real bucket timestamp for time-exact placement
   function xOf(i: number): number {
     const c = displayCandles[i];
     if (!c) return PAD.left + (i + 0.5) * (plotW / Math.max(n, 1));
@@ -783,12 +740,10 @@ export function TradingViewChart({
     return Math.max(PAD.top, Math.min(PAD.top + plotH, raw));
   }
   function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
-  // All modes use time-based x positioning — no index-based bonding curve
-  const xFn = xOf;
 
   const totalH = CHART_H + VOL_H + TIME_H;
 
-  // ── crosshair + historical-scroll pan responder ─────────────────────────
+  // ── Crosshair + pan responder ─────────────────────────────────────────────
   const updateCrosshairAt = (localX: number, _localY: number) => {
     const cands = displayCandlesRef.current;
     if (!cands.length) return;
@@ -796,7 +751,6 @@ export function TradingViewChart({
     const lt  = leftTimeRef.current;
     const vm  = visibleMsRef.current;
     const bm  = bucketMsRef.current;
-    // Convert pixel x → timestamp, then find the nearest candle
     const rawTs = lt + ((localX - PAD.left) / pw) * vm;
     let closestIdx = 0;
     let closestDist = Infinity;
@@ -804,21 +758,18 @@ export function TradingViewChart({
       const d = Math.abs(cands[i].timestamp + bm / 2 - rawTs);
       if (d < closestDist) { closestDist = d; closestIdx = i; }
     }
-    const idx = closestIdx;
-    const c   = cands[idx];
-    const cx  = PAD.left + ((c.timestamp + bm / 2 - lt) / vm) * pw;
+    const c  = cands[closestIdx];
+    const cx = PAD.left + ((c.timestamp + bm / 2 - lt) / vm) * pw;
     const { minP: scaleMin, priceRange: scaleRange } = priceScaleRef.current;
-    const ph  = plotHRef.current;
-    const rawCy = PAD.top + ph - ((c.close - scaleMin) / scaleRange) * ph;
-    const cy  = Math.max(PAD.top, Math.min(PAD.top + ph, rawCy));
+    const ph     = plotHRef.current;
+    const rawCy  = PAD.top + ph - ((c.close - scaleMin) / scaleRange) * ph;
+    const cy     = Math.max(PAD.top, Math.min(PAD.top + ph, rawCy));
     const firstClose = cands[0].close;
-    const pct = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
-    setCrosshair({ x: cx, y: cy, idx, price: c.close, ts: c.timestamp, pct });
+    const pct    = firstClose > 0 ? ((c.close - firstClose) / firstClose) * 100 : 0;
+    setCrosshair({ x: cx, y: cy, idx: closestIdx, price: c.close, ts: c.timestamp, pct });
   };
 
   const applyTouchToCrosshair = (pageX: number, pageY: number) => {
-    // On web use cached getBoundingClientRect offset (already stored by onMouseMove/onLayout).
-    // On native use async measure and update the cached offset.
     if (Platform.OS === 'web') {
       const webEl = svgContainerRef.current as any;
       if (webEl?.getBoundingClientRect) {
@@ -836,16 +787,22 @@ export function TradingViewChart({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
+      // Only claim the responder once we detect clear horizontal intent.
+      // Vertical drags pass through to the page scroll — never block them.
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_e, gs) => {
+        const adx = Math.abs(gs.dx);
+        const ady = Math.abs(gs.dy);
+        // Capture only clear horizontal drags; let vertical drags scroll the page
+        return adx > 10 && adx > ady * 2;
+      },
 
       onPanResponderGrant: (e) => {
-        panStartOffsetRef.current  = panOffsetRef.current;
-        gestureModeRef.current     = 'idle';
-        touchStartXRef.current     = e.nativeEvent.pageX;
-        touchStartYRef.current     = e.nativeEvent.pageY;
-        touchStartTimeRef.current  = Date.now();
-        // Do NOT show crosshair on grant — wait until we know intent (tap vs pan).
+        panStartOffsetRef.current = panOffsetRef.current;
+        gestureModeRef.current    = 'idle';
+        touchStartXRef.current    = e.nativeEvent.pageX;
+        touchStartYRef.current    = e.nativeEvent.pageY;
+        touchStartTimeRef.current = Date.now();
       },
 
       onPanResponderMove: (e, gestureState) => {
@@ -853,52 +810,33 @@ export function TradingViewChart({
         const ady     = Math.abs(gestureState.dy);
         const elapsed = Date.now() - touchStartTimeRef.current;
 
-        // — Determine gesture intent once, then lock for the rest of the touch ——
         if (gestureModeRef.current === 'idle') {
           if (adx > 12 && adx > ady * 1.8) {
-            // Strong horizontal drag → pan mode. Never re-enter crosshair this touch.
             gestureModeRef.current = 'pan';
             setCrosshair(null);
           } else if (elapsed > 200 && adx < 8 && ady < 8) {
-            // Long-press with minimal movement → crosshair mode.
             gestureModeRef.current = 'crosshair';
             applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
           }
-          // else: still undecided, do nothing until threshold is met
           return;
         }
 
-        // — Crosshair mode: ONLY update crosshair, never pan ————————————————
         if (gestureModeRef.current === 'crosshair') {
           applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
           return;
         }
 
-        // — Pan mode: ONLY move the chart window ————————————————————————————
         if (gestureModeRef.current === 'pan') {
           const pw   = plotWRef.current;
           const visibleBucketCount = Math.max(1, visibleMsRef.current / (bucketMsRef.current || 1));
           const candlePx = pw / visibleBucketCount;
-          // drag right (dx > 0) = scroll back in time = increase offset
           const deltaCandles = Math.round(gestureState.dx / candlePx);
-          // Clamp: forward limit = live (0), backward limit = oldest candle 2 buckets
-          // from the LEFT edge of the visible window.
-          //
-          // Derivation:
-          //   rightTime = now - offset*bucketMs
-          //   leftTime  = rightTime - visibleMs
-          //   We want: oldestTs ≈ leftTime + 2*bucketMs
-          //   → offset ≈ (now - oldestTs - visibleMs + 2*bucketMs) / bucketMs
-          //            = msToOldest/bucketMs - visibleBuckets + 2
-          //
-          // Adding visibleBuckets (the previous, wrong formula) pushed the window
-          // an entire extra visible range past the oldest candle into empty space.
-          const oldestTs       = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
-          const msToOldest     = Math.max(0, Date.now() - oldestTs);
-          const bMs            = bucketMsRef.current || 1;
-          const visibleBuckets = Math.max(1, Math.round(visibleMsRef.current / bMs));
-          const maxBack        = Math.max(0, Math.floor(msToOldest / bMs) - visibleBuckets + 2);
-          const newOffset      = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
+          const oldestTs   = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
+          const msToOldest = Math.max(0, Date.now() - oldestTs);
+          const bMs        = bucketMsRef.current || 1;
+          const visB       = Math.max(1, Math.round(visibleMsRef.current / bMs));
+          const maxBack    = Math.max(0, Math.floor(msToOldest / bMs) - visB + 2);
+          const newOffset  = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
           panOffsetRef.current = newOffset;
           setPanOffsetCandles(newOffset);
         }
@@ -910,7 +848,6 @@ export function TradingViewChart({
           e.nativeEvent.pageY - touchStartYRef.current
         );
         const elapsed = Date.now() - touchStartTimeRef.current;
-        // Tap detection: minimal movement, short press, no prior mode lock → show crosshair
         if (gestureModeRef.current === 'idle' && totalMovement < 10 && elapsed < 600) {
           applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
         }
@@ -919,21 +856,16 @@ export function TradingViewChart({
     })
   ).current;
 
-  // Web mouse event handlers for crosshair
   const webMouseHandlers = Platform.OS === 'web' ? {
     onMouseMove: (e: any) => {
       const rect = e.currentTarget?.getBoundingClientRect?.();
       if (!rect) return;
-      const localX = e.clientX - rect.left;
-      const localY = e.clientY - rect.top;
-      updateCrosshairAt(localX, localY);
+      updateCrosshairAt(e.clientX - rect.left, e.clientY - rect.top);
     },
     onMouseDown: (e: any) => {
       const rect = e.currentTarget?.getBoundingClientRect?.();
       if (!rect) return;
-      const localX = e.clientX - rect.left;
-      const localY = e.clientY - rect.top;
-      updateCrosshairAt(localX, localY);
+      updateCrosshairAt(e.clientX - rect.left, e.clientY - rect.top);
     },
     onMouseLeave: () => {},
     onContextMenu: (e: any) => e.preventDefault(),
@@ -941,24 +873,28 @@ export function TradingViewChart({
 
   const dismissCrosshair = () => setCrosshair(null);
 
-  // ── derived display values ────────────────────────────────────────────────
-  const sym              = resolvedInfo?.symbol ?? 'TOKEN';
-  const contractAddr     = resolvedInfo?.address ?? tokenMint ?? '';
+  // ── Derived display values ────────────────────────────────────────────────
+  const sym               = resolvedInfo?.symbol ?? 'TOKEN';
+  const contractAddr      = resolvedInfo?.address ?? tokenMint ?? '';
   const shortContractAddr = contractAddr ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}` : '';
-  // livePrice is set by applyLivePrice (WS, REST poll, and external sync) and is always
-  // the freshest known price. Use it as primary; fall back to candle close, then prop.
-  // livePrice is reset to null on token change so stale values never bleed across tokens.
-  const latestClose     = candles.length > 0 ? candles[candles.length - 1].close : 0;
-  const displayPriceVal = (livePrice != null && livePrice > 0) ? livePrice
+
+  // Latest price: prioritise livePrice (from all sources), then last candle, then prop.
+  // livePrice is reset to null on token change so no cross-token bleed.
+  const latestClose      = mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : 0;
+  const displayPriceVal  = (livePrice != null && livePrice > 0) ? livePrice
     : latestClose > 0 ? latestClose
     : (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
+
+  // Header always shows actual marketCap from snapshot (no stale scale multiplication).
+  // Axis labels use mcapScale for consistency.
   const mcapVal    = resolvedInfo?.marketCap ?? null;
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
-  const changeColor = isUp ? '#A78BFA' : '#EC4899';
+  const changeColor = isUp ? '#10B981' : '#EC4899';
   const headerValue = valueMode === 'mcap' && mcapVal != null && mcapVal > 0
     ? fmtMcap(mcapVal)
     : `$${fmtPrice(displayPriceVal)}`;
+
   const currentModeConfig = CHART_MODES.find(m => m.key === mode) ?? CHART_MODES[0];
   const ModeIcon = currentModeConfig.icon;
 
@@ -969,12 +905,10 @@ export function TradingViewChart({
     setTimeout(() => setCopiedAddr(false), 2000);
   };
 
-  // ── chart header ──────────────────────────────────────────────────────────
+  // ── Chart header ──────────────────────────────────────────────────────────
   const header = (
     <View style={[styles.chartHeader, hideTokenHeader && styles.chartHeaderSlim]}>
-      {/* Token info row: logo | name+addr | price+change — hidden when parent renders its own */}
       {!hideTokenHeader && <View style={styles.tokenInfoRow}>
-        {/* Logo — large rounded square */}
         {resolvedInfo?.image ? (
           <Image source={{ uri: resolvedInfo.image }} style={styles.tokenLogoLg} />
         ) : (
@@ -982,8 +916,6 @@ export function TradingViewChart({
             <Text style={styles.tokenLogoLgText}>{sym.slice(0, 2).toUpperCase()}</Text>
           </View>
         )}
-
-        {/* Name + addr col */}
         <View style={styles.tokenInfoMid}>
           <View style={styles.tokenNameRow}>
             <Text style={styles.tokenNameText} numberOfLines={1}>{resolvedInfo?.name ?? sym}</Text>
@@ -995,20 +927,18 @@ export function TradingViewChart({
             <TouchableOpacity style={styles.addrRow} onPress={handleCopyAddr} activeOpacity={0.7}>
               <Text style={styles.addrText}>{shortContractAddr}</Text>
               {copiedAddr
-                ? <CheckCircle2 size={10} color="#A78BFA" strokeWidth={2} />
+                ? <CheckCircle2 size={10} color={colors.success} strokeWidth={2} />
                 : <Copy size={10} color="rgba(255,255,255,0.35)" strokeWidth={2} />}
             </TouchableOpacity>
           ) : null}
         </View>
-
-        {/* Price + change (right) */}
         <View style={styles.tokenPriceRight}>
           <TouchableOpacity onPress={() => setValueMode(valueMode === 'mcap' ? 'price' : 'mcap')} activeOpacity={0.8}>
             <Text style={styles.tokenBigPrice}>{headerValue}</Text>
           </TouchableOpacity>
           <View style={styles.tokenChangeRow}>
             {isUp
-              ? <TrendingUp size={11} color={changeColor} strokeWidth={2.5} />
+              ? <TrendingUp  size={11} color={changeColor} strokeWidth={2.5} />
               : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
             <Text style={[styles.tokenChangePct, { color: changeColor }]}>
               {isUp ? '+' : ''}{change24h.toFixed(2)}%
@@ -1017,48 +947,38 @@ export function TradingViewChart({
         </View>
       </View>}
 
-      {/* Timeframe row + chart controls */}
       <View style={styles.tfControlRow}>
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.tfScroll}
-          contentContainerStyle={styles.tfScrollContent}
-        >
+          horizontal showsHorizontalScrollIndicator={false}
+          style={styles.tfScroll} contentContainerStyle={styles.tfScrollContent}>
           {ALL_TIMEFRAMES.map(tf => (
             <TouchableOpacity
               key={tf.key}
               style={[styles.tfPill, timeframe === tf.key && styles.tfPillActive]}
               onPress={() => setTimeframe(tf.key)}
-              activeOpacity={0.7}
-            >
+              activeOpacity={0.7}>
               <Text style={[styles.tfPillText, timeframe === tf.key && styles.tfPillTextActive]}>
                 {tf.label}
               </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
-
-        {/* Chart mode + settings buttons */}
         <View style={styles.chartCtrlBtns}>
           <TouchableOpacity
             style={[styles.chartCtrlBtn, showModePanel && styles.chartCtrlBtnActive]}
             onPress={() => { setShowModePanel(p => !p); setShowSettingsPanel(false); }}
-            activeOpacity={0.8}
-          >
+            activeOpacity={0.8}>
             <ModeIcon size={15} color={showModePanel ? '#A78BFA' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.chartCtrlBtn, showSettingsPanel && styles.chartCtrlBtnActive]}
             onPress={() => { setShowSettingsPanel(p => !p); setShowModePanel(false); }}
-            activeOpacity={0.8}
-          >
+            activeOpacity={0.8}>
             <SlidersHorizontal size={15} color={showSettingsPanel ? '#A78BFA' : 'rgba(255,255,255,0.6)'} strokeWidth={2} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Chart mode panel (conditional) */}
       {showModePanel && (
         <View style={styles.modePanelRow}>
           {CHART_MODES.map(m => {
@@ -1069,8 +989,7 @@ export function TradingViewChart({
                 key={m.key}
                 style={[styles.modePanelItem, active && styles.modePanelItemActive]}
                 onPress={() => { setMode(m.key); setShowModePanel(false); }}
-                activeOpacity={0.75}
-              >
+                activeOpacity={0.75}>
                 <IconComp size={14} color={active ? '#fff' : 'rgba(255,255,255,0.45)'} strokeWidth={active ? 2.5 : 2} />
                 <Text style={[styles.modePanelLabel, active && styles.modePanelLabelActive]}>{m.label}</Text>
               </TouchableOpacity>
@@ -1079,59 +998,41 @@ export function TradingViewChart({
         </View>
       )}
 
-      {/* Chart settings panel (conditional) */}
       {showSettingsPanel && (
         <View style={styles.settingsPanel}>
-          {/* Value mode row */}
           <View style={styles.settingsRow}>
             <Text style={styles.settingsLabel}>Display</Text>
             <View style={styles.settingsToggleGroup}>
               <TouchableOpacity
                 style={[styles.settingsToggleBtn, valueMode === 'mcap' && styles.settingsToggleBtnActive]}
-                onPress={() => setValueMode('mcap')}
-                activeOpacity={0.75}
-              >
+                onPress={() => setValueMode('mcap')} activeOpacity={0.75}>
                 <Text style={[styles.settingsToggleText, valueMode === 'mcap' && styles.settingsToggleTextActive]}>MCAP</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.settingsToggleBtn, valueMode === 'price' && styles.settingsToggleBtnActive]}
-                onPress={() => setValueMode('price')}
-                activeOpacity={0.75}
-              >
+                onPress={() => setValueMode('price')} activeOpacity={0.75}>
                 <Text style={[styles.settingsToggleText, valueMode === 'price' && styles.settingsToggleTextActive]}>PRICE</Text>
               </TouchableOpacity>
             </View>
           </View>
-          {/* Volume toggle */}
           <View style={styles.settingsRow}>
             <Text style={styles.settingsLabel}>Volume bars</Text>
-            <TouchableOpacity
-              style={[styles.settingsSwitch, showVolume && styles.settingsSwitchOn]}
-              onPress={() => setShowVolume(v => !v)}
-              activeOpacity={0.75}
-            >
+            <TouchableOpacity style={[styles.settingsSwitch, showVolume && styles.settingsSwitchOn]}
+              onPress={() => setShowVolume(v => !v)} activeOpacity={0.75}>
               <View style={[styles.settingsSwitchThumb, showVolume && styles.settingsSwitchThumbOn]} />
             </TouchableOpacity>
           </View>
-          {/* Price line toggle */}
           <View style={styles.settingsRow}>
             <Text style={styles.settingsLabel}>Price guide</Text>
-            <TouchableOpacity
-              style={[styles.settingsSwitch, showPriceLine && styles.settingsSwitchOn]}
-              onPress={() => setShowPriceLine(v => !v)}
-              activeOpacity={0.75}
-            >
+            <TouchableOpacity style={[styles.settingsSwitch, showPriceLine && styles.settingsSwitchOn]}
+              onPress={() => setShowPriceLine(v => !v)} activeOpacity={0.75}>
               <View style={[styles.settingsSwitchThumb, showPriceLine && styles.settingsSwitchThumbOn]} />
             </TouchableOpacity>
           </View>
-          {/* Grid toggle */}
           <View style={styles.settingsRow}>
             <Text style={styles.settingsLabel}>Grid lines</Text>
-            <TouchableOpacity
-              style={[styles.settingsSwitch, showGrid && styles.settingsSwitchOn]}
-              onPress={() => setShowGrid(v => !v)}
-              activeOpacity={0.75}
-            >
+            <TouchableOpacity style={[styles.settingsSwitch, showGrid && styles.settingsSwitchOn]}
+              onPress={() => setShowGrid(v => !v)} activeOpacity={0.75}>
               <View style={[styles.settingsSwitchThumb, showGrid && styles.settingsSwitchThumbOn]} />
             </TouchableOpacity>
           </View>
@@ -1140,11 +1041,7 @@ export function TradingViewChart({
     </View>
   );
 
-  // When candles loaded but none fall in the current window yet (auto-scroll
-  // hasn't fired), keep the spinner so the chart doesn't flash "No data".
   const autoScrollPending = !hasAutoScrolledRef.current && candles.length > 0 && displayCandles.length === 0;
-  // Show blank spinner only on first load (no candles yet) OR while waiting for
-  // auto-scroll to position the window at the last real candle.
   const isFirstLoad = (loading && candles.length === 0) || autoScrollPending;
 
   if (isFirstLoad) {
@@ -1177,27 +1074,20 @@ export function TradingViewChart({
     );
   }
 
-  // Guard: if displayCandles is empty but we have raw candle history, the visible
-  // window has drifted outside the loaded data range (e.g. brief state-update race
-  // after auto-scroll fires, or the user scrolled past the clamped maximum — which
-  // shouldn't happen but is guarded anyway). Auto-correct the offset so the last
-  // real candle is near the right side of the visible window, rather than showing a
-  // confusing "No data" message for data that genuinely exists.
+  // When displayCandles is empty but we have real data: schedule a pan correction
+  // via useEffect (never during render) and show a brief spinner.
   if (n === 0 && candles.length > 0) {
     const bMs         = BUCKET_MS[timeframe] ?? 3_600_000;
     const vB          = VISIBLE_BUCKETS[timeframe] ?? 48;
-    const lastTs      = candles[candles.length - 1].timestamp;
-    const targetRight = lastTs + bMs * Math.floor(vB * 0.1);
+    const lastTs      = mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1]?.timestamp : candles[candles.length - 1].timestamp;
+    const lastRealTs  = candles[candles.length - 1].timestamp;
+    const targetRight = lastRealTs + bMs * Math.floor(vB * 0.1);
     const msBehind    = Date.now() - targetRight;
     const corrected   = Math.max(0, Math.round(msBehind / bMs));
-    if (corrected !== panOffsetCandles) {
-      // Defer to avoid render loop — this fires at most once per bad state
-      setTimeout(() => {
-        panOffsetRef.current = corrected;
-        setPanOffsetCandles(corrected);
-      }, 0);
+    if (corrected !== panOffsetCandles && pendingPanCorrection !== corrected) {
+      // Schedule correction via state → useEffect; no setTimeout needed
+      setPendingPanCorrection(corrected);
     }
-    // Show spinner briefly while the offset corrects
     return (
       <View style={styles.container}>
         {header}
@@ -1208,7 +1098,6 @@ export function TradingViewChart({
     );
   }
 
-  // True no-data: we have zero candles and zero raw data for this range.
   if (n === 0) {
     return (
       <View style={styles.container}>
@@ -1220,22 +1109,17 @@ export function TradingViewChart({
     );
   }
 
-  // ── build paths ───────────────────────────────────────────────────────────
-  // Line path connects all candle close values in timestamp order.
-  // Carry-forward (volume=0) candles keep the line connected at last known price.
+  // ── Build paths ───────────────────────────────────────────────────────────
   const linePts = displayCandles
-    .map((c, i) => `${i === 0 ? 'M' : 'L'}${xFn(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
+    .map((c, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
     .join(' ');
-  const bottomY     = (PAD.top + plotH).toFixed(1);
-  const plotRightX  = PAD.left + plotW; // right edge of chart area
-  const safeRightX  = plotRightX - 4;  // clamp boundary: nothing crosses into right label column
-  const lastCandleX = xFn(n - 1);
+  const bottomY    = (PAD.top + plotH).toFixed(1);
+  const plotRightX = PAD.left + plotW;
+  const safeRightX = plotRightX - 4;
+  const lastCandleX = xOf(n - 1);
   const lastCandleY = yOf(displayCandles[n - 1].close);
-  // When not panned, extend area fill to safeRightX so it aligns with the dashed
-  // continuation segment without entering the right label column.
-  const areaFillRightX = panOffsetCandles === 0 && safeRightX > lastCandleX + 2
-    ? safeRightX : lastCandleX;
-  const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
+  const areaFillRightX = panOffsetCandles === 0 && safeRightX > lastCandleX + 2 ? safeRightX : lastCandleX;
+  const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`;
 
   // Grid
   const gridLevels = 5;
@@ -1245,8 +1129,7 @@ export function TradingViewChart({
     return { price, y: yOf(price) };
   });
 
-  // Time labels — generated from leftTime→rightTime at regular bucket intervals
-  // Aim for ~5-6 labels; step = multiple of bucketMs so labels land on clean boundaries
+  // Time labels
   const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(visibleBuckets / 6));
   const firstLabelTs    = Math.ceil(xLeft / timeLabelStepMs) * timeLabelStepMs;
   const timeLabels: { ts: number; x: number }[] = [];
@@ -1257,47 +1140,43 @@ export function TradingViewChart({
     }
   }
 
-  // Live price line (scaled to current display mode)
+  // Live price line
   const scaledLivePrice = displayPriceVal * mcapScale;
   const clampedLive = scaledLivePrice > maxP ? maxP : scaledLivePrice < minP ? minP : scaledLivePrice;
   const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
 
-  // Last candle point for animated dot
-  const lastCandle = displayCandles[n - 1];
-  const lastX      = xOf(n - 1);
-  const lastY      = yOf(lastCandle.close);
+  const lastX = Math.min(xOf(n - 1), safeRightX);
+  const lastY = yOf(displayCandles[n - 1].close);
 
-  // Visual continuation segment: flat line from last candle's close to current time
-  // Drawn only when live (not scrolled back), visual only — no data stored
-  const contRightX = PAD.left + plotW; // = tsToX(rightTime) by definition
-  const contY      = lastY;
+  // Continuation line: flat from last candle close to current time.
+  // Limited to at most 1.5 visible buckets so it never creates a fake long flat line.
+  const maxContExtension = bucketMs * 1.5;
+  const lastCandleTs     = displayCandles[n - 1].timestamp;
+  const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
+  const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
+  const contY            = lastY;
   const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
-  // "Start of available history" boundary indicator
+  // History start indicator
   const historyOldestTs   = candles.length > 0 ? candles[0].timestamp : Date.now();
   const historyMsToOldest = Math.max(0, Date.now() - historyOldestTs);
   const historyMaxPanBack = candles.length > 0
-    ? Math.max(0, Math.floor(historyMsToOldest / bucketMs) - visibleBuckets + 2)
-    : 0;
-  const atHistoryStart    = historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 1;
+    ? Math.max(0, Math.floor(historyMsToOldest / bucketMs) - visibleBuckets + 2) : 0;
+  const atHistoryStart = historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 1;
 
-  // Crosshair display values
   const chPrice = crosshair ? crosshair.price : null;
-  const chPct   = crosshair ? crosshair.pct   : null;
 
-  // Vol bar positions — placed between chart and time labels
   const volBaseY = CHART_H + VOL_H - 2;
 
   return (
     <View style={styles.container}>
       {header}
 
-      {/* Crosshair info bar */}
       {crosshair && (
         <View style={styles.crosshairBar}>
           <Text style={styles.crosshairDate}>{fmtDateTime(crosshair.ts)}</Text>
           <Text style={styles.crosshairPrice}>{fmtValue(crosshair.price, valueMode)}</Text>
-          <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#A78BFA' : '#EC4899' }]}>
+          <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#10B981' : '#EC4899' }]}>
             {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%
           </Text>
           <TouchableOpacity onPress={dismissCrosshair} style={styles.crosshairClose}>
@@ -1306,348 +1185,285 @@ export function TradingViewChart({
         </View>
       )}
 
-      {/* Return to Live button — shown when scrolled back in history */}
       {panOffsetCandles > 0 && (
         <TouchableOpacity
           style={styles.returnLiveBtn}
-          onPress={() => {
-            panOffsetRef.current = 0;
-            setPanOffsetCandles(0);
-            setCrosshair(null);
-          }}
-          activeOpacity={0.8}
-        >
+          onPress={() => { panOffsetRef.current = 0; setPanOffsetCandles(0); setCrosshair(null); }}
+          activeOpacity={0.8}>
           <Text style={styles.returnLiveText}>▶ Return to Live</Text>
         </TouchableOpacity>
       )}
 
       <View style={styles.chartArea}>
-      {/* Timeframe-switch overlay — chart stays visible while new data loads */}
-      {loading && candles.length > 0 && (
-        <View style={[styles.loadingOverlay, { height: CHART_H }]} pointerEvents="none">
-          <ActivityIndicator size="small" color={colors.primary} />
-        </View>
-      )}
+        {loading && candles.length > 0 && (
+          <View style={[styles.loadingOverlay, { height: CHART_H }]} pointerEvents="none">
+            <ActivityIndicator size="small" color={colors.primary} />
+          </View>
+        )}
 
-      <View
-        ref={svgContainerRef}
-        style={[
-          styles.svgWrap,
-          Platform.OS === 'web' && ({
-            userSelect: 'none',
-            WebkitUserSelect: 'none',
-            MozUserSelect: 'none',
-            touchAction: 'none',
-          } as any),
-        ]}
-        {...panResponder.panHandlers}
-        {...(webMouseHandlers as any)}
-        onLayout={() => {
-          svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
-            svgOffsetRef.current = { x: px, y: py };
-          });
-        }}
-      >
-        <Svg width={chartWidth} height={totalH}>
-          <Defs>
-            <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.5" />
-              <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.1" />
-              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="mountainGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.55" />
-              <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.08" />
-              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="bondingGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#A78BFA" stopOpacity="0.45" />
-              <Stop offset="50%"  stopColor="#7C3AED" stopOpacity="0.2" />
-              <Stop offset="100%" stopColor="#4C1D95" stopOpacity="0" />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="volGradGreen" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.8" />
-              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.25" />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="volGradRed" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%"   stopColor="#EC4899" stopOpacity="0.8" />
-              <Stop offset="100%" stopColor="#EC4899" stopOpacity="0.25" />
-            </SvgLinearGradient>
-            <ClipPath id="chartClip">
-              <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} />
-            </ClipPath>
-          </Defs>
+        <View
+          ref={svgContainerRef}
+          style={[
+            styles.svgWrap,
+            Platform.OS === 'web' && ({
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              MozUserSelect: 'none',
+              // Use pan-y so vertical scrolling still works; horizontal pan is captured by PanResponder
+              touchAction: 'pan-y',
+            } as any),
+          ]}
+          {...panResponder.panHandlers}
+          {...(webMouseHandlers as any)}
+          onLayout={() => {
+            svgContainerRef.current?.measure((_fx, _fy, _w, _h, px, py) => {
+              svgOffsetRef.current = { x: px, y: py };
+            });
+          }}
+        >
+          <Svg width={chartWidth} height={totalH}>
+            <Defs>
+              <SvgLinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.5" />
+                <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.1" />
+                <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
+              </SvgLinearGradient>
+              <SvgLinearGradient id="mountainGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.55" />
+                <Stop offset="60%"  stopColor="#8B5CF6" stopOpacity="0.08" />
+                <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
+              </SvgLinearGradient>
+              <SvgLinearGradient id="bondingGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%"   stopColor="#A78BFA" stopOpacity="0.45" />
+                <Stop offset="50%"  stopColor="#7C3AED" stopOpacity="0.2" />
+                <Stop offset="100%" stopColor="#4C1D95" stopOpacity="0" />
+              </SvgLinearGradient>
+              <SvgLinearGradient id="volGradGreen" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.8" />
+                <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.25" />
+              </SvgLinearGradient>
+              <SvgLinearGradient id="volGradRed" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%"   stopColor="#EC4899" stopOpacity="0.8" />
+                <Stop offset="100%" stopColor="#EC4899" stopOpacity="0.25" />
+              </SvgLinearGradient>
+              <ClipPath id="chartClip">
+                <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} />
+              </ClipPath>
+            </Defs>
 
-          {/* ── Chart area background ──────────────────────────────────────── */}
-          <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH}
-            fill="rgba(255,255,255,0.01)" />
+            <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} fill="rgba(255,255,255,0.01)" />
 
-          {/* ── Horizontal grid lines + price labels ──────────────────────── */}
-          {priceGridLines.map(({ price, y }, i) => (
-            <G key={`g${i}`}>
-              {showGrid && (
-                <Line
-                  x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
-                  stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
-              )}
-              <SvgText
-                x={chartWidth - PAD.right + 4} y={y + 3.5}
-                fontSize={isMobile ? 11 : 8.5}
-                fill={isMobile ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'}
-                fontWeight={isMobile ? '600' : '400'}
-                textAnchor="start">
-                {fmtValue(price, valueMode)}
-              </SvgText>
-            </G>
-          ))}
-
-          {/* ── Right-edge border ─────────────────────────────────────────── */}
-          <Line x1={chartWidth - PAD.right} y1={PAD.top} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
-            stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-
-          {/* ── Bottom border of chart area ───────────────────────────────── */}
-          <Line x1={PAD.left} y1={PAD.top + plotH} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
-            stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-
-          {/* ── Chart data clipped to plot area ───────────────────────────── */}
-          <G clipPath="url(#chartClip)">
-
-          {/* ── AREA ──────────────────────────────────────────────────────── */}
-          {mode === 'area' && (
-            <>
-              <Path d={areaPath} fill="url(#areaGrad)" />
-              <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
-
-          {/* ── LINE ──────────────────────────────────────────────────────── */}
-          {mode === 'line' && (
-            <>
-              <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={5} fill="#8B5CF6" opacity={0.18} />
-              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
-            </>
-          )}
-
-          {/* ── MOUNTAIN ──────────────────────────────────────────────────── */}
-          {mode === 'mountain' && (
-            <>
-              {/* stepped fill */}
-              <Path
-                d={displayCandles.map((c, i) => {
-                  const x  = xOf(i).toFixed(1);
-                  const y  = yOf(c.close).toFixed(1);
-                  if (i === 0) return `M${x},${y}`;
-                  const prevX = xOf(i - 1).toFixed(1);
-                  return `L${x},${yOf(displayCandles[i - 1].close).toFixed(1)} L${x},${y}`;
-                }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
-                fill="url(#mountainGrad)" />
-              <Path d={linePts} stroke="#8B5CF6" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
-            </>
-          )}
-
-          {/* ── BONDING (Live Line) ───────────────────────────────────────── */}
-          {mode === 'bonding' && (
-            <>
-              <Path d={areaPath} fill="url(#bondingGrad)" />
-              <Path d={linePts} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d={linePts} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              <Circle cx={lastX} cy={lastY} r={6} fill="#A78BFA" opacity={0.18} />
-              <Circle cx={lastX} cy={lastY} r={3.5} fill="#A78BFA" stroke="#fff" strokeWidth={1} />
-            </>
-          )}
-
-          {/* ── BAR ───────────────────────────────────────────────────────── */}
-          {mode === 'bar' && displayCandles.map((c, i) => {
-            if (c.volume === 0 && i !== n - 1) return null; // skip gaps; always draw live candle
-            const up  = c.close >= c.open;
-            const col = up ? '#8B5CF6' : '#EC4899';
-            const cx  = xOf(i);
-            const bw  = Math.max(isMobile ? 5 : 3, pixelPerBucket * 0.5);
-            const sw  = isMobile ? 1.5 : 1;
-            return (
-              <G key={`bar${c.timestamp}`}>
-                {/* vertical wick: high → low */}
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={sw} />
-                {/* left tick: open */}
-                <Line x1={cx - bw} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={sw} />
-                {/* right tick: close */}
-                <Line x1={cx} y1={yOf(c.close)} x2={cx + bw} y2={yOf(c.close)} stroke={col} strokeWidth={sw} />
-              </G>
-            );
-          })}
-
-          {/* ── CANDLESTICK ───────────────────────────────────────────────── */}
-          {mode === 'candlestick' && displayCandles.map((c, i) => {
-            if (c.volume === 0 && i !== n - 1) return null; // skip gaps; always draw live candle
-            const up      = c.close >= c.open;
-            const col     = up ? '#8B5CF6' : '#EC4899';
-            const cx      = xOf(i);
-            const wickW   = isMobile ? 1.5 : 1;
-            const bodyTop = yOf(Math.max(c.open, c.close));
-            const bodyBot = yOf(Math.min(c.open, c.close));
-            const rawH    = bodyBot - bodyTop;
-            const isDoji  = rawH < 1;
-            return (
-              <G key={`cs${c.timestamp}`}>
-                {/* wick drawn behind body */}
-                <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
-                {isDoji ? (
-                  /* doji: horizontal line at close price */
-                  <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
-                    stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
-                ) : (
-                  /* solid body — no rounded corners, no opacity */
-                  <Rect
-                    x={cx - candleW / 2} y={bodyTop}
-                    width={candleW} height={Math.max(1, rawH)}
-                    fill={col}
-                  />
+            {/* Horizontal grid + price labels */}
+            {priceGridLines.map(({ price, y }, i) => (
+              <G key={`g${i}`}>
+                {showGrid && (
+                  <Line x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
+                    stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
                 )}
+                <SvgText
+                  x={chartWidth - PAD.right + 4} y={y + 3.5}
+                  fontSize={isMobile ? 11 : 8.5}
+                  fill={isMobile ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'}
+                  fontWeight={isMobile ? '600' : '400'}
+                  textAnchor="start">
+                  {fmtValue(price, valueMode)}
+                </SvgText>
               </G>
-            );
-          })}
+            ))}
 
-          </G>{/* end chartClip */}
+            <Line x1={chartWidth - PAD.right} y1={PAD.top} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
+              stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+            <Line x1={PAD.left} y1={PAD.top + plotH} x2={chartWidth - PAD.right} y2={PAD.top + plotH}
+              stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
 
-          {/* ── Visual time continuation (flat line from last close → now) ── */}
-          {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-            <Line
-              x1={lastX} y1={contY}
-              x2={Math.min(contRightX, safeRightX)} y2={contY}
-              stroke="rgba(167,139,250,0.45)"
-              strokeWidth={1.5}
-              strokeDasharray="3,4"
+            {/* Chart data clipped to plot area */}
+            <G clipPath="url(#chartClip)">
+
+              {mode === 'area' && (
+                <>
+                  <Path d={areaPath} fill="url(#areaGrad)" />
+                  <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              )}
+
+              {mode === 'line' && (
+                <>
+                  <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Circle cx={lastX} cy={lastY} r={5} fill="#8B5CF6" opacity={0.18} />
+                  <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
+                </>
+              )}
+
+              {mode === 'mountain' && (
+                <>
+                  <Path
+                    d={displayCandles.map((c, i) => {
+                      const x = xOf(i).toFixed(1);
+                      const y = yOf(c.close).toFixed(1);
+                      if (i === 0) return `M${x},${y}`;
+                      const prevX = xOf(i - 1).toFixed(1);
+                      return `L${x},${yOf(displayCandles[i - 1].close).toFixed(1)} L${x},${y}`;
+                    }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
+                    fill="url(#mountainGrad)" />
+                  <Path d={linePts} stroke="#8B5CF6" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
+                </>
+              )}
+
+              {mode === 'bonding' && (
+                <>
+                  <Path d={areaPath} fill="url(#bondingGrad)" />
+                  <Path d={linePts} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Circle cx={lastX} cy={lastY} r={6} fill="#A78BFA" opacity={0.18} />
+                  <Circle cx={lastX} cy={lastY} r={3.5} fill="#A78BFA" stroke="#fff" strokeWidth={1} />
+                </>
+              )}
+
+              {mode === 'bar' && displayCandles.map((c, i) => {
+                // Skip synthetic live candle (vol=0) from bar rendering unless it's the last
+                if (c.volume === 0 && i !== n - 1) return null;
+                const up  = c.close >= c.open;
+                const col = up ? '#8B5CF6' : '#EC4899';
+                const cx  = Math.min(xOf(i), safeRightX);
+                const bw  = Math.max(isMobile ? 5 : 3, pixelPerBucket * 0.5);
+                const sw  = isMobile ? 1.5 : 1;
+                return (
+                  <G key={`bar${c.timestamp}`}>
+                    <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={sw} />
+                    <Line x1={cx - bw} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={sw} />
+                    <Line x1={cx} y1={yOf(c.close)} x2={cx + bw} y2={yOf(c.close)} stroke={col} strokeWidth={sw} />
+                  </G>
+                );
+              })}
+
+              {mode === 'candlestick' && displayCandles.map((c, i) => {
+                // Skip synthetic live candle (vol=0) from candlestick rendering unless it's last
+                if (c.volume === 0 && i !== n - 1) return null;
+                const up      = c.close >= c.open;
+                const col     = up ? '#8B5CF6' : '#EC4899';
+                const cx      = Math.min(xOf(i), safeRightX);
+                const wickW   = isMobile ? 1.5 : 1;
+                const bodyTop = yOf(Math.max(c.open, c.close));
+                const bodyBot = yOf(Math.min(c.open, c.close));
+                const rawH    = bodyBot - bodyTop;
+                const isDoji  = rawH < 1;
+                return (
+                  <G key={`cs${c.timestamp}`}>
+                    <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
+                    {isDoji ? (
+                      <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
+                        stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
+                    ) : (
+                      <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)} fill={col} />
+                    )}
+                  </G>
+                );
+              })}
+
+            </G>{/* end chartClip */}
+
+            {/* Continuation: short dashed segment from last close → current time (max 1.5 buckets) */}
+            {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+              <Line
+                x1={lastX} y1={contY}
+                x2={contRightX} y2={contY}
+                stroke="rgba(167,139,250,0.45)"
+                strokeWidth={1.5}
+                strokeDasharray="3,4"
+              />
+            )}
+
+            {/* Live price dashed guide line + pill — drawn outside chartClip so it's always visible */}
+            {showPriceLine && (
+              <>
+                <Line
+                  x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
+                  stroke="#8B5CF6" strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
+                <Rect
+                  x={chartWidth - PAD.right + 1} y={currentY - 9}
+                  width={PAD.right - 2} height={18}
+                  fill="#6D28D9" rx={4} />
+                <SvgText
+                  x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
+                  fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+                  {fmtValue(scaledLivePrice, valueMode)}
+                </SvgText>
+              </>
+            )}
+
+            {/* Endpoint dot — clamped to safeRightX */}
+            {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" opacity={1} />
+            )}
+
+            {/* Volume bars — real candles only; synthetic live (vol=0) skipped */}
+            {showVolume && displayCandles.map((c, i) => {
+              if (c.volume === 0) return null;
+              const h    = volBarH(c.volume);
+              const vx   = Math.min(xOf(i), safeRightX);
+              const isUp = c.close >= c.open;
+              return (
+                <Rect key={`v${c.timestamp}`}
+                  x={vx - barW / 2}
+                  y={CHART_H + (VOL_H - h - 2)}
+                  width={Math.max(barW, 1.5)}
+                  height={h}
+                  fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
+                  opacity={i === n - 1 ? 0.9 : 0.45}
+                  rx={1} />
+              );
+            })}
+
+            <Line x1={PAD.left} y1={CHART_H} x2={chartWidth - PAD.right} y2={CHART_H}
+              stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
+
+            {timeLabels.map(({ ts, x }) => (
+              <SvgText key={`tl${ts}`} x={x} y={CHART_H + VOL_H + TIME_H - 3}
+                fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
+                {fmtTime(ts, timeframe)}
+              </SvgText>
+            ))}
+
+            {atHistoryStart && (
+              <SvgText x={PAD.left + 6} y={CHART_H - 8} fontSize={9}
+                fill="rgba(255,255,255,0.25)" textAnchor="start">
+                {'← Start of available history'}
+              </SvgText>
+            )}
+
+            {crosshair && (
+              <G>
+                <Line x1={crosshair.x} y1={PAD.top} x2={crosshair.x} y2={CHART_H + VOL_H}
+                  stroke="rgba(255,255,255,0.3)" strokeWidth={1} strokeDasharray="3,3" />
+                <Line x1={PAD.left} y1={crosshair.y} x2={chartWidth - PAD.right} y2={crosshair.y}
+                  stroke="rgba(255,255,255,0.25)" strokeWidth={1} strokeDasharray="3,3" />
+                <Circle cx={crosshair.x} cy={crosshair.y} r={5}
+                  fill="#8B5CF6" stroke="#fff" strokeWidth={1.5} opacity={0.95} />
+                <Rect x={chartWidth - PAD.right + 1} y={crosshair.y - 9}
+                  width={PAD.right - 2} height={18} fill="#8B5CF6" rx={3} />
+                <SvgText
+                  x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={crosshair.y + 4.5}
+                  fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
+                  {fmtValue(crosshair.price, valueMode)}
+                </SvgText>
+              </G>
+            )}
+          </Svg>
+
+          {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+            <Animated.View
+              style={[
+                styles.livePulse,
+                { left: lastX - 10, top: lastY - 10, transform: [{ scale: dotPulse }], backgroundColor: 'rgba(167,139,250,0.22)' },
+              ]}
+              pointerEvents="none"
             />
           )}
-
-          {/* ── Live price dashed horizontal line ─────────────────────────── */}
-          {showPriceLine && (
-            <>
-              <Line
-                x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
-                stroke="#8B5CF6"
-                strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
-              {/* Price pill on right edge */}
-              <Rect
-                x={chartWidth - PAD.right + 1} y={currentY - 9}
-                width={PAD.right - 2} height={18}
-                fill="#6D28D9" rx={4} />
-              <SvgText
-                x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
-                fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-                {fmtValue(scaledLivePrice, valueMode)}
-              </SvgText>
-            </>
-          )}
-
-          {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
-          {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-            <Circle cx={Math.min(lastX, safeRightX)} cy={lastY} r={3}
-              fill="#A78BFA" opacity={1} />
-          )}
-
-          {/* ── Volume bars — sandwiched between chart and time labels ─────── */}
-          {showVolume && displayCandles.map((c, i) => {
-            // Skip carry-forward candles — no real volume means no bar
-            if (c.volume === 0) return null;
-            const h      = volBarH(c.volume);
-            const vx     = xOf(i);
-            const isUp   = c.close >= c.open;
-            const isLast = i === n - 1;
-            return (
-              <Rect key={`v${c.timestamp}`}
-                x={vx - barW / 2}
-                y={CHART_H + (VOL_H - h - 2)}
-                width={Math.max(barW, 1.5)}
-                height={h}
-                fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
-                opacity={isLast ? 0.9 : 0.45}
-                rx={1} />
-            );
-          })}
-
-          {/* ── Volume area separator line ────────────────────────────────── */}
-          <Line
-            x1={PAD.left} y1={CHART_H}
-            x2={chartWidth - PAD.right} y2={CHART_H}
-            stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
-
-          {/* ── Time labels — timestamp-based, slide as real time passes ──── */}
-          {timeLabels.map(({ ts, x }) => (
-            <SvgText
-              key={`tl${ts}`}
-              x={x}
-              y={CHART_H + VOL_H + TIME_H - 3}
-              fontSize={9}
-              fill="rgba(255,255,255,0.35)"
-              textAnchor="middle">
-              {fmtTime(ts, timeframe)}
-            </SvgText>
-          ))}
-
-          {/* ── Start of available history label ─────────────────────────── */}
-          {atHistoryStart && (
-            <SvgText
-              x={PAD.left + 6}
-              y={CHART_H - 8}
-              fontSize={9}
-              fill="rgba(255,255,255,0.25)"
-              textAnchor="start">
-              {'← Start of available history'}
-            </SvgText>
-          )}
-
-          {/* ── Crosshair lines ───────────────────────────────────────────── */}
-          {crosshair && (
-            <G>
-              {/* Vertical line */}
-              <Line
-                x1={crosshair.x} y1={PAD.top}
-                x2={crosshair.x} y2={CHART_H + VOL_H}
-                stroke="rgba(255,255,255,0.3)" strokeWidth={1} strokeDasharray="3,3" />
-              {/* Horizontal line */}
-              <Line
-                x1={PAD.left} y1={crosshair.y}
-                x2={chartWidth - PAD.right} y2={crosshair.y}
-                stroke="rgba(255,255,255,0.25)" strokeWidth={1} strokeDasharray="3,3" />
-              {/* Crosshair dot */}
-              <Circle cx={crosshair.x} cy={crosshair.y} r={5}
-                fill="#8B5CF6" stroke="#fff" strokeWidth={1.5} opacity={0.95} />
-              {/* Price label on right axis */}
-              <Rect
-                x={chartWidth - PAD.right + 1} y={crosshair.y - 9}
-                width={PAD.right - 2} height={18}
-                fill="#8B5CF6" rx={3} />
-              <SvgText
-                x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={crosshair.y + 4.5}
-                fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-                {fmtValue(crosshair.price, valueMode)}
-              </SvgText>
-            </G>
-          )}
-        </Svg>
-
-        {/* Animated live pulse ring overlay — always visible for live modes */}
-        {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-          <Animated.View
-            style={[
-              styles.livePulse,
-              {
-                left: Math.min(lastX, safeRightX) - 10,
-                top:  lastY - 10,
-                transform: [{ scale: dotPulse }],
-                backgroundColor: 'rgba(167,139,250,0.22)',
-              },
-            ]}
-            pointerEvents="none"
-          />
-        )}
+        </View>
       </View>
-      </View>{/* end chartArea */}
     </View>
   );
 }
@@ -1669,24 +1485,11 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(139,92,246,0.08)',
     gap: 8,
   },
-  chartHeaderSlim: {
-    paddingTop: 8,
-    paddingBottom: 6,
-    gap: 0,
-  },
-  // Token info row: [logo] [name+addr flex1] [price+change]
-  tokenInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  tokenLogoLg: {
-    width: 44, height: 44, borderRadius: 10,
-    backgroundColor: '#1A1A2E',
-  },
+  chartHeaderSlim: { paddingTop: 8, paddingBottom: 6, gap: 0 },
+  tokenInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  tokenLogoLg: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#1A1A2E' },
   tokenLogoLgFallback: {
-    width: 44, height: 44, borderRadius: 10,
-    backgroundColor: '#1A1A2E',
+    width: 44, height: 44, borderRadius: 10, backgroundColor: '#1A1A2E',
     justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
   },
@@ -1694,32 +1497,18 @@ const styles = StyleSheet.create({
   tokenInfoMid: { flex: 1, gap: 2 },
   tokenNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tokenNameText: { fontSize: 15, fontWeight: '800', color: '#fff', letterSpacing: -0.2, flexShrink: 1 },
-  liveWsDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: '#A78BFA',
-  },
+  liveWsDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' },
   addrRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   addrText: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'SpaceMono-Regular' },
   tokenPriceRight: { alignItems: 'flex-end', gap: 3 },
   tokenBigPrice: { fontSize: 20, fontWeight: '900', color: '#fff', letterSpacing: -0.5 },
   tokenChangeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   tokenChangePct: { fontSize: 12, fontWeight: '700' },
-  // Timeframe pill row + chart ctrl buttons
-  tfControlRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-  },
+  tfControlRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tfScroll: { flex: 1 },
   tfScrollContent: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 4 },
-  tfPill: {
-    paddingHorizontal: 9, paddingVertical: 5,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  tfPillActive: {
-    backgroundColor: 'rgba(139,92,246,0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.5)',
-  },
+  tfPill: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.04)' },
+  tfPillActive: { backgroundColor: 'rgba(139,92,246,0.25)', borderWidth: 1, borderColor: 'rgba(167,139,250,0.5)' },
   tfPillText: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
   tfPillTextActive: { color: '#A78BFA' },
   chartCtrlBtns: { flexDirection: 'row', gap: 4 },
@@ -1729,26 +1518,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
-  chartCtrlBtnActive: {
-    backgroundColor: 'rgba(139,92,246,0.2)',
-    borderColor: 'rgba(139,92,246,0.4)',
-  },
-  // Mode panel
+  chartCtrlBtnActive: { backgroundColor: 'rgba(139,92,246,0.2)', borderColor: 'rgba(139,92,246,0.4)' },
   modePanelRow: {
     flexDirection: 'row', gap: 4, flexWrap: 'wrap',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 10, padding: 6,
+    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 6,
   },
   modePanelItem: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 7,
-    borderRadius: 7, flex: 1, justifyContent: 'center',
-    minWidth: 70,
+    borderRadius: 7, flex: 1, justifyContent: 'center', minWidth: 70,
   },
   modePanelItemActive: { backgroundColor: colors.primary },
   modePanelLabel: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
   modePanelLabelActive: { color: '#fff' },
-  // Crosshair info bar
   crosshairBar: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.lg, paddingVertical: 7,
@@ -1761,105 +1543,46 @@ const styles = StyleSheet.create({
   crosshairPct:   { fontSize: 11, fontWeight: '700', minWidth: 52, textAlign: 'right' },
   crosshairClose: { padding: 4 },
   crosshairCloseText: { fontSize: 11, color: colors.textMuted },
-  // Chart SVG wrapper
   chartArea: { position: 'relative' },
   svgWrap: { paddingTop: 4, paddingBottom: 2, position: 'relative', overflow: 'hidden' },
-  // Loading / unavailable
-  loadingOverlay:  { position: 'absolute', left: 0, right: 0, top: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.25)', zIndex: 10 },
-  loadingWrap:     { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
-  loadingSubText:  { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
+  loadingOverlay: { position: 'absolute', left: 0, right: 0, top: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.25)', zIndex: 10 },
+  loadingWrap:    { height: 220, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
+  loadingSubText: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
   unavailableWrap: { height: 160, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
   unavailableText: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
   priceFallback:   { fontSize: 24, fontWeight: '900', color: colors.primary },
-  // Live pulse
-  livePulse: {
-    position: 'absolute', width: 20, height: 20, borderRadius: 10,
-    pointerEvents: 'none',
-  },
+  livePulse: { position: 'absolute', width: 20, height: 20, borderRadius: 10, pointerEvents: 'none' },
   returnLiveBtn: {
     alignSelf: 'center',
     backgroundColor: 'rgba(139,92,246,0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.4)',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    marginVertical: 4,
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)',
+    borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6, marginVertical: 4,
   },
-  returnLiveText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#A78BFA',
-    letterSpacing: 0.3,
-  },
-  // Settings panel
+  returnLiveText: { fontSize: 11, fontWeight: '700', color: '#A78BFA', letterSpacing: 0.3 },
   settingsPanel: {
-    backgroundColor: 'rgba(13,11,25,0.97)',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.25)',
-    paddingVertical: 4,
-    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 10, padding: spacing.md,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
+    gap: spacing.sm,
   },
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(139,92,246,0.08)',
-  },
-  settingsLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.7)',
-  },
-  settingsToggleGroup: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 6,
-    padding: 2,
-    gap: 2,
-  },
+  settingsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  settingsLabel: { fontSize: 11, color: 'rgba(255,255,255,0.5)', fontWeight: '600' },
+  settingsToggleGroup: { flexDirection: 'row', gap: 4 },
   settingsToggleBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 5,
-  },
-  settingsToggleBtnActive: {
-    backgroundColor: '#7C3AED',
-  },
-  settingsToggleText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.35)',
-    letterSpacing: 0.4,
-  },
-  settingsToggleTextActive: { color: '#fff' },
-  settingsSwitch: {
-    width: 38,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-  },
-  settingsSwitchOn: {
-    backgroundColor: 'rgba(124,58,237,0.5)',
-    borderColor: 'rgba(167,139,250,0.5)',
-  },
-  settingsSwitchThumb: {
-    width: 16,
-    height: 16,
+    paddingHorizontal: 10, paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
-  settingsSwitchThumbOn: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#A78BFA',
+  settingsToggleBtnActive: { backgroundColor: 'rgba(139,92,246,0.3)', borderColor: 'rgba(167,139,250,0.5)' },
+  settingsToggleText: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
+  settingsToggleTextActive: { color: '#A78BFA' },
+  settingsSwitch: {
+    width: 36, height: 20, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center', paddingHorizontal: 2,
   },
+  settingsSwitchOn: { backgroundColor: 'rgba(139,92,246,0.6)' },
+  settingsSwitchThumb: { width: 16, height: 16, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.5)' },
+  settingsSwitchThumbOn: { backgroundColor: '#fff', transform: [{ translateX: 16 }] },
 });
