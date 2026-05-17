@@ -66,6 +66,11 @@ export default function CommunityScreen() {
   const [replyingToComment, setReplyingToComment] = useState<PostComment | null>(null);
   const commentInputRef = useRef<any>(null);
 
+  // Realtime feed — scroll-safe pending posts
+  const [pendingPosts, setPendingPosts] = useState<Post[]>([]);
+  const feedListRef = useRef<FlatList<Post>>(null);
+  const feedScrollYRef = useRef(0);
+
   // Messages state
   const [msgSearch, setMsgSearch] = useState('');
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -186,6 +191,16 @@ export default function CommunityScreen() {
     }
   }, [profile?.id]);
 
+  const handleApplyPendingPosts = useCallback(() => {
+    setPosts(prev => {
+      const existingIds = new Set(prev.map(p => p.id));
+      const newOnes = pendingPosts.filter(p => !existingIds.has(p.id));
+      return newOnes.length > 0 ? [...newOnes, ...prev] : prev;
+    });
+    setPendingPosts([]);
+    feedListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, [pendingPosts]);
+
   const loadNotifications = useCallback(async () => {
     if (!profile?.id) return;
     setNotifLoading(true);
@@ -280,13 +295,45 @@ export default function CommunityScreen() {
     const uid = profile.id;
     const channel = supabase
       .channel(`community_social_${uid}`)
-      // New post from anyone → silent feed refresh so it appears in the list
+      // New post from anyone → scroll-safe in-place insert
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' },
-        (payload) => {
+        async (payload) => {
           const raw = payload.new as any;
           // Skip own posts — already added optimistically via handleCreatePost
           if (raw.author_id === uid) return;
-          loadFeed();
+
+          try {
+            const [postRes, authorRes] = await Promise.all([
+              supabase.from('posts').select('*').eq('id', raw.id).maybeSingle(),
+              supabase.from('user_profiles').select('*').eq('id', raw.author_id).maybeSingle(),
+            ]);
+            if (!postRes.data) return;
+            const newPost: Post = { ...postRes.data, author: authorRes.data ?? undefined, liked_by_user: false, reposted_by_user: false };
+
+            if (feedScrollYRef.current <= 150) {
+              setPosts(prev => {
+                if (prev.find(p => p.id === newPost.id)) return prev;
+                return [newPost, ...prev];
+              });
+            } else {
+              setPendingPosts(prev => {
+                if (prev.find(p => p.id === newPost.id)) return prev;
+                return [newPost, ...prev];
+              });
+            }
+          } catch {
+            // Fallback: silent full reload
+            loadFeed();
+          }
+        }
+      )
+      // Post deleted → remove from feed
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' },
+        (payload) => {
+          const deletedId = (payload.old as any)?.id;
+          if (!deletedId) return;
+          setPosts(prev => prev.filter(p => p.id !== deletedId));
+          setPendingPosts(prev => prev.filter(p => p.id !== deletedId));
         }
       )
       // Another user likes a post → increment like counter in-place
@@ -495,6 +542,7 @@ export default function CommunityScreen() {
   };
 
   const onRefresh = async () => {
+    setPendingPosts([]);
     setRefreshing(true);
     await loadFeed();
     if (activeTab === 'notifications') await loadNotifications();
@@ -890,36 +938,48 @@ export default function CommunityScreen() {
 
     // Normal feed
     return (
-      <FlatList
-        data={posts}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <PostCard
-            post={item}
-            currentProfile={profile}
-            onLike={handleLike}
-            onComment={openCommentsModal}
-            onRepost={handleRepost}
-            onPromote={item.author_id === profile?.id ? openPromoteModal : undefined}
-            onDelete={item.author_id === profile?.id ? requestDeletePost : undefined}
-          />
+      <View style={{ flex: 1 }}>
+        {pendingPosts.length > 0 && (
+          <TouchableOpacity style={styles.newPostsPill} onPress={handleApplyPendingPosts} activeOpacity={0.85}>
+            <Text style={styles.newPostsPillText}>
+              {pendingPosts.length} new {pendingPosts.length === 1 ? 'post' : 'posts'}
+            </Text>
+          </TouchableOpacity>
         )}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <View style={styles.emptyIconWrap}>
-              <MessageCircle size={44} color={colors.primary} strokeWidth={1.5} />
+        <FlatList
+          ref={feedListRef}
+          data={posts}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => (
+            <PostCard
+              post={item}
+              currentProfile={profile}
+              onLike={handleLike}
+              onComment={openCommentsModal}
+              onRepost={handleRepost}
+              onPromote={item.author_id === profile?.id ? openPromoteModal : undefined}
+              onDelete={item.author_id === profile?.id ? requestDeletePost : undefined}
+            />
+          )}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconWrap}>
+                <MessageCircle size={44} color={colors.primary} strokeWidth={1.5} />
+              </View>
+              <Text style={styles.emptyTitle}>No posts yet</Text>
+              <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
+              <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/create-post')}>
+                <Text style={styles.emptyBtnText}>Create First Post</Text>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.emptyTitle}>No posts yet</Text>
-            <Text style={styles.emptySubtitle}>Be the first to share your thoughts</Text>
-            <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/create-post')}>
-              <Text style={styles.emptyBtnText}>Create First Post</Text>
-            </TouchableOpacity>
-          </View>
-        }
-        contentContainerStyle={posts.length === 0 ? styles.emptyList : styles.feedList}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-      />
+          }
+          contentContainerStyle={posts.length === 0 ? styles.emptyList : styles.feedList}
+          showsVerticalScrollIndicator={false}
+          onScroll={e => { feedScrollYRef.current = e.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={200}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        />
+      </View>
     );
   };
 
@@ -2366,6 +2426,26 @@ const styles = StyleSheet.create({
   feedList: {
     paddingTop: spacing.sm,
     paddingBottom: 100,
+  },
+  newPostsPill: {
+    position: 'absolute',
+    top: spacing.sm,
+    alignSelf: 'center',
+    zIndex: 10,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  newPostsPillText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
   emptyList: {
     flexGrow: 1,

@@ -36,6 +36,7 @@ import { WalletActivity } from '@/components/WalletActivity';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import SparklineChart from '@/components/SparklineChart';
 import { useLiveToken } from '@/hooks/useLiveToken';
+import { AnimatedBalance } from '@/components/AnimatedBalance';
 
 type TabKey = 'market' | 'assets' | 'watchlist' | 'portfolio' | 'activity';
 type CategoryKey = 'all' | 'trending' | 'new' | 'verified' | 'top_volume' | 'gainers';
@@ -534,7 +535,7 @@ export default function WalletHome() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.portfolioBalance}>{formatBalance(totalBalance)}</Text>
+        <AnimatedBalance value={totalBalance} formatter={formatBalance} style={styles.portfolioBalance} />
         <Text style={styles.portfolioChange}>
           {balanceHidden ? '****' : `$${totalBalance.toFixed(2)} (0.00%) today`}
         </Text>

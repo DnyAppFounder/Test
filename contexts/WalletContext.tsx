@@ -6,6 +6,7 @@ import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletMan
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
 import { walletAssetLoader } from '@/services/walletAssetLoader';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
+import { SolanaConnectionService } from '@/services/solana/connectionService';
 
 export type WalletType = 'created' | 'imported' | 'connected';
 
@@ -355,6 +356,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   // Track last background-refresh timestamp to prevent hammering on rapid visibility changes
   const lastBgRefreshRef = useRef<number>(0);
+  // Ref mirrors activeAddress so async WebSocket callbacks can read the latest value
+  const activeAddressRef = useRef<string | null>(null);
+  useEffect(() => { activeAddressRef.current = activeAddress; }, [activeAddress]);
+  // Debounce ref — batches rapid account-change events (e.g. swap touching multiple accounts)
+  const wsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-refresh every 30 seconds while a wallet is connected (silent — no loading spinner)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -402,6 +408,58 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [activeAddress, applyPortfolioResult]);
+
+  // Realtime balance updates via Solana WebSocket account subscriptions.
+  // Gracefully falls back to the existing 30s polling if WebSocket is not supported.
+  useEffect(() => {
+    if (!activeAddress) return;
+
+    const subIds: number[] = [];
+
+    const onBalanceChange = () => {
+      if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
+      wsDebounceRef.current = setTimeout(() => {
+        const addr = activeAddressRef.current;
+        if (!addr) return;
+        walletAssetLoader.loadSolanaWalletAssets(addr).then(applyPortfolioResult).catch(() => {});
+      }, 800);
+    };
+
+    try {
+      const connection = SolanaConnectionService.getInstance().getConnection();
+      const { PublicKey } = require('@solana/web3.js');
+      const pubkey = new PublicKey(activeAddress);
+
+      const solId = connection.onAccountChange(pubkey, onBalanceChange, 'confirmed');
+      subIds.push(solId);
+
+      const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+      const tokenId = connection.onProgramAccountChange(
+        TOKEN_PROGRAM, onBalanceChange, 'confirmed',
+        [{ memcmp: { offset: 32, bytes: activeAddress } }]
+      );
+      subIds.push(tokenId);
+
+      const TOKEN22_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+      const token22Id = connection.onProgramAccountChange(
+        TOKEN22_PROGRAM, onBalanceChange, 'confirmed',
+        [{ memcmp: { offset: 32, bytes: activeAddress } }]
+      );
+      subIds.push(token22Id);
+    } catch {
+      // WebSocket not available — 30s polling remains active as fallback
+    }
+
+    return () => {
+      if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
+      try {
+        const connection = SolanaConnectionService.getInstance().getConnection();
+        subIds.forEach(id => {
+          try { connection.removeAccountChangeListener(id); } catch {}
+        });
+      } catch {}
+    };
   }, [activeAddress, applyPortfolioResult]);
 
   return (
