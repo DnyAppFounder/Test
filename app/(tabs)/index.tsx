@@ -24,7 +24,6 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { liveMarketService, LiveToken, MarketCategory } from '@/services/liveMarketService';
 import { dexScreenerService } from '@/services/dexscreener/tokenDiscoveryService';
-import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
 import { watchlistService, WatchlistToken } from '@/services/watchlistService';
 import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
 import { PortfolioChart } from '@/components/PortfolioChart';
@@ -151,7 +150,7 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: typeof Flame }[] = [
 
 export default function WalletHome() {
   const router = useRouter();
-  const { activeAddress, activeWallet, isInitialized } = useWallet();
+  const { activeAddress, activeWallet, isInitialized, walletAssets, totalBalance, isPortfolioLoading, portfolioError, refreshPortfolio } = useWallet();
   const { profile } = useProfile();
   const { t } = useLanguage();
   const [balanceHidden, setBalanceHidden] = useState(false);
@@ -159,16 +158,12 @@ export default function WalletHome() {
   const [activeTab, setActiveTab] = useState<TabKey>('market');
   const [searchQuery, setSearchQuery] = useState('');
   const [liveTokens, setLiveTokens] = useState<LiveToken[]>([]);
-  const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([]);
-  const [totalBalance, setTotalBalance] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [assetsLoading, setAssetsLoading] = useState(false);
   const [category, setCategory] = useState<CategoryKey>('all');
   const [watchlist, setWatchlist] = useState<WatchlistToken[]>([]);
   const [watchlistEnriched, setWatchlistEnriched] = useState<Map<string, LiveToken>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [assetSubTab, setAssetSubTab] = useState<AssetSubTab>('tokens');
-  const [assetsError, setAssetsError] = useState<string | null>(null);
   const [nfts, setNfts] = useState<NFT[]>([]);
   const [nftsLoading, setNftsLoading] = useState(false);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
@@ -226,33 +221,6 @@ export default function WalletHome() {
       setLoading(false);
     }
   }, [category]);
-
-  const loadWalletAssets = useCallback(async () => {
-    if (!activeAddress) {
-      setWalletAssets([]);
-      setTotalBalance(0);
-      setAssetsError(null);
-      return;
-    }
-
-    // Only show spinner on first load; subsequent refreshes keep existing data visible
-    setWalletAssets(prev => { if (prev.length === 0) setAssetsLoading(true); return prev; });
-    setAssetsError(null);
-    try {
-      const result = await walletAssetLoader.loadWalletAssets('solana', activeAddress);
-      if (result.error) setAssetsError(result.error);
-      setWalletAssets(result.assets);
-      setTotalBalance(result.totalValue);
-      if (result.totalValue > 0) {
-        await PortfolioHistoryService.recordSnapshot(activeAddress, result.totalValue);
-      }
-    } catch (err: any) {
-      console.error('[MyAssets] Error loading wallet assets:', err);
-      setAssetsError(err?.message || 'Failed to load wallet assets');
-    } finally {
-      setAssetsLoading(false);
-    }
-  }, [activeAddress]);
 
   const loadWatchlist = useCallback(async () => {
     if (!profile?.id) { setWatchlist([]); return; }
@@ -357,9 +325,12 @@ export default function WalletHome() {
     return () => clearInterval(id);
   }, [activeTab, category]);
 
+  // Record portfolio snapshot whenever balance updates from WalletContext
   useEffect(() => {
-    loadWalletAssets();
-  }, [loadWalletAssets]);
+    if (activeAddress && totalBalance > 0) {
+      PortfolioHistoryService.recordSnapshot(activeAddress, totalBalance).catch(() => {});
+    }
+  }, [totalBalance, activeAddress]);
 
   useEffect(() => {
     loadWatchlist();
@@ -390,7 +361,7 @@ export default function WalletHome() {
     setRefreshing(true);
     setPendingNewTokens([]);
     try {
-      const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
+      const jobs: Promise<any>[] = [loadMarketData(), refreshPortfolio(), loadWatchlist()];
       if (assetSubTab === 'nfts') jobs.push(loadNFTs());
       await Promise.allSettled(jobs);
     } catch (e) {
@@ -465,7 +436,7 @@ export default function WalletHome() {
   // Only show static placeholder when no wallet connected AND not loading
   const hasWallet = !!activeAddress;
   // Only show "connect wallet" after wallet context has fully initialized to avoid the brief flash
-  const showStaticFallback = !hasWallet && !assetsLoading && isInitialized;
+  const showStaticFallback = !hasWallet && !isPortfolioLoading && isInitialized;
 
   const shortAddr = activeWallet
     ? `${activeWallet.address.slice(0, 4)}...${activeWallet.address.slice(-4)}`
@@ -705,13 +676,13 @@ export default function WalletHome() {
               </TouchableOpacity>
             </View>
 
-            {assetsLoading ? (
+            {isPortfolioLoading ? (
               <ActivityIndicator color={colors.primary} style={{ marginVertical: 24 }} />
-            ) : assetsError && filteredAssets.length === 0 ? (
+            ) : portfolioError && filteredAssets.length === 0 ? (
               <View style={styles.inlineEmpty}>
                 <Text style={styles.inlineEmptyText}>Could not load assets</Text>
-                <Text style={styles.inlineEmptySub}>{assetsError}</Text>
-                <TouchableOpacity style={styles.retryBtn} onPress={loadWalletAssets} activeOpacity={0.8}>
+                <Text style={styles.inlineEmptySub}>{portfolioError}</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={refreshPortfolio} activeOpacity={0.8}>
                   <Text style={styles.retryBtnText}>Retry</Text>
                 </TouchableOpacity>
               </View>

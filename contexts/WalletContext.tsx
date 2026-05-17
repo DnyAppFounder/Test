@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AppState, AppStateStatus, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Token, Blockchain } from '@/types/crypto';
 import { SecureWalletManager, WalletAccount } from '@/lib/wallet/SecureWalletManager';
 import { ExternalWalletAdapter, ConnectedExternalWallet, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
-import { walletAssetLoader } from '@/services/walletAssetLoader';
+import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
 import { SolanaConnectionService } from '@/services/solana/connectionService';
 
@@ -46,6 +46,7 @@ interface WalletContextType {
 
   // Portfolio data (same for all wallet types)
   tokens: Token[];
+  walletAssets: WalletAsset[];
   blockchains: Blockchain[];
   totalBalance: number;
   nativeBalance: number;
@@ -100,6 +101,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [selectedAccount, setSelectedAccountState] = useState<WalletAccount | null>(null);
   const [connectedWallet, setConnectedWallet] = useState<ConnectedExternalWallet | null>(null);
   const [tokens, setTokens] = useState<Token[]>([]);
+  const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([]);
   const [blockchains, setBlockchains] = useState<Blockchain[]>([]);
   const [totalBalance, setTotalBalance] = useState(0);
   const [nativeBalance, setNativeBalance] = useState(0);
@@ -111,15 +113,19 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   // Connected wallet takes priority as the active address
   const activeAddress = connectedWallet?.address ?? selectedAccount?.address ?? null;
 
-  // Build unified wallet list: connected wallet first (if any), then internal accounts
-  const allWallets: UnifiedWallet[] = [
+  // Memoized to prevent new object references on every render — consumers that use
+  // these as effect deps (e.g. OnboardingGate) must not re-fire on identical data.
+  const allWallets = useMemo<UnifiedWallet[]>(() => [
     ...(connectedWallet ? [connectedToUnified(connectedWallet, true)] : []),
     ...accounts.map((acc) =>
       walletAccountToUnified(acc, !connectedWallet && acc.id === selectedAccount?.id)
     ),
-  ];
+  ], [connectedWallet, accounts, selectedAccount?.id]);
 
-  const activeWallet: UnifiedWallet | null = allWallets.find((w) => w.isActive) ?? null;
+  const activeWallet = useMemo<UnifiedWallet | null>(
+    () => allWallets.find((w) => w.isActive) ?? null,
+    [allWallets]
+  );
 
   const setActiveWallet = useCallback((wallet: UnifiedWallet) => {
     if (wallet.type === 'connected') {
@@ -217,6 +223,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setAccounts([]);
     setSelectedAccountState(null);
     setTokens([]);
+    setWalletAssets([]);
     setBlockchains([]);
     setTotalBalance(0);
     setNativeBalance(0);
@@ -244,6 +251,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       balance: asset.balance,
       balanceUSD: asset.value,
     }));
+    // Store full asset objects so consumers (e.g. home screen) can read them directly
+    // without their own separate network call.
+    setWalletAssets(result.assets as WalletAsset[]);
+
     // Only update state when values actually changed to prevent cascading re-renders
     setTokens(prev => {
       const sameLength = prev.length === tokensFromChain.length;
@@ -348,6 +359,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       });
     } else {
       setTokens([]);
+      setWalletAssets([]);
       setTotalBalance(0);
       setNativeBalance(0);
       setPortfolioError(null);
@@ -485,6 +497,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         connectExternalWallet,
         disconnectExternalWallet,
         tokens,
+        walletAssets,
         blockchains,
         totalBalance,
         nativeBalance,

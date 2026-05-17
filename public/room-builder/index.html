@@ -106,12 +106,12 @@
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // 120-second hard timeout — large uncompressed Unity files need time to download
+    // 3-minute hard timeout — large uncompressed Unity files need time to download
     timeoutHandle = setTimeout(function() {
       if (!loadedOk) {
         showError('Room Builder timed out. Check your connection and try refreshing.');
       }
-    }, 120000);
+    }, 180000);
 
     function startUnity() {
       if (typeof createUnityInstance === 'undefined') {
