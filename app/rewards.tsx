@@ -24,6 +24,7 @@ import {
   formatRewardReason,
 } from '@/services/referralService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import { formatTokenAmount } from '@/lib/format';
 
 export default function RewardsScreen() {
   const router = useRouter();
@@ -159,7 +160,7 @@ export default function RewardsScreen() {
     ]);
 
     if (result.success) {
-      setClaimMessage({ type: 'success', text: `Reward claimed! ${reward.reward_amount.toLocaleString()} DWC sent to your wallet.` });
+      setClaimMessage({ type: 'success', text: `Reward claimed! ${formatTokenAmount(reward.reward_amount)} DWC sent to your wallet.` });
     } else {
       setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
     }
@@ -234,12 +235,12 @@ export default function RewardsScreen() {
           </View>
           <View style={styles.statCard}>
             <Coins size={24} color={colors.warning} />
-            <Text style={styles.statValue}>{stats.totalEarned.toLocaleString()}</Text>
+            <Text style={styles.statValue}>{formatTokenAmount(stats.totalEarned)}</Text>
             <Text style={styles.statLabel}>Earned (DWC)</Text>
           </View>
           <View style={styles.statCard}>
             <Gift size={24} color={colors.success} />
-            <Text style={styles.statValue}>{stats.unclaimedAmount.toLocaleString()}</Text>
+            <Text style={styles.statValue}>{formatTokenAmount(stats.unclaimedAmount)}</Text>
             <Text style={styles.statLabel}>Unclaimed</Text>
           </View>
         </View>
@@ -477,7 +478,7 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
       <View style={styles.rewardInfo}>
         <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
         <Text style={styles.rewardAmount}>
-          {reward.reward_amount.toLocaleString()} DWC
+          {formatTokenAmount(reward.reward_amount)} DWC
         </Text>
         {reward.status === 'sent' && reward.transaction_signature && (
           <Text style={styles.txHash} numberOfLines={1}>

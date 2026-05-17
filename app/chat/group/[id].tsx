@@ -17,16 +17,14 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import {
-  ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X,
-  Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight,
-  Camera, UserCheck, UserMinus, Shield, ShieldOff,
-} from 'lucide-react-native';
+import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, UserCheck, UserMinus, Shield, ShieldOff, CreditCard as Edit2, LogOut } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, GroupTopic, GroupPin } from '@/services/socialService';
 import { supabase } from '@/lib/supabase';
+import LinkText, { extractUrls } from '@/components/LinkText';
+import LinkPreview from '@/components/LinkPreview';
 
 export default function GroupChatScreen() {
   const router = useRouter();
@@ -67,6 +65,25 @@ export default function GroupChatScreen() {
   const [longPressMsg, setLongPressMsg] = useState<any>(null);
   const [showMsgActions, setShowMsgActions] = useState(false);
   const [deletingMsg, setDeletingMsg] = useState(false);
+
+  // Rename group name
+  const [editingGroupName, setEditingGroupName] = useState(false);
+  const [pendingGroupName, setPendingGroupName] = useState('');
+  const [savingGroupName, setSavingGroupName] = useState(false);
+
+  // Rename topics inline
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [pendingTopicName, setPendingTopicName] = useState('');
+  const [savingTopicName, setSavingTopicName] = useState(false);
+
+  // Leave group
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leavingGroup, setLeavingGroup] = useState(false);
+
+  // Multiple pins & scroll-to
+  const [showPinsList, setShowPinsList] = useState(false);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const listRef = useRef<FlatList>(null);
 
@@ -162,8 +179,7 @@ export default function GroupChatScreen() {
     return m.topic_id === activeTopic.id;
   });
 
-  const pinnedMsg = pins.length > 0 ? pins[0] : null;
-  const pinnedContent: string = (pinnedMsg?.message as any)?.content ?? '';
+  const pinnedCount = pins.length;
 
   const send = async () => {
     const text = input.trim();
@@ -281,6 +297,82 @@ export default function GroupChatScreen() {
     setShowMsgActions(false);
   };
 
+  const handleLeaveGroup = async () => {
+    if (!profile || !groupId || leavingGroup) return;
+    setLeavingGroup(true);
+    try {
+      await SocialService.removeGroupMember(groupId, profile.id);
+      setShowLeaveConfirm(false);
+      router.back();
+    } finally {
+      setLeavingGroup(false);
+    }
+  };
+
+  const handleSaveGroupName = async () => {
+    if (!groupId || !pendingGroupName.trim() || savingGroupName) return;
+    setSavingGroupName(true);
+    const ok = await SocialService.updateGroupConversation(groupId, { name: pendingGroupName.trim() });
+    if (ok) {
+      setGroupDetails((prev: any) => prev ? { ...prev, name: pendingGroupName.trim() } : prev);
+      setEditingGroupName(false);
+    }
+    setSavingGroupName(false);
+  };
+
+  const handleSaveTopicName = async () => {
+    if (!editingTopicId || !pendingTopicName.trim() || savingTopicName) return;
+    setSavingTopicName(true);
+    const { error } = await supabase
+      .from('group_topics')
+      .update({ name: pendingTopicName.trim() })
+      .eq('id', editingTopicId);
+    if (!error) {
+      setTopics(prev => prev.map(t => t.id === editingTopicId ? { ...t, name: pendingTopicName.trim() } : t));
+      if (activeTopic?.id === editingTopicId) setActiveTopic(prev => prev ? { ...prev, name: pendingTopicName.trim() } : prev);
+      setEditingTopicId(null);
+    }
+    setSavingTopicName(false);
+  };
+
+  const jumpToPinnedMessage = (pin: GroupPin) => {
+    const msg = pin.message as any;
+    if (!msg) return;
+    setShowPinsList(false);
+    // Switch to correct topic if needed
+    if (msg.topic_id) {
+      const topic = topics.find(t => t.id === msg.topic_id);
+      if (topic) setActiveTopic(topic);
+    } else {
+      const def = topics.find(t => t.is_default) ?? topics[0];
+      if (def) setActiveTopic(def);
+    }
+    // Scroll after topic switch (state update takes effect next render)
+    setTimeout(() => {
+      const targetMessages = messages.filter(m => {
+        if (!activeTopic && !msg.topic_id) return true;
+        const topicId = msg.topic_id || activeTopic?.id;
+        if (!topicId) return true;
+        const topic = topics.find(t => t.id === topicId);
+        if (!topic) return true;
+        if (topic.is_default) return !m.topic_id || m.topic_id === topicId;
+        return m.topic_id === topicId;
+      });
+      const idx = targetMessages.findIndex((m: any) => m.id === pin.message_id);
+      if (idx >= 0) {
+        try {
+          listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+        } catch {
+          listRef.current?.scrollToEnd({ animated: true });
+        }
+      }
+      // Highlight
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      setHighlightedMsgId(pin.message_id);
+      highlightTimerRef.current = setTimeout(() => setHighlightedMsgId(null), 2000);
+    }, 150);
+  };
+
   const createTopic = async () => {
     if (!newTopicName.trim() || !profile || !groupId) return;
     setCreatingTopic(true);
@@ -359,6 +451,8 @@ export default function GroupChatScreen() {
       || (item.sender?.wallet_address ? `${item.sender.wallet_address.slice(0, 6)}...` : 'User');
     const isPinned = pins.some(p => p.message_id === item.id);
     const isDeleted = item.is_deleted;
+    const isHighlighted = item.id === highlightedMsgId;
+    const msgUrls = (!isDeleted && item.content) ? extractUrls(item.content) : [];
 
     return (
       <TouchableOpacity
@@ -368,7 +462,7 @@ export default function GroupChatScreen() {
         activeOpacity={0.95}
         delayLongPress={400}
       >
-        <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft]}>
+        <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft, isHighlighted && styles.msgRowHighlighted]}>
           {!mine && (
             <View style={styles.avatarCol}>
               {showSenderInfo ? (
@@ -411,22 +505,28 @@ export default function GroupChatScreen() {
                 </View>
               )
             ) : mine ? (
-              <LinearGradient
-                colors={['#3B82F6', '#1D4ED8']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[styles.bubble, styles.bubbleMine, isPinned && styles.bubblePinned]}
-              >
-                {isPinned && <Pin size={10} color="rgba(255,255,255,0.6)" strokeWidth={2} style={{ marginBottom: 3 }} />}
-                <Text style={styles.bubbleTextMine}>{item.content}</Text>
-                <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
-              </LinearGradient>
+              <>
+                <LinearGradient
+                  colors={['#3B82F6', '#1D4ED8']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[styles.bubble, styles.bubbleMine, isPinned && styles.bubblePinned]}
+                >
+                  {isPinned && <Pin size={10} color="rgba(255,255,255,0.6)" strokeWidth={2} style={{ marginBottom: 3 }} />}
+                  <LinkText text={item.content} style={styles.bubbleTextMine} />
+                  <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
+                </LinearGradient>
+                {msgUrls.length > 0 && <LinkPreview url={msgUrls[0]} />}
+              </>
             ) : (
-              <View style={[styles.bubble, styles.bubbleOther, isPinned && styles.bubblePinnedOther]}>
-                {isPinned && <Pin size={10} color={colors.primary} strokeWidth={2} style={{ marginBottom: 3 }} />}
-                <Text style={styles.bubbleTextOther}>{item.content}</Text>
-                <Text style={styles.bubbleTimeOther}>{formatTime(item.created_at)}</Text>
-              </View>
+              <>
+                <View style={[styles.bubble, styles.bubbleOther, isPinned && styles.bubblePinnedOther]}>
+                  {isPinned && <Pin size={10} color={colors.primary} strokeWidth={2} style={{ marginBottom: 3 }} />}
+                  <LinkText text={item.content} style={styles.bubbleTextOther} />
+                  <Text style={styles.bubbleTimeOther}>{formatTime(item.created_at)}</Text>
+                </View>
+                {msgUrls.length > 0 && <LinkPreview url={msgUrls[0]} />}
+              </>
             )}
           </View>
         </View>
@@ -507,16 +607,25 @@ export default function GroupChatScreen() {
           </ScrollView>
         )}
 
-        {/* Pinned message banner */}
-        {pinnedMsg && pinnedContent ? (
-          <TouchableOpacity style={styles.pinnedBanner} activeOpacity={0.9}>
+        {/* Pinned message banner — supports multiple pins */}
+        {pinnedCount > 0 && (
+          <TouchableOpacity style={styles.pinnedBanner} onPress={() => setShowPinsList(true)} activeOpacity={0.9}>
             <Pin size={12} color={colors.primary} strokeWidth={2} />
-            <Text style={styles.pinnedText} numberOfLines={1}>
-              <Text style={styles.pinnedLabel}>Pinned: </Text>
-              {pinnedContent}
-            </Text>
+            {pinnedCount === 1 ? (
+              <Text style={styles.pinnedText} numberOfLines={1}>
+                <Text style={styles.pinnedLabel}>Pinned: </Text>
+                {(pins[0]?.message as any)?.is_deleted
+                  ? 'Pinned message no longer available.'
+                  : ((pins[0]?.message as any)?.content || (pins[0]?.message as any)?.media_url ? '[media]' : 'Message')}
+              </Text>
+            ) : (
+              <Text style={styles.pinnedText}>
+                <Text style={styles.pinnedLabel}>{pinnedCount} pinned messages</Text>
+                <Text style={{ color: colors.textMuted }}> · tap to view</Text>
+              </Text>
+            )}
           </TouchableOpacity>
-        ) : null}
+        )}
 
         <KeyboardAvoidingView
           style={styles.flex}
@@ -668,9 +777,40 @@ export default function GroupChatScreen() {
                 )}
               </TouchableOpacity>
               <View style={{ flex: 1 }}>
-                <Text style={styles.settingsGroupName}>{groupDetails?.name || 'Group'}</Text>
+                {isCreatorOrAdmin && editingGroupName ? (
+                  <View style={styles.inlineEditRow}>
+                    <TextInput
+                      style={styles.inlineEditInput}
+                      value={pendingGroupName}
+                      onChangeText={setPendingGroupName}
+                      autoFocus
+                      maxLength={60}
+                      returnKeyType="done"
+                      onSubmitEditing={handleSaveGroupName}
+                    />
+                    <TouchableOpacity onPress={handleSaveGroupName} disabled={savingGroupName} activeOpacity={0.8}>
+                      {savingGroupName ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Text style={styles.inlineEditSave}>Save</Text>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setEditingGroupName(false)} activeOpacity={0.8}>
+                      <X size={16} color={colors.textMuted} strokeWidth={2} />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={styles.inlineNameRow}>
+                    <Text style={styles.settingsGroupName} numberOfLines={1}>{groupDetails?.name || 'Group'}</Text>
+                    {isCreatorOrAdmin && (
+                      <TouchableOpacity onPress={() => { setPendingGroupName(groupDetails?.name || ''); setEditingGroupName(true); }} activeOpacity={0.7}>
+                        <Edit2 size={14} color={colors.textMuted} strokeWidth={2} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
                 <Text style={styles.settingsMemberCount}>{memberCount} member{memberCount !== 1 ? 's' : ''}</Text>
-                {isCreatorOrAdmin && (
+                {isCreatorOrAdmin && !editingGroupName && (
                   <Text style={styles.settingsPhotoHint}>Tap photo to change</Text>
                 )}
               </View>
@@ -684,16 +824,45 @@ export default function GroupChatScreen() {
                   {topics.map(topic => (
                     <View key={topic.id} style={styles.adminTopicRow}>
                       <Hash size={13} color={colors.textMuted} strokeWidth={2} />
-                      <Text style={styles.adminTopicName}>{topic.name}</Text>
-                      {topic.is_default && (
-                        <View style={styles.defaultBadge}>
-                          <Text style={styles.defaultBadgeText}>default</Text>
+                      {editingTopicId === topic.id ? (
+                        <View style={[styles.inlineEditRow, { flex: 1 }]}>
+                          <TextInput
+                            style={[styles.inlineEditInput, { flex: 1 }]}
+                            value={pendingTopicName}
+                            onChangeText={setPendingTopicName}
+                            autoFocus
+                            maxLength={32}
+                            returnKeyType="done"
+                            onSubmitEditing={handleSaveTopicName}
+                          />
+                          <TouchableOpacity onPress={handleSaveTopicName} disabled={savingTopicName} activeOpacity={0.8}>
+                            {savingTopicName ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Text style={styles.inlineEditSave}>Save</Text>
+                            )}
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => setEditingTopicId(null)} activeOpacity={0.8}>
+                            <X size={14} color={colors.textMuted} strokeWidth={2} />
+                          </TouchableOpacity>
                         </View>
-                      )}
-                      {!topic.is_default && (
-                        <TouchableOpacity onPress={() => deleteTopic(topic.id)} activeOpacity={0.7} style={styles.deleteTopicBtn}>
-                          <Trash2 size={14} color="#EF4444" strokeWidth={2} />
-                        </TouchableOpacity>
+                      ) : (
+                        <>
+                          <Text style={styles.adminTopicName}>{topic.name}</Text>
+                          {topic.is_default && (
+                            <View style={styles.defaultBadge}>
+                              <Text style={styles.defaultBadgeText}>default</Text>
+                            </View>
+                          )}
+                          <TouchableOpacity onPress={() => { setPendingTopicName(topic.name); setEditingTopicId(topic.id); }} activeOpacity={0.7} style={styles.deleteTopicBtn}>
+                            <Edit2 size={13} color={colors.textMuted} strokeWidth={2} />
+                          </TouchableOpacity>
+                          {!topic.is_default && (
+                            <TouchableOpacity onPress={() => deleteTopic(topic.id)} activeOpacity={0.7} style={styles.deleteTopicBtn}>
+                              <Trash2 size={14} color="#EF4444" strokeWidth={2} />
+                            </TouchableOpacity>
+                          )}
+                        </>
                       )}
                     </View>
                   ))}
@@ -830,6 +999,17 @@ export default function GroupChatScreen() {
                 >
                   <Trash2 size={15} color="#EF4444" strokeWidth={2} />
                   <Text style={styles.deleteGroupText}>Delete Group</Text>
+                </TouchableOpacity>
+              )}
+
+              {myRole !== 'creator' && (
+                <TouchableOpacity
+                  style={styles.leaveGroupBtn}
+                  onPress={() => { setShowSettings(false); setShowLeaveConfirm(true); }}
+                  activeOpacity={0.8}
+                >
+                  <LogOut size={15} color="#F59E0B" strokeWidth={2} />
+                  <Text style={styles.leaveGroupText}>Leave Group</Text>
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -977,6 +1157,91 @@ export default function GroupChatScreen() {
             <Image source={{ uri: viewingImage }} style={styles.imageViewerImg} resizeMode="contain" />
           )}
         </View>
+      </Modal>
+
+      {/* Pinned messages list */}
+      <Modal visible={showPinsList} transparent animationType="slide" onRequestClose={() => setShowPinsList(false)}>
+        <View style={styles.adminOverlay}>
+          <View style={styles.adminSheet}>
+            <View style={styles.adminHandle} />
+            <View style={styles.adminHeader}>
+              <Pin size={18} color={colors.primary} strokeWidth={2} />
+              <Text style={styles.adminTitle}>Pinned Messages</Text>
+              <TouchableOpacity onPress={() => setShowPinsList(false)} activeOpacity={0.7}>
+                <X size={20} color={colors.textPrimary} strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+              {pins.length === 0 ? (
+                <Text style={[styles.emptySubText, { textAlign: 'center', paddingVertical: 24 }]}>No pinned messages</Text>
+              ) : (
+                pins.map((pin, i) => {
+                  const msg = pin.message as any;
+                  const isDeletedPin = msg?.is_deleted;
+                  const pinContent = isDeletedPin
+                    ? 'Message no longer available'
+                    : (msg?.content || (msg?.media_url ? '[Media]' : 'Message'));
+                  const pinnerName = (pin as any).pinner?.username || 'Admin';
+                  return (
+                    <TouchableOpacity
+                      key={pin.id}
+                      style={styles.pinListRow}
+                      onPress={() => !isDeletedPin && jumpToPinnedMessage(pin)}
+                      activeOpacity={isDeletedPin ? 1 : 0.8}
+                    >
+                      <View style={styles.pinListIcon}>
+                        <Pin size={14} color={colors.primary} strokeWidth={2} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.pinListContent, isDeletedPin && { fontStyle: 'italic', color: colors.textMuted }]} numberOfLines={2}>
+                          {pinContent}
+                        </Text>
+                        <Text style={styles.pinListMeta}>Pinned by {pinnerName}</Text>
+                      </View>
+                      {!isDeletedPin && (
+                        <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Leave group confirmation */}
+      <Modal visible={showLeaveConfirm} transparent animationType="fade" onRequestClose={() => setShowLeaveConfirm(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowLeaveConfirm(false)}>
+          <View style={styles.actionOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.confirmSheet}>
+                <LogOut size={28} color="#F59E0B" strokeWidth={2} />
+                <Text style={styles.confirmTitle}>Leave Group</Text>
+                <Text style={styles.confirmText}>
+                  Leave "{groupDetails?.name}"? You'll need to be re-added to rejoin.
+                </Text>
+                <View style={styles.confirmBtns}>
+                  <TouchableOpacity style={styles.confirmCancel} onPress={() => setShowLeaveConfirm(false)} activeOpacity={0.8} disabled={leavingGroup}>
+                    <Text style={styles.confirmCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmDanger, { borderColor: 'rgba(245,158,11,0.3)', backgroundColor: 'rgba(245,158,11,0.12)' }]}
+                    activeOpacity={0.8}
+                    disabled={leavingGroup}
+                    onPress={handleLeaveGroup}
+                  >
+                    {leavingGroup ? (
+                      <ActivityIndicator size="small" color="#F59E0B" />
+                    ) : (
+                      <Text style={[styles.confirmDangerText, { color: '#F59E0B' }]}>Leave</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
     </SafeAreaView>
   );
@@ -1267,4 +1532,48 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20, padding: 8,
   },
   imageViewerImg: { width: '100%', height: '80%' },
+
+  // Highlighted message
+  msgRowHighlighted: {
+    backgroundColor: 'rgba(59,130,246,0.1)',
+    borderRadius: 12,
+    marginHorizontal: -4,
+    paddingHorizontal: 4,
+  },
+
+  // Inline editing
+  inlineEditRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  inlineEditInput: {
+    flex: 1, fontSize: fontSize.sm, color: colors.textPrimary,
+    backgroundColor: '#0A0A0F', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)',
+  },
+  inlineEditSave: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
+  inlineNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+
+  // Leave group
+  leaveGroupBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    marginTop: spacing.xl, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: 'rgba(245,158,11,0.12)',
+  },
+  leaveGroupText: { fontSize: fontSize.sm, fontWeight: '700', color: '#F59E0B' },
+
+  // Pins list
+  pinListRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  pinListIcon: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: 'rgba(59,130,246,0.1)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(59,130,246,0.2)',
+  },
+  pinListContent: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, lineHeight: 20 },
+  pinListMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
 });

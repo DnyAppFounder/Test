@@ -21,6 +21,8 @@ import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
 import { SocialService, Message, UserProfile } from '@/services/socialService';
 import { supabase } from '@/lib/supabase';
+import LinkText, { extractUrls } from '@/components/LinkText';
+import LinkPreview from '@/components/LinkPreview';
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -213,26 +215,36 @@ export default function ChatScreen() {
               </View>
             )
           ) : mine ? (
-            <LinearGradient
-              colors={['#8B5CF6', '#6D28D9']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.bubble, styles.bubbleMine]}
-            >
-              <Text style={styles.bubbleTextMine}>{item.content}</Text>
-              <View style={styles.bubbleMeta}>
-                <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
-                <View style={styles.readRow}>
-                  <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />
-                  <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} style={{ marginLeft: -5 }} />
+            <>
+              <LinearGradient
+                colors={['#8B5CF6', '#6D28D9']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.bubble, styles.bubbleMine]}
+              >
+                <LinkText text={item.content} style={styles.bubbleTextMine} />
+                <View style={styles.bubbleMeta}>
+                  <Text style={styles.bubbleTimeMine}>{formatTime(item.created_at)}</Text>
+                  <View style={styles.readRow}>
+                    <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />
+                    <Check size={11} color={item.read ? '#C084FC' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} style={{ marginLeft: -5 }} />
+                  </View>
                 </View>
-              </View>
-            </LinearGradient>
+              </LinearGradient>
+              {item.content && extractUrls(item.content).length > 0 && (
+                <LinkPreview url={extractUrls(item.content)[0]} />
+              )}
+            </>
           ) : (
-            <View style={[styles.bubble, styles.bubbleOther]}>
-              <Text style={styles.bubbleTextOther}>{item.content}</Text>
-              <Text style={styles.bubbleTimeOther}>{formatTime(item.created_at)}</Text>
-            </View>
+            <>
+              <View style={[styles.bubble, styles.bubbleOther]}>
+                <LinkText text={item.content} style={styles.bubbleTextOther} />
+                <Text style={styles.bubbleTimeOther}>{formatTime(item.created_at)}</Text>
+              </View>
+              {item.content && extractUrls(item.content).length > 0 && (
+                <LinkPreview url={extractUrls(item.content)[0]} />
+              )}
+            </>
           )}
         </View>
       </View>

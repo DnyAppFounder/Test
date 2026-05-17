@@ -27,6 +27,7 @@ import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
 import { watchlistService, WatchlistToken } from '@/services/watchlistService';
 import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
 import { PortfolioChart } from '@/components/PortfolioChart';
+import { formatTokenAmount } from '@/lib/format';
 import { NFTService, NFT } from '@/services/nftService';
 import { TrackedWalletsService, TrackedWallet } from '@/services/trackedWalletsService';
 import { PortfolioTracker } from '@/components/PortfolioTracker';
@@ -673,7 +674,7 @@ export default function WalletHome() {
                   </View>
                   <View style={styles.assetMid}>
                     <Text style={styles.assetBalance2}>
-                      {balanceHidden ? '****' : asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: asset.isNative ? 4 : 2 })}
+                      {balanceHidden ? '****' : formatTokenAmount(asset.uiBalance)}
                     </Text>
                     <Text style={styles.assetBalanceUsd}>
                       {balanceHidden ? '****' : asset.price > 0 ? `$${asset.value.toFixed(2)}` : 'No price data'}
