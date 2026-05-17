@@ -592,6 +592,28 @@ export function TradingViewChart({
     setPendingPanCorrection(null);
   }, [pendingPanCorrection]);
 
+  // When candles exist but none fall in the visible window, auto-correct the pan offset.
+  // This replaces the old setState-during-render pattern in the render body.
+  // Only fires on data/timeframe change — not on user pan gestures.
+  useEffect(() => {
+    if (candles.length === 0) return;
+    const bMs = BUCKET_MS[timeframe] ?? 3_600_000;
+    const vB = VISIBLE_BUCKETS[timeframe] ?? 48;
+    const rightT = Date.now() - panOffsetRef.current * bMs;
+    const leftT = rightT - vB * bMs;
+    const hasVisible = candles.some(
+      c => c.timestamp >= leftT - bMs && c.timestamp <= rightT + bMs
+    );
+    if (hasVisible) return;
+    const lastRealTs = candles[candles.length - 1].timestamp;
+    const targetRight = lastRealTs + bMs * Math.floor(vB * 0.1);
+    const corrected = Math.max(0, Math.round((Date.now() - targetRight) / bMs));
+    if (corrected !== panOffsetRef.current) {
+      panOffsetRef.current = corrected;
+      setPanOffsetCandles(corrected);
+    }
+  }, [candles, timeframe]);
+
   // ── chart geometry ────────────────────────────────────────────────────────
   // MCAP scale: use a stable ratio from the same snapshot (marketCap / price).
   // This ensures header, axis, bubble, and crosshair all use the same scale.
@@ -891,8 +913,11 @@ export function TradingViewChart({
   const change24h  = resolvedInfo?.priceChange24h ?? 0;
   const isUp       = change24h >= 0;
   const changeColor = isUp ? '#10B981' : '#EC4899';
-  const headerValue = valueMode === 'mcap' && mcapVal != null && mcapVal > 0
-    ? fmtMcap(mcapVal)
+  // Use the same live-scaled formula as the chart axis and live pill so all four displays agree.
+  // When mcapScale=1 (no MCAP data), falls back to static mcapVal then price.
+  const liveScaledValue = displayPriceVal * mcapScale;
+  const headerValue = valueMode === 'mcap'
+    ? fmtMcap(liveScaledValue > 0 ? liveScaledValue : (mcapVal ?? 0))
     : `$${fmtPrice(displayPriceVal)}`;
 
   const currentModeConfig = CHART_MODES.find(m => m.key === mode) ?? CHART_MODES[0];
@@ -1074,30 +1099,6 @@ export function TradingViewChart({
     );
   }
 
-  // When displayCandles is empty but we have real data: schedule a pan correction
-  // via useEffect (never during render) and show a brief spinner.
-  if (n === 0 && candles.length > 0) {
-    const bMs         = BUCKET_MS[timeframe] ?? 3_600_000;
-    const vB          = VISIBLE_BUCKETS[timeframe] ?? 48;
-    const lastTs      = mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1]?.timestamp : candles[candles.length - 1].timestamp;
-    const lastRealTs  = candles[candles.length - 1].timestamp;
-    const targetRight = lastRealTs + bMs * Math.floor(vB * 0.1);
-    const msBehind    = Date.now() - targetRight;
-    const corrected   = Math.max(0, Math.round(msBehind / bMs));
-    if (corrected !== panOffsetCandles && pendingPanCorrection !== corrected) {
-      // Schedule correction via state → useEffect; no setTimeout needed
-      setPendingPanCorrection(corrected);
-    }
-    return (
-      <View style={styles.container}>
-        {header}
-        <View style={[styles.loadingWrap, { height: CHART_H }]}>
-          <ActivityIndicator size="small" color={colors.primary} />
-        </View>
-      </View>
-    );
-  }
-
   if (n === 0) {
     return (
       <View style={styles.container}>
@@ -1118,7 +1119,20 @@ export function TradingViewChart({
   const safeRightX = plotRightX - 4;
   const lastCandleX = xOf(n - 1);
   const lastCandleY = yOf(displayCandles[n - 1].close);
-  const areaFillRightX = panOffsetCandles === 0 && safeRightX > lastCandleX + 2 ? safeRightX : lastCandleX;
+  const lastX = Math.min(lastCandleX, safeRightX);
+  const lastY = lastCandleY;
+
+  // Continuation: capped at 1.5 buckets to prevent a fake long flat extension.
+  // Must be computed before areaPath so fill uses the same right-edge limit.
+  const maxContExtension = bucketMs * 1.5;
+  const lastCandleTs     = displayCandles[n - 1].timestamp;
+  const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
+  const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
+  const contY            = lastY;
+  const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
+
+  // Area fill stops at the same point as the continuation line — never extends to safeRightX.
+  const areaFillRightX = showContinuation ? contRightX : lastCandleX;
   const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`;
 
   // Grid
@@ -1140,22 +1154,10 @@ export function TradingViewChart({
     }
   }
 
-  // Live price line
-  const scaledLivePrice = displayPriceVal * mcapScale;
+  // Live price line — reuse liveScaledValue (same formula) so header and pill always agree
+  const scaledLivePrice = liveScaledValue;
   const clampedLive = scaledLivePrice > maxP ? maxP : scaledLivePrice < minP ? minP : scaledLivePrice;
   const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
-
-  const lastX = Math.min(xOf(n - 1), safeRightX);
-  const lastY = yOf(displayCandles[n - 1].close);
-
-  // Continuation line: flat from last candle close to current time.
-  // Limited to at most 1.5 visible buckets so it never creates a fake long flat line.
-  const maxContExtension = bucketMs * 1.5;
-  const lastCandleTs     = displayCandles[n - 1].timestamp;
-  const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
-  const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
-  const contY            = lastY;
-  const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
   // History start indicator
   const historyOldestTs   = candles.length > 0 ? candles[0].timestamp : Date.now();
