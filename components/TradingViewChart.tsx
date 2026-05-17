@@ -1300,16 +1300,10 @@ export function TradingViewChart({
 
               {mode === 'mountain' && (
                 <>
-                  <Path
-                    d={displayCandles.map((c, i) => {
-                      const x = xOf(i).toFixed(1);
-                      const y = yOf(c.close).toFixed(1);
-                      if (i === 0) return `M${x},${y}`;
-                      const prevX = xOf(i - 1).toFixed(1);
-                      return `L${x},${yOf(displayCandles[i - 1].close).toFixed(1)} L${x},${y}`;
-                    }).join(' ') + ` L${xOf(n-1).toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`}
-                    fill="url(#mountainGrad)" />
-                  <Path d={linePts} stroke="#8B5CF6" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Use same areaPath fill (already limited to contRightX) with mountain gradient */}
+                  <Path d={areaPath} fill="url(#mountainGrad)" />
+                  <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#8B5CF6" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
                 </>
               )}
@@ -1396,8 +1390,8 @@ export function TradingViewChart({
               </>
             )}
 
-            {/* Endpoint dot — clamped to safeRightX */}
-            {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+            {/* Endpoint dot — area/line/mountain use this; bonding has its own styled dot inside chartClip */}
+            {(mode === 'area' || mode === 'line' || mode === 'mountain') && (
               <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" opacity={1} />
             )}
 
