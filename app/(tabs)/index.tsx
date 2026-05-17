@@ -951,7 +951,7 @@ export default function WalletHome() {
               </View>
               <View style={styles.assetMid}>
                 <Text style={styles.assetBalance2}>
-                  {balanceHidden ? '****' : asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: asset.isNative ? 4 : 2 })}
+                  {balanceHidden ? '****' : formatTokenAmount(asset.uiBalance)}
                 </Text>
                 <Text style={styles.assetBalanceUsd}>
                   {asset.price > 0 ? (balanceHidden ? '****' : `$${asset.value.toFixed(2)}`) : '—'}
@@ -1016,7 +1016,7 @@ export default function WalletHome() {
                 </View>
                 <View style={styles.manageRight}>
                   <Text style={[styles.manageBal, !isVisible && { color: colors.textMuted }]}>
-                    {asset.uiBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                    {formatTokenAmount(asset.uiBalance)}
                   </Text>
                   <Switch
                     value={isVisible}

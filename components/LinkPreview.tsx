@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, ActivityIndicator, Linking } from 'react-native';
-import { Globe } from 'lucide-react-native';
+import { Globe, ExternalLink } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 
 interface LinkMeta {
@@ -49,39 +49,54 @@ export default function LinkPreview({ url }: Props) {
     return () => { cancelled = true; };
   }, [url]);
 
+  const openLink = () => {
+    const target = typeof meta === 'object' && meta !== null ? meta.url : url;
+    Linking.openURL(target).catch(() => {});
+  };
+
   if (meta === 'loading') {
     return (
       <View style={styles.card}>
-        <ActivityIndicator size="small" color={colors.primary} />
+        <View style={styles.loadingRow}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading preview...</Text>
+        </View>
       </View>
     );
   }
 
   if (!meta) {
-    // Still show a minimal clickable link card
     let domain = url;
     try { domain = new URL(url.startsWith('http') ? url : 'https://' + url).hostname.replace(/^www\./, ''); } catch {}
     return (
-      <TouchableOpacity style={styles.card} onPress={() => Linking.openURL(url).catch(() => {})} activeOpacity={0.8}>
-        <Globe size={14} color={colors.textMuted} strokeWidth={2} />
-        <Text style={styles.domain} numberOfLines={1}>{domain}</Text>
+      <TouchableOpacity style={[styles.card, styles.cardMinimal]} onPress={openLink} activeOpacity={0.8}>
+        <View style={styles.domainRow}>
+          <View style={styles.globeIcon}>
+            <Globe size={12} color={colors.primary} strokeWidth={2} />
+          </View>
+          <Text style={styles.domain} numberOfLines={1}>{domain}</Text>
+          <ExternalLink size={11} color={colors.textMuted} strokeWidth={2} />
+        </View>
       </TouchableOpacity>
     );
   }
 
   return (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => Linking.openURL(meta.url).catch(() => {})}
-      activeOpacity={0.8}
-    >
+    <TouchableOpacity style={styles.card} onPress={openLink} activeOpacity={0.85}>
       {meta.image ? (
         <Image source={{ uri: meta.image }} style={styles.image} resizeMode="cover" />
-      ) : null}
+      ) : (
+        <View style={styles.imageFallback}>
+          <Globe size={24} color="rgba(139,92,246,0.4)" strokeWidth={1.5} />
+        </View>
+      )}
       <View style={styles.content}>
         <View style={styles.domainRow}>
-          <Globe size={11} color={colors.textMuted} strokeWidth={2} />
-          <Text style={styles.domain}>{meta.domain}</Text>
+          <View style={styles.globeIcon}>
+            <Globe size={10} color={colors.primary} strokeWidth={2} />
+          </View>
+          <Text style={styles.domain} numberOfLines={1}>{meta.domain}</Text>
+          <ExternalLink size={10} color={colors.textMuted} strokeWidth={2} />
         </View>
         {meta.title ? (
           <Text style={styles.title} numberOfLines={2}>{meta.title}</Text>
@@ -96,46 +111,75 @@ export default function LinkPreview({ url }: Props) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: borderRadius.md,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: '#0E0E18',
+    borderColor: 'rgba(139,92,246,0.2)',
+    backgroundColor: 'rgba(15,12,28,0.95)',
     overflow: 'hidden',
-    marginTop: spacing.sm,
-    flexDirection: 'column',
-    minHeight: 48,
-    justifyContent: 'center',
-    alignItems: 'flex-start',
+    marginTop: 6,
+    maxWidth: '100%',
+  },
+  cardMinimal: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+  },
+  loadingText: {
+    fontSize: 11,
+    color: colors.textMuted,
   },
   image: {
     width: '100%',
-    height: 160,
-    backgroundColor: '#1A1A28',
+    height: 120,
+    backgroundColor: 'rgba(139,92,246,0.08)',
+  },
+  imageFallback: {
+    width: '100%',
+    height: 52,
+    backgroundColor: 'rgba(139,92,246,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(139,92,246,0.1)',
   },
   content: {
-    padding: spacing.md,
+    padding: 10,
     gap: 3,
   },
   domainRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 2,
+    gap: 5,
+    marginBottom: 3,
+  },
+  globeIcon: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   domain: {
-    fontSize: 11,
-    color: colors.textMuted,
-    fontWeight: '500',
+    fontSize: 10,
+    color: colors.primary,
+    fontWeight: '600',
+    flex: 1,
   },
   title: {
     fontSize: fontSize.sm,
     fontWeight: '700',
     color: colors.textPrimary,
-    lineHeight: 18,
+    lineHeight: 17,
   },
   desc: {
-    fontSize: fontSize.xs,
+    fontSize: 11,
     color: colors.textSecondary,
-    lineHeight: 16,
+    lineHeight: 15,
   },
 });

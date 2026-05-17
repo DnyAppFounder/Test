@@ -407,6 +407,7 @@ export default function TokenDetailScreen() {
   const thisToken = tokens.find(t => t.contract_address === address);
   const solBalance = solToken ? parseFloat(solToken.balance || '0') : 0;
   const tokenBalance = thisToken ? parseFloat(thisToken.balance || '0') : 0;
+  const walletTokenDecimals = thisToken?.decimals ?? 9;
 
   if (loading) {
     return (
@@ -590,7 +591,7 @@ export default function TokenDetailScreen() {
         {/* Token position */}
         <TokenPositionPanel
           rawTokenBalance={tokenBalance}
-          tokenDecimals={9}
+          tokenDecimals={walletTokenDecimals}
           tokenPrice={token.price}
           tokenSymbol={token.symbol ?? ''}
           tokenName={token.name ?? undefined}
