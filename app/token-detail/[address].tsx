@@ -100,7 +100,7 @@ export default function TokenDetailScreen() {
   }[]>([]);
   const [holdersLoading, setHoldersLoading] = useState(false);
   const [totalSupply, setTotalSupply] = useState<number>(0);
-  const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('price');
+  const [priceMode, setPriceMode] = useState<'price' | 'mcap'>('mcap');
 
   // Share to Pulse
   const [showShareModal, setShowShareModal] = useState(false);

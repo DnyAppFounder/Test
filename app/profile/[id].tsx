@@ -251,7 +251,7 @@ export default function ProfileScreen() {
     if (!id) return;
     setLoading(true);
     const [profileData, postsData, followers, following] = await Promise.all([
-      SocialService.getProfile(id),
+      SocialService.getProfileByWalletOrId(id),
       SocialService.getUserPosts(id),
       SocialService.getFollowerCount(id),
       SocialService.getFollowingCount(id),

@@ -174,7 +174,19 @@ export async function getLeaderboard(params: {
     )
     .order(col, { ascending: false })
     .limit(params.limit ?? 50);
-  return data ?? [];
+  if (!data || data.length === 0) return [];
+
+  // Enrich with profile UUIDs for navigation
+  const wallets = data.map((r: any) => r.wallet_address).filter(Boolean);
+  const { data: profiles } = await supabase
+    .from('user_profiles')
+    .select('id, wallet_address')
+    .in('wallet_address', wallets);
+  const profileMap = new Map((profiles || []).map((p: any) => [p.wallet_address, p.id]));
+  return data.map((r: any) => ({
+    ...r,
+    profile_id: profileMap.get(r.wallet_address) ?? null,
+  }));
 }
 
 export async function getMyBestResult(walletAddress: string): Promise<any | null> {

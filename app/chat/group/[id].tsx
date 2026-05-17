@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2 } from 'lucide-react-native';
+import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -39,11 +39,21 @@ export default function GroupChatScreen() {
   const [topics, setTopics] = useState<GroupTopic[]>([]);
   const [activeTopic, setActiveTopic] = useState<GroupTopic | null>(null);
   const [pins, setPins] = useState<GroupPin[]>([]);
-  const [isCreator, setIsCreator] = useState(false);
+  const [myRole, setMyRole] = useState<'creator' | 'admin' | 'member'>('member');
 
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAddMembers, setShowAddMembers] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [confirmRemoveMember, setConfirmRemoveMember] = useState<any>(null);
   const [newTopicName, setNewTopicName] = useState('');
   const [creatingTopic, setCreatingTopic] = useState(false);
+
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberSearchResults, setMemberSearchResults] = useState<any[]>([]);
+  const [searchingMembers, setSearchingMembers] = useState(false);
+  const [addingMember, setAddingMember] = useState<string | null>(null);
+
+  const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   const [longPressMsg, setLongPressMsg] = useState<any>(null);
   const [showMsgActions, setShowMsgActions] = useState(false);
@@ -54,17 +64,20 @@ export default function GroupChatScreen() {
     if (!groupId || !profile?.id) return;
     setLoading(true);
     try {
-      const [msgs, details, topicList, pinList, creatorCheck] = await Promise.all([
+      const [msgs, details, topicList, pinList] = await Promise.all([
         SocialService.getGroupMessages(groupId),
         SocialService.getGroupDetails(groupId),
         SocialService.getGroupTopics(groupId),
         SocialService.getGroupPins(groupId),
-        SocialService.isGroupCreator(groupId, profile.id),
       ]);
       setMessages(msgs);
       setGroupDetails(details);
       setPins(pinList);
-      setIsCreator(creatorCheck);
+      if (details) {
+        const me = (details.members ?? []).find((m: any) => m.id === profile.id);
+        if (me?.role) setMyRole(me.role as any);
+        else if (details.creator_id === profile.id) setMyRole('creator');
+      }
 
       if (topicList.length > 0) {
         setTopics(topicList);
@@ -238,7 +251,7 @@ export default function GroupChatScreen() {
 
     return (
       <TouchableOpacity
-        onLongPress={() => { if (isCreator) { setLongPressMsg(item); setShowMsgActions(true); } }}
+        onLongPress={() => { if (myRole !== 'member') { setLongPressMsg(item); setShowMsgActions(true); } }}
         activeOpacity={0.95}
         delayLongPress={400}
       >
@@ -265,12 +278,18 @@ export default function GroupChatScreen() {
             {item.media_url ? (
               mine ? (
                 <View style={styles.imgBubbleMine}>
-                  <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                  <TouchableOpacity activeOpacity={0.85} onPress={() => setViewingImage(item.media_url)}>
+                    <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                    <View style={styles.zoomHint}><ZoomIn size={16} color="rgba(255,255,255,0.8)" strokeWidth={2} /></View>
+                  </TouchableOpacity>
                   <Text style={[styles.bubbleTimeMine, { paddingHorizontal: 8, paddingBottom: 6 }]}>{formatTime(item.created_at)}</Text>
                 </View>
               ) : (
                 <View style={styles.imgBubbleOther}>
-                  <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                  <TouchableOpacity activeOpacity={0.85} onPress={() => setViewingImage(item.media_url)}>
+                    <Image source={{ uri: item.media_url }} style={styles.msgImage} resizeMode="cover" />
+                    <View style={styles.zoomHint}><ZoomIn size={16} color="rgba(255,255,255,0.8)" strokeWidth={2} /></View>
+                  </TouchableOpacity>
                   <Text style={[styles.bubbleTimeOther, { paddingHorizontal: 8, paddingBottom: 6 }]}>{formatTime(item.created_at)}</Text>
                 </View>
               )
@@ -317,8 +336,8 @@ export default function GroupChatScreen() {
             <Text style={styles.topUsername} numberOfLines={1}>{groupDetails?.name || 'Group Chat'}</Text>
             <Text style={styles.memberText}>{memberCount} member{memberCount !== 1 ? 's' : ''}</Text>
           </View>
-          {isCreator && (
-            <TouchableOpacity style={styles.adminBtn} onPress={() => setShowAdminPanel(true)} activeOpacity={0.7}>
+          {(myRole === 'creator' || myRole === 'admin') && (
+            <TouchableOpacity style={styles.adminBtn} onPress={() => setShowSettings(true)} activeOpacity={0.7}>
               <Settings size={20} color={colors.textSecondary} strokeWidth={2} />
             </TouchableOpacity>
           )}
@@ -458,15 +477,15 @@ export default function GroupChatScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Admin panel */}
-      <Modal visible={showAdminPanel} transparent animationType="slide" onRequestClose={() => setShowAdminPanel(false)}>
+      {/* Settings panel */}
+      <Modal visible={showSettings} transparent animationType="slide" onRequestClose={() => setShowSettings(false)}>
         <View style={styles.adminOverlay}>
           <View style={styles.adminSheet}>
             <View style={styles.adminHandle} />
             <View style={styles.adminHeader}>
               <Settings size={18} color={colors.primary} strokeWidth={2} />
               <Text style={styles.adminTitle}>Group Settings</Text>
-              <TouchableOpacity onPress={() => setShowAdminPanel(false)} activeOpacity={0.7}>
+              <TouchableOpacity onPress={() => setShowSettings(false)} activeOpacity={0.7}>
                 <X size={20} color={colors.textPrimary} strokeWidth={2} />
               </TouchableOpacity>
             </View>
@@ -514,39 +533,210 @@ export default function GroupChatScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.adminSection, { marginTop: spacing.lg }]}>Members</Text>
+            <View style={styles.adminSectionRow}>
+              <Text style={[styles.adminSection, { marginTop: spacing.lg, flex: 1 }]}>Members</Text>
+              <TouchableOpacity
+                style={styles.addMemberBtn}
+                onPress={() => { setShowSettings(false); setShowAddMembers(true); }}
+                activeOpacity={0.8}
+              >
+                <UserPlus size={14} color={colors.primary} strokeWidth={2} />
+                <Text style={styles.addMemberBtnText}>Add</Text>
+              </TouchableOpacity>
+            </View>
             <ScrollView style={styles.membersList} showsVerticalScrollIndicator={false}>
               {(groupDetails?.members ?? []).map((m: any) => {
-                const name = m.user_profiles?.username
-                  || (m.user_id ? `${m.user_id.slice(0, 8)}...` : 'Member');
-                const isMe = m.user_id === profile?.id;
+                const name = m.username || (m.wallet_address ? `${m.wallet_address.slice(0, 6)}...` : 'Member');
+                const isMe = m.id === profile?.id;
+                const role: string = m.role ?? 'member';
                 return (
-                  <View key={m.id ?? m.user_id} style={styles.adminMemberRow}>
+                  <TouchableOpacity
+                    key={m.id}
+                    style={styles.adminMemberRow}
+                    activeOpacity={0.8}
+                    onPress={() => { setShowSettings(false); router.push(`/profile/${m.id}` as any); }}
+                  >
                     <View style={styles.memberAvatar}>
-                      {m.user_profiles?.avatar_url ? (
-                        <Image source={{ uri: m.user_profiles.avatar_url }} style={styles.memberAvatarImg} />
+                      {m.avatar_url ? (
+                        <Image source={{ uri: m.avatar_url }} style={styles.memberAvatarImg} />
                       ) : (
                         <User size={14} color={colors.textMuted} />
                       )}
                     </View>
                     <Text style={styles.memberName}>{name}{isMe ? ' (you)' : ''}</Text>
-                    {!isMe && (
+                    {role !== 'member' && (
+                      <View style={[styles.roleBadge, role === 'creator' && styles.roleBadgeCreator]}>
+                        <Text style={styles.roleBadgeText}>{role}</Text>
+                      </View>
+                    )}
+                    <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} style={{ marginLeft: 4 }} />
+                    {!isMe && myRole === 'creator' && (
                       <TouchableOpacity
-                        onPress={async () => {
-                          await SocialService.removeGroupMember(groupId!, m.user_id);
-                          loadData();
-                        }}
+                        onPress={(e) => { e.stopPropagation(); setConfirmRemoveMember(m); }}
                         activeOpacity={0.7}
                         style={styles.removeMemberBtn}
                       >
                         <X size={14} color="#EF4444" strokeWidth={2} />
                       </TouchableOpacity>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </ScrollView>
+
+            {myRole === 'creator' && (
+              <TouchableOpacity
+                style={styles.deleteGroupBtn}
+                onPress={() => { setShowSettings(false); setShowDeleteConfirm(true); }}
+                activeOpacity={0.8}
+              >
+                <Trash2 size={15} color="#EF4444" strokeWidth={2} />
+                <Text style={styles.deleteGroupText}>Delete Group</Text>
+              </TouchableOpacity>
+            )}
           </View>
+        </View>
+      </Modal>
+
+      {/* Add Members modal */}
+      <Modal visible={showAddMembers} transparent animationType="slide" onRequestClose={() => setShowAddMembers(false)}>
+        <View style={styles.adminOverlay}>
+          <View style={styles.adminSheet}>
+            <View style={styles.adminHandle} />
+            <View style={styles.adminHeader}>
+              <UserPlus size={18} color={colors.primary} strokeWidth={2} />
+              <Text style={styles.adminTitle}>Add Members</Text>
+              <TouchableOpacity onPress={() => setShowAddMembers(false)} activeOpacity={0.7}>
+                <X size={20} color={colors.textPrimary} strokeWidth={2} />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by username or wallet..."
+              placeholderTextColor={colors.textMuted}
+              value={memberSearch}
+              onChangeText={async (q) => {
+                setMemberSearch(q);
+                if (!q.trim() || !groupId) { setMemberSearchResults([]); return; }
+                setSearchingMembers(true);
+                const results = await SocialService.searchUsersNotInGroup(groupId, q);
+                setMemberSearchResults(results);
+                setSearchingMembers(false);
+              }}
+            />
+            {searchingMembers && <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />}
+            <ScrollView style={styles.membersList} showsVerticalScrollIndicator={false}>
+              {memberSearchResults.map((u: any) => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={styles.adminMemberRow}
+                  activeOpacity={0.8}
+                  onPress={async () => {
+                    if (!groupId || addingMember) return;
+                    setAddingMember(u.id);
+                    await SocialService.addGroupMember(groupId, u.id);
+                    setMemberSearchResults(prev => prev.filter((r: any) => r.id !== u.id));
+                    setAddingMember(null);
+                    loadData();
+                  }}
+                >
+                  <View style={styles.memberAvatar}>
+                    {u.avatar_url ? (
+                      <Image source={{ uri: u.avatar_url }} style={styles.memberAvatarImg} />
+                    ) : (
+                      <User size={14} color={colors.textMuted} />
+                    )}
+                  </View>
+                  <Text style={styles.memberName}>{u.username || u.wallet_address?.slice(0, 10)}</Text>
+                  {addingMember === u.id ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Plus size={16} color={colors.primary} strokeWidth={2} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Remove member confirmation */}
+      <Modal visible={!!confirmRemoveMember} transparent animationType="fade" onRequestClose={() => setConfirmRemoveMember(null)}>
+        <TouchableWithoutFeedback onPress={() => setConfirmRemoveMember(null)}>
+          <View style={styles.actionOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.confirmSheet}>
+                <AlertTriangle size={28} color="#EF4444" strokeWidth={2} />
+                <Text style={styles.confirmTitle}>Remove Member</Text>
+                <Text style={styles.confirmText}>
+                  Remove {confirmRemoveMember?.username || 'this user'} from the group?
+                </Text>
+                <View style={styles.confirmBtns}>
+                  <TouchableOpacity style={styles.confirmCancel} onPress={() => setConfirmRemoveMember(null)} activeOpacity={0.8}>
+                    <Text style={styles.confirmCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.confirmDanger}
+                    activeOpacity={0.8}
+                    onPress={async () => {
+                      if (!confirmRemoveMember || !groupId) return;
+                      await SocialService.removeGroupMember(groupId, confirmRemoveMember.id);
+                      setConfirmRemoveMember(null);
+                      loadData();
+                    }}
+                  >
+                    <Text style={styles.confirmDangerText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Delete group confirmation */}
+      <Modal visible={showDeleteConfirm} transparent animationType="fade" onRequestClose={() => setShowDeleteConfirm(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowDeleteConfirm(false)}>
+          <View style={styles.actionOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.confirmSheet}>
+                <AlertTriangle size={28} color="#EF4444" strokeWidth={2} />
+                <Text style={styles.confirmTitle}>Delete Group</Text>
+                <Text style={styles.confirmText}>
+                  This will permanently delete "{groupDetails?.name}". This cannot be undone.
+                </Text>
+                <View style={styles.confirmBtns}>
+                  <TouchableOpacity style={styles.confirmCancel} onPress={() => setShowDeleteConfirm(false)} activeOpacity={0.8}>
+                    <Text style={styles.confirmCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.confirmDanger}
+                    activeOpacity={0.8}
+                    onPress={async () => {
+                      if (!groupId || !profile?.id) return;
+                      await SocialService.deleteGroup(groupId, profile.id);
+                      setShowDeleteConfirm(false);
+                      router.back();
+                    }}
+                  >
+                    <Text style={styles.confirmDangerText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Full-screen image viewer */}
+      <Modal visible={!!viewingImage} transparent animationType="fade" onRequestClose={() => setViewingImage(null)}>
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity style={styles.imageViewerClose} onPress={() => setViewingImage(null)} activeOpacity={0.8}>
+            <X size={22} color="#fff" strokeWidth={2} />
+          </TouchableOpacity>
+          {viewingImage && (
+            <Image source={{ uri: viewingImage }} style={styles.imageViewerImg} resizeMode="contain" />
+          )}
         </View>
       </Modal>
     </SafeAreaView>
@@ -735,4 +925,76 @@ const styles = StyleSheet.create({
   memberAvatarImg: { width: 30, height: 30, borderRadius: 15 },
   memberName: { flex: 1, fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
   removeMemberBtn: { padding: 6 },
+
+  adminSectionRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg },
+  addMemberBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 5,
+    backgroundColor: colors.primaryMuted,
+    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+  },
+  addMemberBtnText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
+  roleBadge: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+  },
+  roleBadgeCreator: {
+    backgroundColor: colors.primaryMuted,
+    borderColor: 'rgba(139,92,246,0.4)',
+  },
+  roleBadgeText: { fontSize: 9, fontWeight: '800', color: colors.primary },
+  deleteGroupBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    marginTop: spacing.xl, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.15)',
+  },
+  deleteGroupText: { fontSize: fontSize.sm, fontWeight: '700', color: '#EF4444' },
+
+  searchInput: {
+    backgroundColor: '#0A0A0F', borderRadius: 12,
+    paddingHorizontal: spacing.lg, paddingVertical: 10,
+    fontSize: fontSize.sm, color: colors.textPrimary,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: spacing.md,
+  },
+
+  confirmSheet: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: spacing.xl, paddingBottom: 40,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', gap: spacing.md,
+  },
+  confirmTitle: { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
+  confirmText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
+  confirmBtns: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm, width: '100%' },
+  confirmCancel: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+  },
+  confirmCancelText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  confirmDanger: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.15)',
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)',
+    alignItems: 'center',
+  },
+  confirmDangerText: { fontSize: fontSize.sm, fontWeight: '700', color: '#EF4444' },
+
+  zoomHint: {
+    position: 'absolute', bottom: 6, right: 6,
+    backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 10, padding: 3,
+  },
+  imageViewerOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  imageViewerClose: {
+    position: 'absolute', top: 48, right: 20, zIndex: 10,
+    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20, padding: 8,
+  },
+  imageViewerImg: { width: '100%', height: '80%' },
 });

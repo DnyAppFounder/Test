@@ -3,10 +3,12 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, ActivityIndicator, RefreshControl,
 } from 'react-native';
-import { Trophy, Star, Swords, TrendingUp } from 'lucide-react-native';
+import { Trophy, Star, Swords, TrendingUp, UserPlus, UserCheck } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { getLeaderboard } from '@/services/game/duelEntryService';
+import { SocialService } from '@/services/socialService';
+import { useProfile } from '@/contexts/ProfileContext';
 
 type RankSort = 'score' | 'wins' | 'sol';
 
@@ -28,10 +30,13 @@ function fmtSol(n: number): string {
 
 export function TopRankLeaderboard() {
   const router = useRouter();
+  const { profile } = useProfile();
   const [sort, setSort] = useState<RankSort>('score');
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
+  const [followingId, setFollowingId] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -49,6 +54,20 @@ export function TopRankLeaderboard() {
   useEffect(() => { load(); }, [load]);
 
   const onRefresh = () => { setRefreshing(true); load(true); };
+
+  const toggleFollow = useCallback(async (profileId: string) => {
+    if (!profile?.id || followingId) return;
+    setFollowingId(profileId);
+    try {
+      const nowFollowing = await SocialService.toggleFollow(profile.id, profileId);
+      setFollowedIds(prev => {
+        const s = new Set(prev);
+        if (nowFollowing) s.add(profileId); else s.delete(profileId);
+        return s;
+      });
+    } catch {}
+    setFollowingId(null);
+  }, [profile?.id, followingId]);
 
   const rankMedal = (i: number) => {
     if (i === 0) return { char: '🥇', color: '#F59E0B' };
@@ -112,10 +131,12 @@ export function TopRankLeaderboard() {
           {rows.map((row, i) => {
             const medal = rankMedal(i);
             const displayName = row.username || shortAddr(row.wallet_address);
-            const profileId = row.id || row.wallet_address;
+            const profileId = row.profile_id || row.wallet_address;
+            const isFollowed = profileId ? followedIds.has(profileId) : false;
+            const isMe = profile?.id === profileId;
             return (
               <TouchableOpacity
-                key={row.wallet_address || row.id || i}
+                key={row.wallet_address || i}
                 style={[styles.row, i === 0 && styles.rowTop]}
                 activeOpacity={0.75}
                 onPress={() => profileId && router.push(`/profile/${profileId}` as any)}
@@ -176,6 +197,21 @@ export function TopRankLeaderboard() {
                     </>
                   )}
                 </View>
+
+                {/* Follow button */}
+                {!isMe && profileId && (
+                  <TouchableOpacity
+                    style={[styles.followBtn, isFollowed && styles.followBtnActive]}
+                    onPress={(e) => { e.stopPropagation(); toggleFollow(profileId); }}
+                    activeOpacity={0.75}
+                    disabled={followingId === profileId}
+                  >
+                    {isFollowed
+                      ? <UserCheck size={14} color={colors.primary} strokeWidth={2} />
+                      : <UserPlus size={14} color={colors.textMuted} strokeWidth={2} />
+                    }
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
             );
           })}
@@ -324,4 +360,19 @@ const styles = StyleSheet.create({
   valueCell: { alignItems: 'flex-end', minWidth: 80 },
   valueMain: { fontSize: fontSize.sm, fontWeight: '800', color: colors.textPrimary },
   valueSub: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
+  followBtn: {
+    marginLeft: spacing.sm,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  followBtnActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
 });

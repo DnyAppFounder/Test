@@ -139,58 +139,6 @@ function filterValidCandles(cs: CandleData[]): CandleData[] {
   });
 }
 
-/**
- * Fill every bucket slot from startMs→endMs. Missing buckets become flat
- * carry-forward candles (open=high=low=close=lastClose, volume=0).
- * This guarantees the x-axis is evenly spaced and the line never jumps.
- */
-function fillBuckets(
-  candles: CandleData[],
-  bucketMs: number,
-  startMs: number,
-  endMs: number,
-): CandleData[] {
-  if (candles.length === 0) return [];
-
-  const alignedStart = Math.floor(startMs / bucketMs) * bucketMs;
-  const alignedEnd   = Math.floor(endMs   / bucketMs) * bucketMs;
-
-  // Build lookup: bucket-aligned timestamp → best candle (highest volume wins)
-  const map = new Map<number, CandleData>();
-  for (const c of candles) {
-    if (!c || c.close <= 0 || !isFinite(c.timestamp)) continue;
-    const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
-    const ex  = map.get(key);
-    if (!ex || c.volume > ex.volume) {
-      map.set(key, { ...c, timestamp: key });
-    }
-  }
-
-  // Only seed lastClose from pre-window candles WHEN real in-window candles exist.
-  // Without this gate, inactive tokens (last trade before the visible window) get
-  // fake flat carry-forward filling the entire visible window with a phantom line.
-  const hasInWindowCandles = Array.from(map.keys()).some(k => k >= alignedStart && k <= alignedEnd);
-  let lastClose = 0;
-  if (hasInWindowCandles) {
-    for (const c of candles) {
-      const key = Math.floor(c.timestamp / bucketMs) * bucketMs;
-      if (key < alignedStart && c.close > 0) lastClose = c.close;
-    }
-  }
-
-  const result: CandleData[] = [];
-  for (let ts = alignedStart; ts <= alignedEnd; ts += bucketMs) {
-    const real = map.get(ts);
-    if (real && real.close > 0) {
-      lastClose = real.close;
-      result.push(real);
-    } else if (lastClose > 0) {
-      // Carry-forward: flat candle, zero volume
-      result.push({ timestamp: ts, open: lastClose, high: lastClose, low: lastClose, close: lastClose, volume: 0 });
-    }
-  }
-  return result;
-}
 
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
@@ -251,7 +199,7 @@ export function TradingViewChart({
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   const [mode, setMode] = useState<ChartMode>('area');
   // Internal state used only when parent does NOT provide a controlled valueMode prop.
-  const [internalValueMode, setInternalValueMode] = useState<ValueMode>('price');
+  const [internalValueMode, setInternalValueMode] = useState<ValueMode>('mcap');
   // Effective valueMode: controlled (parent prop) wins over internal state.
   const valueMode: ValueMode = externalValueMode ?? internalValueMode;
   const setValueMode = (v: ValueMode) => {
@@ -377,7 +325,7 @@ export function TradingViewChart({
   useEffect(() => {
     let rafId = 0;
     let lastRender = 0;
-    const RENDER_INTERVAL = 200; // ms between React re-renders
+    const RENDER_INTERVAL = 50; // ms between React re-renders (~20fps)
     const tick = (now: number) => {
       rightTimeRef.current = Date.now();
       if (now - lastRender >= RENDER_INTERVAL) {
@@ -647,6 +595,15 @@ export function TradingViewChart({
     applyLivePrice(externalPrice);
   }, [resolvedInfo?.price, applyLivePrice]);
 
+  // Subscribe to liveTokenStore for higher-priority price updates pushed by other parts of the app
+  useEffect(() => {
+    if (!tokenMint) return;
+    const unsub = liveTokenStore.watch(tokenMint, (price) => {
+      if (price > 0) applyLivePrice(price);
+    });
+    return unsub;
+  }, [tokenMint, applyLivePrice]);
+
   // Auto-scroll: after first data load, if all candles fall before the current
   // visible window (token hasn't traded recently), pan back so the last real
   // candle lands near the right edge rather than showing an empty chart.
@@ -751,7 +708,10 @@ export function TradingViewChart({
   // Use only real candles (volume > 0) for scale bounds so carry-forward flat
   // buckets don't incorrectly widen the y-axis.
   {
-    const key = `${timeframe}|${valueMode}|${validRaw.length}|${validRaw[0]?.timestamp ?? 0}|${validRaw[validRaw.length - 1]?.timestamp ?? 0}`;
+    const dcLen = displayCandles.length;
+    const dcFirst = displayCandles[0];
+    const dcLast = displayCandles[dcLen - 1];
+    const key = `${timeframe}|${valueMode}|${panOffsetCandles}|${dcLen}|${dcFirst?.timestamp ?? 0}|${dcLast?.timestamp ?? 0}`;
     if (key !== priceScaleKeyRef.current && displayCandles.length > 0) {
       priceScaleKeyRef.current = key;
       const realCandles = displayCandles.filter(c => c.volume > 0);
@@ -1539,7 +1499,7 @@ export function TradingViewChart({
           {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
             <Line
               x1={lastX} y1={contY}
-              x2={Math.min(contRightX, chartWidth - PAD.right)} y2={contY}
+              x2={Math.min(contRightX, plotRightX - 4)} y2={contY}
               stroke="rgba(167,139,250,0.45)"
               strokeWidth={1.5}
               strokeDasharray="3,4"
@@ -1568,7 +1528,7 @@ export function TradingViewChart({
 
           {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
           {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-            <Circle cx={lastX} cy={lastY} r={3}
+            <Circle cx={Math.min(lastX, plotRightX - 4)} cy={lastY} r={3}
               fill="#A78BFA" opacity={1} />
           )}
 

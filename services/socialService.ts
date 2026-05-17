@@ -199,6 +199,23 @@ export class SocialService {
     return data;
   }
 
+  static async getProfileByWalletOrId(idOrWallet: string): Promise<UserProfile | null> {
+    // Try UUID lookup first
+    const { data: byId } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', idOrWallet)
+      .maybeSingle();
+    if (byId) return byId;
+    // Fall back to wallet_address
+    const { data: byWallet } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('wallet_address', idOrWallet)
+      .maybeSingle();
+    return byWallet ?? null;
+  }
+
   static async updateProfile(
     profileId: string,
     updates: {
@@ -1440,7 +1457,11 @@ export class SocialService {
       if (error || !group) return null;
       const allMembers = Array.from(new Set([creatorId, ...memberIds]));
       await supabase.from('group_members').insert(
-        allMembers.map(uid => ({ group_id: group.id, user_id: uid }))
+        allMembers.map(uid => ({
+          group_id: group.id,
+          user_id: uid,
+          role: uid === creatorId ? 'creator' : 'member',
+        }))
       );
       return group.id;
     } catch {
@@ -1452,9 +1473,12 @@ export class SocialService {
     try {
       const { data } = await supabase
         .from('group_members')
-        .select('group_id, group_conversations(id, name, avatar_url, created_at)')
-        .eq('user_id', userId);
-      return (data || []).map((r: any) => r.group_conversations).filter(Boolean);
+        .select('group_id, group_conversations(id, name, avatar_url, created_at, deleted_at)')
+        .eq('user_id', userId)
+        .is('removed_at', null);
+      return (data || [])
+        .map((r: any) => r.group_conversations)
+        .filter((g: any) => g && !g.deleted_at);
     } catch {
       return [];
     }
@@ -1491,25 +1515,28 @@ export class SocialService {
     }
   }
 
-  static async getGroupDetails(groupId: string): Promise<{ id: string; name: string; avatar_url: string | null; members: UserProfile[] } | null> {
+  static async getGroupDetails(groupId: string): Promise<{ id: string; name: string; avatar_url: string | null; creator_id: string; members: (UserProfile & { role: string })[] } | null> {
     try {
       const { data: group } = await supabase
         .from('group_conversations')
         .select('*')
         .eq('id', groupId)
+        .is('deleted_at', null)
         .maybeSingle();
       if (!group) return null;
       const { data: memberRows } = await supabase
         .from('group_members')
-        .select('user_id')
-        .eq('group_id', groupId);
+        .select('user_id, role')
+        .eq('group_id', groupId)
+        .is('removed_at', null);
       const memberIds = (memberRows || []).map((r: any) => r.user_id);
-      let members: UserProfile[] = [];
+      const roleMap = new Map((memberRows || []).map((r: any) => [r.user_id, r.role ?? 'member']));
+      let members: (UserProfile & { role: string })[] = [];
       if (memberIds.length > 0) {
         const { data: profiles } = await supabase.from('user_profiles').select('*').in('id', memberIds);
-        members = profiles || [];
+        members = (profiles || []).map((p: any) => ({ ...p, role: roleMap.get(p.id) ?? 'member' }));
       }
-      return { id: group.id, name: group.name, avatar_url: group.avatar_url, members };
+      return { id: group.id, name: group.name, avatar_url: group.avatar_url, creator_id: group.creator_id, members };
     } catch {
       return null;
     }
@@ -1659,20 +1686,63 @@ export class SocialService {
     return (data as any)?.creator_id === userId;
   }
 
-  static async addGroupMember(groupId: string, userId: string): Promise<boolean> {
+  static async addGroupMember(groupId: string, userId: string): Promise<{ success: boolean; alreadyMember: boolean }> {
+    // Check existing row (active or removed)
+    const { data: existing } = await supabase
+      .from('group_members')
+      .select('user_id, removed_at')
+      .eq('group_id', groupId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existing) {
+      if (!existing.removed_at) return { success: true, alreadyMember: true };
+      // Reinstate previously removed member
+      const { error } = await supabase
+        .from('group_members')
+        .update({ removed_at: null, joined_at: new Date().toISOString(), role: 'member' })
+        .eq('group_id', groupId)
+        .eq('user_id', userId);
+      return { success: !error, alreadyMember: false };
+    }
     const { error } = await supabase
       .from('group_members')
-      .insert({ group_id: groupId, user_id: userId });
-    return !error;
+      .insert({ group_id: groupId, user_id: userId, role: 'member' });
+    return { success: !error, alreadyMember: false };
   }
 
   static async removeGroupMember(groupId: string, userId: string): Promise<boolean> {
     const { error } = await supabase
       .from('group_members')
-      .delete()
+      .update({ removed_at: new Date().toISOString() })
       .eq('group_id', groupId)
       .eq('user_id', userId);
     return !error;
+  }
+
+  static async deleteGroup(groupId: string, deletedBy: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_conversations')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy })
+      .eq('id', groupId);
+    return !error;
+  }
+
+  static async searchUsersNotInGroup(groupId: string, query: string): Promise<UserProfile[]> {
+    if (!query.trim()) return [];
+    // Get current active member IDs
+    const { data: memberRows } = await supabase
+      .from('group_members')
+      .select('user_id')
+      .eq('group_id', groupId)
+      .is('removed_at', null);
+    const memberIds = (memberRows || []).map((r: any) => r.user_id);
+
+    const { data } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .or(`username.ilike.%${query}%,wallet_address.ilike.%${query}%`)
+      .limit(20);
+    return (data || []).filter((p: any) => !memberIds.includes(p.id));
   }
 
   // ─── Group Messages with media + topic ───────────────────────────────────
