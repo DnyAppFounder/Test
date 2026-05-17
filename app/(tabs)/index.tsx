@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import { useWallet } from '@/contexts/WalletContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { liveMarketService, LiveToken, MarketCategory } from '@/services/liveMarketService';
+import { dexScreenerService } from '@/services/dexscreener/tokenDiscoveryService';
 import { walletAssetLoader, WalletAsset } from '@/services/walletAssetLoader';
 import { watchlistService, WatchlistToken } from '@/services/watchlistService';
 import { PortfolioHistoryService } from '@/services/portfolioHistoryService';
@@ -177,6 +178,12 @@ export default function WalletHome() {
   const [manageAssetsModalVisible, setManageAssetsModalVisible] = useState(false);
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(new Set());
 
+  // Realtime new-token feed
+  const [pendingNewTokens, setPendingNewTokens] = useState<LiveToken[]>([]);
+  const scrollViewRef = useRef<any>(null);
+  const scrollYRef = useRef(0);
+  const liveTokensRef = useRef<LiveToken[]>([]);
+
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
     setSearchQuery('');
@@ -184,6 +191,17 @@ export default function WalletHome() {
       setCategory('all');
     }
   };
+
+  const handleApplyPendingNewTokens = useCallback(() => {
+    setLiveTokens(prev => {
+      const existingMints = new Set(prev.map(t => t.address.toLowerCase()));
+      const toInsert = pendingNewTokens.filter(t => !existingMints.has(t.address.toLowerCase()));
+      if (toInsert.length === 0) return prev;
+      return [...toInsert, ...prev];
+    });
+    setPendingNewTokens([]);
+    scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+  }, [pendingNewTokens]);
 
   const loadMarketData = useCallback(async () => {
     // Only show spinner on first load (no tokens yet); subsequent fetches are silent
@@ -280,6 +298,64 @@ export default function WalletHome() {
     loadMarketData();
   }, [loadMarketData]);
 
+  // Keep ref in sync so async poll callbacks can read latest state without stale closure
+  useEffect(() => { liveTokensRef.current = liveTokens; }, [liveTokens]);
+
+  // Realtime polling for the New filter — inserts new tokens at top without full reload
+  useEffect(() => {
+    if (activeTab !== 'market' || category !== 'new') {
+      setPendingNewTokens([]);
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        dexScreenerService.invalidateNewTokensCache();
+        const freshTokens = await liveMarketService.getTokensByCategory('new');
+        if (freshTokens.length === 0) return;
+
+        const current = liveTokensRef.current;
+        const existingMints = new Set(current.map(t => t.address.toLowerCase()));
+        const genuinelyNew = freshTokens.filter(t => !existingMints.has(t.address.toLowerCase()));
+
+        if (genuinelyNew.length === 0) {
+          // No new tokens — update prices in-place only
+          setLiveTokens(prev => {
+            const updatedMap = new Map(freshTokens.map(t => [t.address.toLowerCase(), t]));
+            return prev.map(t => updatedMap.get(t.address.toLowerCase()) ?? t);
+          });
+          return;
+        }
+
+        if (scrollYRef.current <= 150) {
+          // User is near top — insert directly
+          setLiveTokens(prev => {
+            const existingInPrev = new Set(prev.map(t => t.address.toLowerCase()));
+            const toInsert = genuinelyNew.filter(t => !existingInPrev.has(t.address.toLowerCase()));
+            if (toInsert.length === 0) return prev;
+            return [...toInsert, ...prev];
+          });
+        } else {
+          // User scrolled down — queue for pill
+          setPendingNewTokens(prev => {
+            const existingPending = new Set(prev.map(t => t.address.toLowerCase()));
+            const toQueue = genuinelyNew.filter(t =>
+              !existingPending.has(t.address.toLowerCase()) &&
+              !existingMints.has(t.address.toLowerCase())
+            );
+            if (toQueue.length === 0) return prev;
+            return [...toQueue, ...prev];
+          });
+        }
+      } catch {
+        // Silently ignore — never disturb the user on poll failure
+      }
+    };
+
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
+  }, [activeTab, category]);
+
   useEffect(() => {
     loadWalletAssets();
   }, [loadWalletAssets]);
@@ -311,6 +387,7 @@ export default function WalletHome() {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    setPendingNewTokens([]);
     try {
       const jobs: Promise<any>[] = [loadMarketData(), loadWalletAssets(), loadWatchlist()];
       if (assetSubTab === 'nfts') jobs.push(loadNFTs());
@@ -432,9 +509,12 @@ export default function WalletHome() {
       </Pressable>
     </Modal>
     <ScrollView
+      ref={scrollViewRef}
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
+      onScroll={(e) => { scrollYRef.current = e.nativeEvent.contentOffset.y; }}
+      scrollEventThrottle={200}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
     >
       {/* ── 1. PORTFOLIO HEADER CARD ── */}
@@ -763,6 +843,20 @@ export default function WalletHome() {
               </TouchableOpacity>
             ))}
           </ScrollView>
+
+          {/* Pending new tokens pill — shown when user is scrolled down */}
+          {category === 'new' && pendingNewTokens.length > 0 && (
+            <TouchableOpacity
+              style={styles.newTokensPill}
+              onPress={handleApplyPendingNewTokens}
+              activeOpacity={0.85}
+            >
+              <Sparkles size={13} color="#000" strokeWidth={2.5} />
+              <Text style={styles.newTokensPillText}>
+                +{pendingNewTokens.length} new token{pendingNewTokens.length !== 1 ? 's' : ''}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {loading ? (
             <View style={styles.loaderContainer}>
@@ -2137,5 +2231,25 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: colors.textSecondary,
+  },
+  newTokensPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.full,
+    marginBottom: spacing.sm,
+    shadowColor: colors.primary,
+    shadowRadius: 8,
+    shadowOpacity: 0.5,
+    elevation: 4,
+  },
+  newTokensPillText: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: '#000',
   },
 });
