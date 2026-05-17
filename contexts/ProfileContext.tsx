@@ -76,8 +76,16 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
           SocialService.getConversations(profile.id),
         ]);
         setUnreadNotifCount(notifs.filter(n => !n.read).length);
-        const msgCount = convos.reduce((sum, c) => sum + ((c as any).unreadCount || 0), 0);
-        setUnreadMessageCount(msgCount);
+        const dmCount = convos.reduce((sum, c) => sum + ((c as any).unreadCount || 0), 0);
+
+        // Sum group unread counts
+        const groupIds = await SocialService.getUserGroupIds(profile.id);
+        let groupUnread = 0;
+        if (groupIds.length > 0) {
+          const counts = await Promise.all(groupIds.map(gid => SocialService.getGroupUnreadCount(gid, profile.id)));
+          groupUnread = counts.reduce((s, n) => s + n, 0);
+        }
+        setUnreadMessageCount(dmCount + groupUnread);
       } catch {}
     };
     fetchCounts();
@@ -94,6 +102,16 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${profile.id}` },
         () => { setUnreadMessageCount(c => c + 1); }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'group_messages' },
+        (payload) => {
+          const raw = payload.new as any;
+          if (raw.sender_id !== profile.id) {
+            setUnreadMessageCount(c => c + 1);
+          }
+        }
       )
       .subscribe();
 

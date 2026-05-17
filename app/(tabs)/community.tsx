@@ -26,6 +26,7 @@ import { getSolPrice } from '@/services/solana/priceService';
 import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import * as ImagePicker from 'expo-image-picker';
 import PostCard, { timeAgo } from '@/components/PostCard';
 import VerificationBadge from '@/components/VerificationBadge';
 // NotificationBanner is handled globally in _layout.tsx
@@ -88,6 +89,7 @@ export default function CommunityScreen() {
   const [groupSelectedMembers, setGroupSelectedMembers] = useState<any[]>([]);
   const [groupCreating, setGroupCreating] = useState(false);
   const [groupCreateError, setGroupCreateError] = useState('');
+  const [groupPhotoUri, setGroupPhotoUri] = useState<string | null>(null);
 
   // Group conversations (for inbox)
   const [groupConversations, setGroupConversations] = useState<any[]>([]);
@@ -212,7 +214,14 @@ export default function CommunityScreen() {
         SocialService.getGroupConversationsWithLastMsg(profile.id),
       ]);
       setConversations(dms);
-      setGroupConversations(groups);
+      // Attach per-group unread counts
+      const groupsWithUnread = await Promise.all(
+        groups.map(async (g: any) => {
+          const unread = await SocialService.getGroupUnreadCount(g.id, profile.id);
+          return { ...g, unreadCount: unread };
+        })
+      );
+      setGroupConversations(groupsWithUnread);
     } catch (e) {
       console.warn('[Community] loadConversations error:', e);
     } finally {
@@ -409,11 +418,16 @@ export default function CommunityScreen() {
       const memberIds = groupSelectedMembers.map((m: any) => m.id);
       const groupId = await SocialService.createGroupConversation(profile.id, groupName.trim(), memberIds);
       if (!groupId) throw new Error('Failed to create group');
+      // Upload group photo if selected
+      if (groupPhotoUri) {
+        await SocialService.uploadGroupPhoto(groupId, groupPhotoUri);
+      }
       setShowGroupModal(false);
       setGroupName('');
       setGroupSelectedMembers([]);
       setGroupMemberSearch('');
       setGroupMemberResults([]);
+      setGroupPhotoUri(null);
       await loadConversations();
       router.push(`/chat/group/${groupId}` as any);
     } catch (e: any) {
@@ -1074,9 +1088,13 @@ export default function CommunityScreen() {
               onPress={() => router.push(`/chat/group/${group.id}` as any)}
             >
               <View style={styles.convAvatarWrap}>
-                <View style={styles.groupAvatarIcon}>
-                  <Users size={22} color={colors.primary} strokeWidth={2} />
-                </View>
+                {group.avatar_url ? (
+                  <Image source={{ uri: group.avatar_url }} style={styles.convAvatar} />
+                ) : (
+                  <View style={styles.groupAvatarIcon}>
+                    <Users size={22} color={colors.primary} strokeWidth={2} />
+                  </View>
+                )}
               </View>
               <View style={styles.convBody}>
                 <View style={styles.convNameRow}>
@@ -1091,6 +1109,7 @@ export default function CommunityScreen() {
               </View>
               <View style={styles.convMeta}>
                 {group.lastMessage && <Text style={styles.convTime}>{timeAgo(group.lastMessage.created_at)}</Text>}
+                {group.unreadCount > 0 && <View style={styles.unreadDot} />}
               </View>
             </TouchableOpacity>
           ))}
@@ -1543,13 +1562,32 @@ export default function CommunityScreen() {
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Group Chat</Text>
-              <TouchableOpacity onPress={() => setShowGroupModal(false)}>
+              <TouchableOpacity onPress={() => { setShowGroupModal(false); setGroupPhotoUri(null); }}>
                 <X size={22} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
+            {/* Group photo picker */}
+            <TouchableOpacity
+              style={{ alignSelf: 'center', marginBottom: spacing.md }}
+              activeOpacity={0.8}
+              onPress={async () => {
+                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 });
+                if (!result.canceled && result.assets?.[0]) setGroupPhotoUri(result.assets[0].uri);
+              }}
+            >
+              {groupPhotoUri ? (
+                <Image source={{ uri: groupPhotoUri }} style={{ width: 64, height: 64, borderRadius: 32 }} />
+              ) : (
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(59,130,246,0.12)', borderWidth: 2, borderColor: 'rgba(59,130,246,0.3)', borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center', gap: 3 }}>
+                  <ImagePlus size={20} color={colors.primary} strokeWidth={2} />
+                  <Text style={{ fontSize: 9, color: colors.textMuted, fontWeight: '600' }}>Photo</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
             <TextInput
-              style={[styles.msgSearchInput, { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, color: colors.textPrimary, fontSize: fontSize.md }]}
+              style={[styles.msgSearchInput, { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)', borderRadius: borderRadius.md, paddingHorizontal: spacing.md, color: colors.textPrimary, fontSize: fontSize.md }]}
               placeholder="Group name..."
               placeholderTextColor={colors.textMuted}
               value={groupName}

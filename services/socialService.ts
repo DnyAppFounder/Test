@@ -1763,4 +1763,91 @@ export class SocialService {
       return !error;
     } catch { return false; }
   }
+
+  static async updateGroupMemberRole(groupId: string, userId: string, role: 'admin' | 'member'): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_members')
+      .update({ role })
+      .eq('group_id', groupId)
+      .eq('user_id', userId)
+      .is('removed_at', null);
+    return !error;
+  }
+
+  static async deleteGroupMessage(messageId: string, deletedById: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_messages')
+      .update({ is_deleted: true, content: '', deleted_by: deletedById })
+      .eq('id', messageId);
+    return !error;
+  }
+
+  static async markGroupMessagesRead(groupId: string, userId: string): Promise<void> {
+    await supabase
+      .from('group_members')
+      .update({ last_read_at: new Date().toISOString() })
+      .eq('group_id', groupId)
+      .eq('user_id', userId)
+      .is('removed_at', null);
+  }
+
+  static async getGroupUnreadCount(groupId: string, userId: string): Promise<number> {
+    try {
+      const { data: memberRow } = await supabase
+        .from('group_members')
+        .select('last_read_at')
+        .eq('group_id', groupId)
+        .eq('user_id', userId)
+        .is('removed_at', null)
+        .maybeSingle();
+      const lastRead = memberRow?.last_read_at ?? new Date(0).toISOString();
+      const { count } = await supabase
+        .from('group_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('group_id', groupId)
+        .eq('is_deleted', false)
+        .neq('sender_id', userId)
+        .gt('created_at', lastRead);
+      return count ?? 0;
+    } catch { return 0; }
+  }
+
+  static async uploadGroupPhoto(groupId: string, imageUri: string): Promise<string | null> {
+    try {
+      const ext = imageUri.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const path = `group-${groupId}/photo.${ext}`;
+      let blob: Blob;
+      if (imageUri.startsWith('data:')) {
+        const parts = imageUri.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] ?? 'image/jpeg';
+        const bytes = atob(parts[1]);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        blob = new Blob([arr], { type: mime });
+      } else {
+        const res = await fetch(imageUri);
+        blob = await res.blob();
+      }
+      const { error: upErr } = await supabase.storage.from('avatars').upload(path, blob, { upsert: true, contentType: blob.type });
+      if (upErr) return null;
+      const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path);
+      const publicUrl = urlData.publicUrl + `?t=${Date.now()}`;
+      await supabase.from('group_conversations').update({ avatar_url: publicUrl }).eq('id', groupId);
+      return publicUrl;
+    } catch { return null; }
+  }
+
+  static async updateGroupConversation(groupId: string, updates: { name?: string; avatar_url?: string }): Promise<boolean> {
+    const { error } = await supabase.from('group_conversations').update(updates).eq('id', groupId);
+    return !error;
+  }
+
+  static async getUserGroupIds(userId: string): Promise<string[]> {
+    const { data } = await supabase
+      .from('group_members')
+      .select('group_id')
+      .eq('user_id', userId)
+      .is('removed_at', null);
+    return (data || []).map((r: any) => r.group_id);
+  }
 }

@@ -17,7 +17,11 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight } from 'lucide-react-native';
+import {
+  ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X,
+  Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight,
+  Camera, UserCheck, UserMinus, Shield, ShieldOff,
+} from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -35,6 +39,7 @@ export default function GroupChatScreen() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
 
   const [topics, setTopics] = useState<GroupTopic[]>([]);
   const [activeTopic, setActiveTopic] = useState<GroupTopic | null>(null);
@@ -53,10 +58,15 @@ export default function GroupChatScreen() {
   const [searchingMembers, setSearchingMembers] = useState(false);
   const [addingMember, setAddingMember] = useState<string | null>(null);
 
+  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
+  const [togglingFollow, setTogglingFollow] = useState<string | null>(null);
+  const [promotingMember, setPromotingMember] = useState<string | null>(null);
+
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   const [longPressMsg, setLongPressMsg] = useState<any>(null);
   const [showMsgActions, setShowMsgActions] = useState(false);
+  const [deletingMsg, setDeletingMsg] = useState(false);
 
   const listRef = useRef<FlatList>(null);
 
@@ -73,42 +83,55 @@ export default function GroupChatScreen() {
       setMessages(msgs);
       setGroupDetails(details);
       setPins(pinList);
+
       if (details) {
         const me = (details.members ?? []).find((m: any) => m.id === profile.id);
-        if (me?.role) setMyRole(me.role as any);
-        else if (details.creator_id === profile.id) setMyRole('creator');
+        if (details.creator_id === profile.id) setMyRole('creator');
+        else if (me?.role === 'admin') setMyRole('admin');
+        else setMyRole('member');
+
+        // Batch-load follow states for all members except self
+        const memberIds: string[] = (details.members ?? [])
+          .filter((m: any) => m.id !== profile.id)
+          .map((m: any) => m.id);
+        if (memberIds.length > 0) {
+          const { data: followRows } = await supabase
+            .from('follows')
+            .select('following_id')
+            .eq('follower_id', profile.id)
+            .in('following_id', memberIds);
+          const followMap: Record<string, boolean> = {};
+          (followRows || []).forEach((r: any) => { followMap[r.following_id] = true; });
+          setFollowStates(followMap);
+        }
       }
 
       if (topicList.length > 0) {
         setTopics(topicList);
         const def = topicList.find(t => t.is_default) ?? topicList[0];
-        setActiveTopic(def);
+        setActiveTopic(prev => prev ? (topicList.find(t => t.id === prev.id) ?? def) : def);
       } else {
-        // Ensure a default General topic exists
         const def = await SocialService.ensureDefaultTopic(groupId, profile.id);
-        if (def) {
-          setTopics([def]);
-          setActiveTopic(def);
-        }
+        if (def) { setTopics([def]); setActiveTopic(def); }
       }
     } catch (e) {
       console.error('[GroupChat] loadData error:', e);
     } finally {
       setLoading(false);
+      // Mark messages as read
+      if (profile?.id) SocialService.markGroupMessagesRead(groupId!, profile.id);
     }
   }, [groupId, profile?.id]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Realtime
+  // Realtime: INSERT + UPDATE
   useEffect(() => {
     if (!groupId || !profile?.id) return;
     const channel = supabase
       .channel(`group_chat:${groupId}`)
       .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'group_messages',
+        event: 'INSERT', schema: 'public', table: 'group_messages',
         filter: `group_id=eq.${groupId}`,
       }, async (payload) => {
         const raw = payload.new as any;
@@ -119,7 +142,15 @@ export default function GroupChatScreen() {
           if (prev.some((m: any) => m.id === newMsg.id)) return prev;
           return [...prev, newMsg];
         });
+        SocialService.markGroupMessagesRead(groupId!, profile.id);
         setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'group_messages',
+        filter: `group_id=eq.${groupId}`,
+      }, (payload) => {
+        const updated = payload.new as any;
+        setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m));
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -144,6 +175,7 @@ export default function GroupChatScreen() {
       sender_id: profile.id,
       content: text,
       topic_id: activeTopic?.id,
+      is_deleted: false,
       created_at: new Date().toISOString(),
       sender: profile,
     };
@@ -176,6 +208,7 @@ export default function GroupChatScreen() {
       media_url: asset.uri,
       media_type: 'image',
       topic_id: activeTopic?.id,
+      is_deleted: false,
       created_at: new Date().toISOString(),
       sender: profile,
     };
@@ -194,6 +227,22 @@ export default function GroupChatScreen() {
       setMessages(prev => prev.filter((m: any) => m.id !== optimistic.id));
     } finally {
       setUploading(false);
+    }
+  };
+
+  const pickGroupPhoto = async () => {
+    if (!profile || !groupId || uploadingGroupPhoto) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    setUploadingGroupPhoto(true);
+    try {
+      const url = await SocialService.uploadGroupPhoto(groupId, result.assets[0].uri);
+      if (url) setGroupDetails((prev: any) => prev ? { ...prev, avatar_url: url } : prev);
+    } finally {
+      setUploadingGroupPhoto(false);
     }
   };
 
@@ -218,6 +267,20 @@ export default function GroupChatScreen() {
     setShowMsgActions(false);
   };
 
+  const handleDeleteMessage = async () => {
+    if (!longPressMsg || !profile || deletingMsg) return;
+    setDeletingMsg(true);
+    const ok = await SocialService.deleteGroupMessage(longPressMsg.id, profile.id);
+    if (ok) {
+      setMessages(prev => prev.map(m =>
+        m.id === longPressMsg.id ? { ...m, is_deleted: true, content: '' } : m
+      ));
+    }
+    setDeletingMsg(false);
+    setLongPressMsg(null);
+    setShowMsgActions(false);
+  };
+
   const createTopic = async () => {
     if (!newTopicName.trim() || !profile || !groupId) return;
     setCreatingTopic(true);
@@ -236,10 +299,57 @@ export default function GroupChatScreen() {
     }
   };
 
+  const toggleFollow = async (memberId: string) => {
+    if (!profile || togglingFollow) return;
+    setTogglingFollow(memberId);
+    try {
+      const nowFollowing = await SocialService.toggleFollow(profile.id, memberId);
+      setFollowStates(prev => ({ ...prev, [memberId]: nowFollowing }));
+    } finally {
+      setTogglingFollow(null);
+    }
+  };
+
+  const handlePromoteDemote = async (member: any) => {
+    if (!groupId || promotingMember) return;
+    const currentRole = member.role ?? 'member';
+    const newRole = currentRole === 'admin' ? 'member' : 'admin';
+    setPromotingMember(member.id);
+    const ok = await SocialService.updateGroupMemberRole(groupId, member.id, newRole);
+    if (ok) {
+      setGroupDetails((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          members: (prev.members ?? []).map((m: any) =>
+            m.id === member.id ? { ...m, role: newRole } : m
+          ),
+        };
+      });
+    }
+    setPromotingMember(null);
+  };
+
   const formatTime = (iso: string) => {
     const d = new Date(iso);
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   };
+
+  const canLongPress = (item: any) => {
+    if (!profile) return false;
+    if (myRole === 'creator' || myRole === 'admin') return true;
+    return item.sender_id === profile.id;
+  };
+
+  const canDeleteMsg = (item: any) => {
+    if (!profile) return false;
+    if (myRole === 'creator' || myRole === 'admin') return true;
+    return item.sender_id === profile.id;
+  };
+
+  const canPinMsg = () => myRole === 'creator' || myRole === 'admin';
+  const canManageMembers = () => myRole === 'creator' || myRole === 'admin';
+  const canManageTopics = () => myRole === 'creator' || myRole === 'admin';
 
   const renderMessage = ({ item, index }: { item: any; index: number }) => {
     const mine = item.sender_id === profile?.id;
@@ -248,10 +358,13 @@ export default function GroupChatScreen() {
     const senderName = item.sender?.username
       || (item.sender?.wallet_address ? `${item.sender.wallet_address.slice(0, 6)}...` : 'User');
     const isPinned = pins.some(p => p.message_id === item.id);
+    const isDeleted = item.is_deleted;
 
     return (
       <TouchableOpacity
-        onLongPress={() => { if (myRole !== 'member') { setLongPressMsg(item); setShowMsgActions(true); } }}
+        onLongPress={() => {
+          if (canLongPress(item)) { setLongPressMsg(item); setShowMsgActions(true); }
+        }}
         activeOpacity={0.95}
         delayLongPress={400}
       >
@@ -275,7 +388,11 @@ export default function GroupChatScreen() {
             {!mine && showSenderInfo && (
               <Text style={styles.senderName}>{senderName}</Text>
             )}
-            {item.media_url ? (
+            {isDeleted ? (
+              <View style={[styles.bubble, mine ? styles.bubbleMineDeleted : styles.bubbleOtherDeleted]}>
+                <Text style={styles.deletedText}>Message deleted</Text>
+              </View>
+            ) : item.media_url ? (
               mine ? (
                 <View style={styles.imgBubbleMine}>
                   <TouchableOpacity activeOpacity={0.85} onPress={() => setViewingImage(item.media_url)}>
@@ -295,7 +412,7 @@ export default function GroupChatScreen() {
               )
             ) : mine ? (
               <LinearGradient
-                colors={['#8B5CF6', '#6D28D9']}
+                colors={['#3B82F6', '#1D4ED8']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={[styles.bubble, styles.bubbleMine, isPinned && styles.bubblePinned]}
@@ -318,29 +435,50 @@ export default function GroupChatScreen() {
   };
 
   const memberCount = groupDetails?.members?.length ?? 0;
+  const groupAvatarUrl = groupDetails?.avatar_url;
+  const isCreatorOrAdmin = myRole === 'creator' || myRole === 'admin';
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        {/* Top bar */}
+        {/* Top bar — header info tappable for ALL members */}
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
             <ArrowLeft size={22} color={colors.textPrimary} strokeWidth={2.5} />
           </TouchableOpacity>
-          <View style={styles.groupAvatarWrap}>
-            <View style={styles.groupAvatar}>
-              <Users size={18} color={colors.primary} strokeWidth={2} />
+
+          <TouchableOpacity
+            style={styles.headerInfoRow}
+            onPress={() => setShowSettings(true)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.groupAvatarWrap}>
+              {uploadingGroupPhoto ? (
+                <View style={styles.groupAvatar}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                </View>
+              ) : groupAvatarUrl ? (
+                <Image source={{ uri: groupAvatarUrl }} style={styles.groupAvatarImg} />
+              ) : (
+                <View style={styles.groupAvatar}>
+                  <Users size={18} color={colors.primary} strokeWidth={2} />
+                </View>
+              )}
+              {isCreatorOrAdmin && (
+                <TouchableOpacity style={styles.cameraOverlay} onPress={pickGroupPhoto} activeOpacity={0.8}>
+                  <Camera size={11} color="#fff" strokeWidth={2} />
+                </TouchableOpacity>
+              )}
             </View>
-          </View>
-          <View style={styles.topUserInfo}>
-            <Text style={styles.topUsername} numberOfLines={1}>{groupDetails?.name || 'Group Chat'}</Text>
-            <Text style={styles.memberText}>{memberCount} member{memberCount !== 1 ? 's' : ''}</Text>
-          </View>
-          {(myRole === 'creator' || myRole === 'admin') && (
-            <TouchableOpacity style={styles.adminBtn} onPress={() => setShowSettings(true)} activeOpacity={0.7}>
-              <Settings size={20} color={colors.textSecondary} strokeWidth={2} />
-            </TouchableOpacity>
-          )}
+            <View style={styles.topUserInfo}>
+              <Text style={styles.topUsername} numberOfLines={1}>{groupDetails?.name || 'Group Chat'}</Text>
+              <Text style={styles.memberText}>{memberCount} member{memberCount !== 1 ? 's' : ''} · tap for details</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.adminBtn} onPress={() => setShowSettings(true)} activeOpacity={0.7}>
+            <Settings size={20} color={colors.textSecondary} strokeWidth={2} />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.divider} />
@@ -450,19 +588,34 @@ export default function GroupChatScreen() {
             <TouchableWithoutFeedback>
               <View style={styles.actionSheet}>
                 <Text style={styles.actionTitle} numberOfLines={1}>
-                  {longPressMsg?.content?.slice(0, 40) || 'Message'}
+                  {longPressMsg?.is_deleted ? 'Deleted message' : (longPressMsg?.content?.slice(0, 40) || 'Message')}
                 </Text>
-                {longPressMsg && pins.some(p => p.message_id === longPressMsg.id) ? (
-                  <TouchableOpacity style={styles.actionRow} onPress={handleUnpinMessage} activeOpacity={0.8}>
-                    <Pin size={16} color="#EF4444" strokeWidth={2} />
-                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Unpin Message</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity style={styles.actionRow} onPress={handlePinMessage} activeOpacity={0.8}>
-                    <Pin size={16} color={colors.primary} strokeWidth={2} />
-                    <Text style={styles.actionText}>Pin Message</Text>
+
+                {longPressMsg && !longPressMsg.is_deleted && canPinMsg() && (
+                  pins.some(p => p.message_id === longPressMsg.id) ? (
+                    <TouchableOpacity style={styles.actionRow} onPress={handleUnpinMessage} activeOpacity={0.8}>
+                      <Pin size={16} color="#EF4444" strokeWidth={2} />
+                      <Text style={[styles.actionText, { color: '#EF4444' }]}>Unpin Message</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.actionRow} onPress={handlePinMessage} activeOpacity={0.8}>
+                      <Pin size={16} color={colors.primary} strokeWidth={2} />
+                      <Text style={styles.actionText}>Pin Message</Text>
+                    </TouchableOpacity>
+                  )
+                )}
+
+                {longPressMsg && !longPressMsg.is_deleted && canDeleteMsg(longPressMsg) && (
+                  <TouchableOpacity style={styles.actionRow} onPress={handleDeleteMessage} activeOpacity={0.8} disabled={deletingMsg}>
+                    {deletingMsg ? (
+                      <ActivityIndicator size="small" color="#EF4444" />
+                    ) : (
+                      <Trash2 size={16} color="#EF4444" strokeWidth={2} />
+                    )}
+                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Delete Message</Text>
                   </TouchableOpacity>
                 )}
+
                 <TouchableOpacity
                   style={[styles.actionRow, styles.actionRowCancel]}
                   onPress={() => { setShowMsgActions(false); setLongPressMsg(null); }}
@@ -477,123 +630,209 @@ export default function GroupChatScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Settings panel */}
+      {/* Group Details / Settings panel — accessible to ALL members */}
       <Modal visible={showSettings} transparent animationType="slide" onRequestClose={() => setShowSettings(false)}>
         <View style={styles.adminOverlay}>
           <View style={styles.adminSheet}>
             <View style={styles.adminHandle} />
             <View style={styles.adminHeader}>
               <Settings size={18} color={colors.primary} strokeWidth={2} />
-              <Text style={styles.adminTitle}>Group Settings</Text>
+              <Text style={styles.adminTitle}>Group Details</Text>
               <TouchableOpacity onPress={() => setShowSettings(false)} activeOpacity={0.7}>
                 <X size={20} color={colors.textPrimary} strokeWidth={2} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.adminSection}>Topics</Text>
-            <ScrollView style={styles.topicsList} showsVerticalScrollIndicator={false}>
-              {topics.map(topic => (
-                <View key={topic.id} style={styles.adminTopicRow}>
-                  <Hash size={13} color={colors.textMuted} strokeWidth={2} />
-                  <Text style={styles.adminTopicName}>{topic.name}</Text>
-                  {topic.is_default && (
-                    <View style={styles.defaultBadge}>
-                      <Text style={styles.defaultBadgeText}>default</Text>
-                    </View>
-                  )}
-                  {!topic.is_default && (
-                    <TouchableOpacity onPress={() => deleteTopic(topic.id)} activeOpacity={0.7} style={styles.deleteTopicBtn}>
-                      <Trash2 size={14} color="#EF4444" strokeWidth={2} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
-
-            <View style={styles.newTopicRow}>
-              <TextInput
-                style={styles.newTopicInput}
-                placeholder="New topic name..."
-                placeholderTextColor={colors.textMuted}
-                value={newTopicName}
-                onChangeText={setNewTopicName}
-                maxLength={32}
-              />
+            {/* Group photo in settings */}
+            <View style={styles.settingsPhotoRow}>
               <TouchableOpacity
-                style={[styles.addTopicBtn, (!newTopicName.trim() || creatingTopic) && styles.addTopicBtnDisabled]}
-                onPress={createTopic}
-                disabled={!newTopicName.trim() || creatingTopic}
-                activeOpacity={0.8}
+                style={styles.settingsAvatarWrap}
+                onPress={isCreatorOrAdmin ? pickGroupPhoto : undefined}
+                activeOpacity={isCreatorOrAdmin ? 0.8 : 1}
               >
-                {creatingTopic ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                {groupAvatarUrl ? (
+                  <Image source={{ uri: groupAvatarUrl }} style={styles.settingsAvatar} />
                 ) : (
-                  <Plus size={18} color="#fff" strokeWidth={2.5} />
+                  <View style={[styles.settingsAvatar, styles.settingsAvatarPlaceholder]}>
+                    <Users size={28} color={colors.primary} strokeWidth={2} />
+                  </View>
+                )}
+                {isCreatorOrAdmin && (
+                  <View style={styles.settingsCameraOverlay}>
+                    {uploadingGroupPhoto ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Camera size={14} color="#fff" strokeWidth={2} />
+                    )}
+                  </View>
                 )}
               </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingsGroupName}>{groupDetails?.name || 'Group'}</Text>
+                <Text style={styles.settingsMemberCount}>{memberCount} member{memberCount !== 1 ? 's' : ''}</Text>
+                {isCreatorOrAdmin && (
+                  <Text style={styles.settingsPhotoHint}>Tap photo to change</Text>
+                )}
+              </View>
             </View>
 
-            <View style={styles.adminSectionRow}>
-              <Text style={[styles.adminSection, { marginTop: spacing.lg, flex: 1 }]}>Members</Text>
-              <TouchableOpacity
-                style={styles.addMemberBtn}
-                onPress={() => { setShowSettings(false); setShowAddMembers(true); }}
-                activeOpacity={0.8}
-              >
-                <UserPlus size={14} color={colors.primary} strokeWidth={2} />
-                <Text style={styles.addMemberBtnText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.membersList} showsVerticalScrollIndicator={false}>
-              {(groupDetails?.members ?? []).map((m: any) => {
-                const name = m.username || (m.wallet_address ? `${m.wallet_address.slice(0, 6)}...` : 'Member');
-                const isMe = m.id === profile?.id;
-                const role: string = m.role ?? 'member';
-                return (
-                  <TouchableOpacity
-                    key={m.id}
-                    style={styles.adminMemberRow}
-                    activeOpacity={0.8}
-                    onPress={() => { setShowSettings(false); router.push(`/profile/${m.id}` as any); }}
-                  >
-                    <View style={styles.memberAvatar}>
-                      {m.avatar_url ? (
-                        <Image source={{ uri: m.avatar_url }} style={styles.memberAvatarImg} />
-                      ) : (
-                        <User size={14} color={colors.textMuted} />
+            <ScrollView style={styles.settingsScroll} showsVerticalScrollIndicator={false}>
+              {/* Topics — creator/admin only */}
+              {canManageTopics() && (
+                <>
+                  <Text style={styles.adminSection}>Topics</Text>
+                  {topics.map(topic => (
+                    <View key={topic.id} style={styles.adminTopicRow}>
+                      <Hash size={13} color={colors.textMuted} strokeWidth={2} />
+                      <Text style={styles.adminTopicName}>{topic.name}</Text>
+                      {topic.is_default && (
+                        <View style={styles.defaultBadge}>
+                          <Text style={styles.defaultBadgeText}>default</Text>
+                        </View>
+                      )}
+                      {!topic.is_default && (
+                        <TouchableOpacity onPress={() => deleteTopic(topic.id)} activeOpacity={0.7} style={styles.deleteTopicBtn}>
+                          <Trash2 size={14} color="#EF4444" strokeWidth={2} />
+                        </TouchableOpacity>
                       )}
                     </View>
-                    <Text style={styles.memberName}>{name}{isMe ? ' (you)' : ''}</Text>
-                    {role !== 'member' && (
-                      <View style={[styles.roleBadge, role === 'creator' && styles.roleBadgeCreator]}>
-                        <Text style={styles.roleBadgeText}>{role}</Text>
+                  ))}
+                  <View style={styles.newTopicRow}>
+                    <TextInput
+                      style={styles.newTopicInput}
+                      placeholder="New topic name..."
+                      placeholderTextColor={colors.textMuted}
+                      value={newTopicName}
+                      onChangeText={setNewTopicName}
+                      maxLength={32}
+                    />
+                    <TouchableOpacity
+                      style={[styles.addTopicBtn, (!newTopicName.trim() || creatingTopic) && styles.addTopicBtnDisabled]}
+                      onPress={createTopic}
+                      disabled={!newTopicName.trim() || creatingTopic}
+                      activeOpacity={0.8}
+                    >
+                      {creatingTopic ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Plus size={18} color="#fff" strokeWidth={2.5} />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              {/* Members */}
+              <View style={styles.adminSectionRow}>
+                <Text style={[styles.adminSection, { flex: 1 }]}>Members</Text>
+                {canManageMembers() && (
+                  <TouchableOpacity
+                    style={styles.addMemberBtn}
+                    onPress={() => { setShowSettings(false); setShowAddMembers(true); }}
+                    activeOpacity={0.8}
+                  >
+                    <UserPlus size={14} color={colors.primary} strokeWidth={2} />
+                    <Text style={styles.addMemberBtnText}>Add</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {(groupDetails?.members ?? []).map((m: any) => {
+                const name = m.username || (m.wallet_address ? `${m.wallet_address.slice(0, 6)}...` : 'User');
+                const isMe = m.id === profile?.id;
+                const role: string = myRole === 'creator' && m.id === groupDetails?.creator_id
+                  ? 'creator'
+                  : (m.role ?? 'member');
+                const isFollowing = followStates[m.id] ?? false;
+                return (
+                  <View key={m.id} style={styles.adminMemberRow}>
+                    <TouchableOpacity
+                      style={styles.memberAvatarTap}
+                      onPress={() => { setShowSettings(false); router.push(`/profile/${m.id}` as any); }}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.memberAvatar}>
+                        {m.avatar_url ? (
+                          <Image source={{ uri: m.avatar_url }} style={styles.memberAvatarImg} />
+                        ) : (
+                          <User size={14} color={colors.textMuted} />
+                        )}
                       </View>
-                    )}
-                    <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} style={{ marginLeft: 4 }} />
-                    {!isMe && myRole === 'creator' && (
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.memberNameWrap}
+                      onPress={() => { setShowSettings(false); router.push(`/profile/${m.id}` as any); }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.memberName}>{name}{isMe ? ' (you)' : ''}</Text>
+                      {role !== 'member' && (
+                        <View style={[styles.roleBadge, role === 'creator' && styles.roleBadgeCreator, role === 'admin' && styles.roleBadgeAdmin]}>
+                          <Text style={styles.roleBadgeText}>{role}</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Follow button for non-self members */}
+                    {!isMe && (
                       <TouchableOpacity
-                        onPress={(e) => { e.stopPropagation(); setConfirmRemoveMember(m); }}
+                        style={[styles.followBtn, isFollowing && styles.followBtnActive]}
+                        onPress={() => toggleFollow(m.id)}
+                        activeOpacity={0.8}
+                        disabled={togglingFollow === m.id}
+                      >
+                        {togglingFollow === m.id ? (
+                          <ActivityIndicator size="small" color={isFollowing ? colors.textMuted : colors.primary} />
+                        ) : isFollowing ? (
+                          <UserCheck size={13} color={colors.textMuted} strokeWidth={2} />
+                        ) : (
+                          <UserPlus size={13} color={colors.primary} strokeWidth={2} />
+                        )}
+                      </TouchableOpacity>
+                    )}
+
+                    {/* Promote/demote — creator only, not self, not the other creator */}
+                    {myRole === 'creator' && !isMe && role !== 'creator' && (
+                      <TouchableOpacity
+                        style={styles.promoteBtn}
+                        onPress={() => handlePromoteDemote(m)}
+                        activeOpacity={0.8}
+                        disabled={promotingMember === m.id}
+                      >
+                        {promotingMember === m.id ? (
+                          <ActivityIndicator size="small" color={colors.textMuted} />
+                        ) : role === 'admin' ? (
+                          <ShieldOff size={14} color={colors.textMuted} strokeWidth={2} />
+                        ) : (
+                          <Shield size={14} color='#10B981' strokeWidth={2} />
+                        )}
+                      </TouchableOpacity>
+                    )}
+
+                    {/* Remove — creator/admin can remove (not self, not creator) */}
+                    {!isMe && canManageMembers() && role !== 'creator' && (
+                      <TouchableOpacity
+                        onPress={() => setConfirmRemoveMember(m)}
                         activeOpacity={0.7}
                         style={styles.removeMemberBtn}
                       >
                         <X size={14} color="#EF4444" strokeWidth={2} />
                       </TouchableOpacity>
                     )}
-                  </TouchableOpacity>
+                  </View>
                 );
               })}
-            </ScrollView>
 
-            {myRole === 'creator' && (
-              <TouchableOpacity
-                style={styles.deleteGroupBtn}
-                onPress={() => { setShowSettings(false); setShowDeleteConfirm(true); }}
-                activeOpacity={0.8}
-              >
-                <Trash2 size={15} color="#EF4444" strokeWidth={2} />
-                <Text style={styles.deleteGroupText}>Delete Group</Text>
-              </TouchableOpacity>
-            )}
+              {myRole === 'creator' && (
+                <TouchableOpacity
+                  style={styles.deleteGroupBtn}
+                  onPress={() => { setShowSettings(false); setShowDeleteConfirm(true); }}
+                  activeOpacity={0.8}
+                >
+                  <Trash2 size={15} color="#EF4444" strokeWidth={2} />
+                  <Text style={styles.deleteGroupText}>Delete Group</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -758,18 +997,47 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   backBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
-  groupAvatarWrap: { marginRight: 4 },
+  headerInfoRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  groupAvatarWrap: { position: 'relative' },
   groupAvatar: {
     width: 44, height: 44, borderRadius: 22,
     borderWidth: 2, borderColor: colors.primary,
-    backgroundColor: 'rgba(139,92,246,0.15)',
+    backgroundColor: 'rgba(59,130,246,0.15)',
     justifyContent: 'center', alignItems: 'center',
+  },
+  groupAvatarImg: {
+    width: 44, height: 44, borderRadius: 22,
+    borderWidth: 2, borderColor: colors.primary,
+  },
+  cameraOverlay: {
+    position: 'absolute', bottom: -2, right: -2,
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#0A0A0F',
   },
   topUserInfo: { flex: 1, gap: 2 },
   topUsername: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
-  memberText: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
+  memberText: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
   adminBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
-  divider: { height: 1, backgroundColor: 'rgba(139,92,246,0.12)' },
+  divider: { height: 1, backgroundColor: 'rgba(59,130,246,0.12)' },
+
+  // Settings photo
+  settingsPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginBottom: spacing.xl },
+  settingsAvatarWrap: { position: 'relative' },
+  settingsAvatar: { width: 72, height: 72, borderRadius: 36 },
+  settingsAvatarPlaceholder: { backgroundColor: 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: colors.primary },
+  settingsCameraOverlay: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#12121A',
+  },
+  settingsGroupName: { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
+  settingsMemberCount: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: 2 },
+  settingsPhotoHint: { fontSize: 10, color: colors.textMuted, marginTop: 4 },
+  settingsScroll: { flex: 1 },
 
   // Topics bar
   topicsBarWrap: { maxHeight: 44, backgroundColor: '#0D0D14' },
@@ -780,33 +1048,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   topicChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.07)',
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
-  topicChipActive: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: 'rgba(139,92,246,0.4)',
-  },
+  topicChipActive: { backgroundColor: 'rgba(59,130,246,0.15)', borderColor: 'rgba(59,130,246,0.4)' },
   topicChipText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
   topicChipTextActive: { color: colors.primary },
 
   // Pinned banner
   pinnedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 7,
-    backgroundColor: 'rgba(139,92,246,0.08)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(139,92,246,0.12)',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: spacing.lg, paddingVertical: 7,
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(59,130,246,0.12)',
   },
   pinnedLabel: { fontWeight: '700', color: colors.primary },
   pinnedText: { fontSize: 12, color: colors.textSecondary, flex: 1 },
@@ -830,34 +1086,33 @@ const styles = StyleSheet.create({
   senderName: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 3, marginLeft: 14 },
   bubble: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleMine: { borderBottomRightRadius: 4 },
+  bubbleMineDeleted: { borderBottomRightRadius: 4, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
   bubbleOther: { backgroundColor: '#1E1E2E', borderBottomLeftRadius: 4 },
+  bubbleOtherDeleted: { backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', borderBottomLeftRadius: 4 },
   bubblePinned: { borderColor: 'rgba(255,255,255,0.25)', borderWidth: 1 },
-  bubblePinnedOther: { borderColor: 'rgba(139,92,246,0.35)', borderWidth: 1 },
+  bubblePinnedOther: { borderColor: 'rgba(59,130,246,0.35)', borderWidth: 1 },
   bubbleTextMine: { fontSize: 15, color: colors.white, lineHeight: 21 },
   bubbleTextOther: { fontSize: 15, color: colors.textPrimary, lineHeight: 21 },
+  deletedText: { fontSize: 14, color: colors.textMuted, fontStyle: 'italic' },
   bubbleTimeMine: { fontSize: 10, color: 'rgba(255,255,255,0.55)', textAlign: 'right', marginTop: 4 },
   bubbleTimeOther: { fontSize: 10, color: colors.textMuted, textAlign: 'right', marginTop: 4 },
   msgImage: { width: 220, height: 160, borderRadius: 12 },
-  imgBubbleMine: { borderRadius: 14, overflow: 'hidden', borderBottomRightRadius: 4, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)' },
+  imgBubbleMine: { borderRadius: 14, overflow: 'hidden', borderBottomRightRadius: 4, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)' },
   imgBubbleOther: { backgroundColor: '#1E1E2E', borderRadius: 14, overflow: 'hidden', borderBottomLeftRadius: 4 },
 
   inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    flexDirection: 'row', alignItems: 'flex-end',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     paddingBottom: Platform.OS === 'ios' ? spacing.xl : spacing.md,
-    gap: spacing.sm,
-    backgroundColor: '#0A0A0F',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(139,92,246,0.08)',
+    gap: spacing.sm, backgroundColor: '#0A0A0F',
+    borderTopWidth: 1, borderTopColor: 'rgba(59,130,246,0.08)',
   },
   imgBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
   inputWrap: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#1A1A28', borderRadius: 24,
     paddingHorizontal: spacing.lg, paddingVertical: Platform.OS === 'ios' ? 10 : 6,
-    minHeight: 44, borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)',
+    minHeight: 44, borderWidth: 1, borderColor: 'rgba(59,130,246,0.15)',
   },
   input: { flex: 1, fontSize: 15, color: colors.textPrimary, maxHeight: 100 },
   sendBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
@@ -892,22 +1147,21 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     padding: spacing.xl, paddingBottom: 40,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
-    maxHeight: '80%',
+    maxHeight: '85%',
   },
   adminHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.2)', alignSelf: 'center', marginBottom: spacing.lg },
-  adminHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xl },
+  adminHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.lg },
   adminTitle: { flex: 1, fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
-  adminSection: { fontSize: 11, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: spacing.sm },
-  topicsList: { maxHeight: 160, marginBottom: spacing.md },
+  adminSection: { fontSize: 11, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: spacing.sm, marginTop: spacing.lg },
   adminTopicRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)',
   },
   adminTopicName: { flex: 1, fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
-  defaultBadge: { backgroundColor: colors.primaryMuted, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)' },
+  defaultBadge: { backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)' },
   defaultBadgeText: { fontSize: 9, fontWeight: '700', color: colors.primary },
   deleteTopicBtn: { padding: 4 },
-  newTopicRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  newTopicRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center', marginBottom: spacing.md },
   newTopicInput: {
     flex: 1, backgroundColor: '#0A0A0F', borderRadius: 12,
     paddingHorizontal: spacing.lg, paddingVertical: 10,
@@ -918,20 +1172,38 @@ const styles = StyleSheet.create({
   addTopicBtnDisabled: { opacity: 0.4 },
   membersList: { maxHeight: 200 },
   adminMemberRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)',
   },
+  memberAvatarTap: {},
   memberAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#1A1A28', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   memberAvatarImg: { width: 30, height: 30, borderRadius: 15 },
-  memberName: { flex: 1, fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
+  memberNameWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  memberName: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
   removeMemberBtn: { padding: 6 },
+  followBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)',
+    backgroundColor: 'rgba(59,130,246,0.08)',
+  },
+  followBtnActive: {
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  promoteBtn: {
+    padding: 6, borderRadius: 8,
+    backgroundColor: 'rgba(16,185,129,0.08)',
+    borderWidth: 1, borderColor: 'rgba(16,185,129,0.2)',
+  },
 
-  adminSectionRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg },
+  adminSectionRow: { flexDirection: 'row', alignItems: 'center' },
   addMemberBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 10, paddingVertical: 5,
-    backgroundColor: colors.primaryMuted,
-    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+    backgroundColor: 'rgba(59,130,246,0.1)',
+    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)',
+    marginTop: spacing.lg,
   },
   addMemberBtnText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
   roleBadge: {
@@ -939,10 +1211,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 2,
     borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
-  roleBadgeCreator: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: 'rgba(139,92,246,0.4)',
-  },
+  roleBadgeCreator: { backgroundColor: 'rgba(59,130,246,0.15)', borderColor: 'rgba(59,130,246,0.4)' },
+  roleBadgeAdmin: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.3)' },
   roleBadgeText: { fontSize: 9, fontWeight: '800', color: colors.primary },
   deleteGroupBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
