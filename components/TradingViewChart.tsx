@@ -187,7 +187,7 @@ export function TradingViewChart({
 
   // Responsive layout — mobile gets a tall readable chart; desktop keeps compact layout
   const isMobile = screenWidth < 768;
-  const CHART_H  = chartHeight ?? (isMobile ? 380 : 240);
+  const CHART_H  = chartHeight ?? (isMobile ? 460 : 240);
   const VOL_H    = isMobile ? 60  : 40;
   const PAD      = { top: 10, right: isMobile ? 72 : 60, bottom: 4, left: 4 };
 
@@ -558,6 +558,19 @@ export function TradingViewChart({
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
     const fetchPrice = async () => {
+      // Primary: Jupiter Price API (keyless, Solana-native aggregator)
+      try {
+        const jupRes = await fetch(
+          `https://api.jup.ag/price/v2?ids=${tokenMint}`,
+          { signal: AbortSignal.timeout(4000) }
+        );
+        if (jupRes.ok) {
+          const jupData = await jupRes.json();
+          const jupPrice = Number(jupData?.data?.[tokenMint!]?.price ?? 0);
+          if (jupPrice > 0) { applyLivePrice(jupPrice); return; }
+        }
+      } catch {}
+      // Fallback: DexScreener REST
       try {
         const pair = pairAddrRef.current;
         const url = pair
@@ -714,8 +727,12 @@ export function TradingViewChart({
     const key = `${timeframe}|${valueMode}|${panOffsetCandles}|${dcLen}|${dcFirst?.timestamp ?? 0}|${dcLast?.timestamp ?? 0}`;
     if (key !== priceScaleKeyRef.current && displayCandles.length > 0) {
       priceScaleKeyRef.current = key;
-      const realCandles = displayCandles.filter(c => c.volume > 0);
-      const scaleSource = realCandles.length > 0 ? realCandles : displayCandles;
+      // Restrict to the strictly visible window — buffer candles outside [leftTime, rightTime]
+      // must not inflate or corrupt the Y-scale bounds.
+      const visibleOnly = displayCandles.filter(c => c.timestamp >= leftTime && c.timestamp <= rightTime);
+      const scaleBase   = visibleOnly.length > 0 ? visibleOnly : displayCandles;
+      const realCandles = scaleBase.filter(c => c.volume > 0);
+      const scaleSource = realCandles.length > 0 ? realCandles : scaleBase;
       const rMax = Math.max(...scaleSource.map(c => c.high));
       const rMin = Math.min(...scaleSource.map(c => c.low));
       const safeMax = isFinite(rMax) && rMax > 0 ? rMax : 1;
@@ -1211,12 +1228,13 @@ export function TradingViewChart({
     .join(' ');
   const bottomY     = (PAD.top + plotH).toFixed(1);
   const plotRightX  = PAD.left + plotW; // right edge of chart area
+  const safeRightX  = plotRightX - 4;  // clamp boundary: nothing crosses into right label column
   const lastCandleX = xFn(n - 1);
   const lastCandleY = yOf(displayCandles[n - 1].close);
-  // When not panned, extend area fill to the right edge of the plot so it
-  // aligns with the dashed continuation segment (no visible gap on right side).
-  const areaFillRightX = panOffsetCandles === 0 && plotRightX > lastCandleX + 2
-    ? plotRightX : lastCandleX;
+  // When not panned, extend area fill to safeRightX so it aligns with the dashed
+  // continuation segment without entering the right label column.
+  const areaFillRightX = panOffsetCandles === 0 && safeRightX > lastCandleX + 2
+    ? safeRightX : lastCandleX;
   const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xFn(0).toFixed(1)},${bottomY} Z`;
 
   // Grid
@@ -1499,7 +1517,7 @@ export function TradingViewChart({
           {showContinuation && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
             <Line
               x1={lastX} y1={contY}
-              x2={Math.min(contRightX, plotRightX - 4)} y2={contY}
+              x2={Math.min(contRightX, safeRightX)} y2={contY}
               stroke="rgba(167,139,250,0.45)"
               strokeWidth={1.5}
               strokeDasharray="3,4"
@@ -1528,7 +1546,7 @@ export function TradingViewChart({
 
           {/* ── Animated endpoint dot (non-candlestick/bar) ───────────────── */}
           {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-            <Circle cx={Math.min(lastX, plotRightX - 4)} cy={lastY} r={3}
+            <Circle cx={Math.min(lastX, safeRightX)} cy={lastY} r={3}
               fill="#A78BFA" opacity={1} />
           )}
 
@@ -1619,7 +1637,7 @@ export function TradingViewChart({
             style={[
               styles.livePulse,
               {
-                left: lastX - 10,
+                left: Math.min(lastX, safeRightX) - 10,
                 top:  lastY - 10,
                 transform: [{ scale: dotPulse }],
                 backgroundColor: 'rgba(167,139,250,0.22)',
