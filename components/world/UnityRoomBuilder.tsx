@@ -26,14 +26,19 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
   const iframeRef = useRef<any>(null);
   const webContainerRef = useRef<any>(null);
   const isMountedRef = useRef(true);
+  const statusRef = useRef<'loading' | 'ready' | 'error'>('loading');
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
+    return () => {
+      isMountedRef.current = false;
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    };
   }, []);
 
   const clearLoadTimer = useCallback(() => {
@@ -44,13 +49,10 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     clearLoadTimer();
     timeoutRef.current = setTimeout(() => {
       if (!isMountedRef.current) return;
-      setStatus(prev => {
-        if (prev === 'loading') {
-          setErrorMsg('Room Builder failed to load (timeout). The Unity WebGL files may not be served with the correct Content-Encoding headers for Brotli compression.');
-          return 'error';
-        }
-        return prev;
-      });
+      if (statusRef.current !== 'loading') return;
+      statusRef.current = 'error';
+      setErrorMsg('Room Builder timed out. Brotli-compressed Unity files may require HTTPS. Try a different browser or check WebGL 2.0 support.');
+      setStatus('error');
     }, LOAD_TIMEOUT_MS);
   }, [clearLoadTimer]);
 
@@ -62,6 +64,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
       case 'builder_ready':
       case 'builder_loaded':
         clearLoadTimer();
+        statusRef.current = 'ready';
         setStatus('ready');
         break;
       case 'room_saved': {
@@ -71,6 +74,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
       }
       case 'builder_error':
         clearLoadTimer();
+        statusRef.current = 'error';
         setStatus('error');
         setErrorMsg(msg.data ? String(msg.data) : 'Room Builder failed to load.');
         break;
@@ -106,11 +110,23 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     };
     const onUnhandledRejection = (e: PromiseRejectionEvent) => {
       if (!isMountedRef.current) return;
+      if (statusRef.current !== 'loading') return;
       const reason = String(e.reason || '');
-      if (reason.includes('WebAssembly') || reason.includes('wasm') || reason.includes('Unity')) {
+      // Catch any promise rejection while Room Builder is loading — prevents app crash
+      if (
+        reason.includes('WebAssembly') ||
+        reason.includes('wasm') ||
+        reason.includes('Unity') ||
+        reason.includes('Builds.') ||
+        reason.includes('room-builder') ||
+        reason.includes('Brotli') ||
+        reason.includes('decompress') ||
+        reason.includes('CompressedAsset')
+      ) {
         e.preventDefault();
         clearLoadTimer();
-        setErrorMsg('Room Builder failed to initialize WebAssembly. Ensure the browser supports WebGL 2.0.');
+        statusRef.current = 'error';
+        setErrorMsg('Room Builder failed to initialize. Check that your browser supports WebGL 2.0.');
         setStatus('error');
       }
     };
@@ -136,8 +152,12 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const attemptCreateIframe = () => {
+      if (!isMountedRef.current) return;
       const container = webContainerRef.current;
-      if (!container) { setTimeout(attemptCreateIframe, 100); return; }
+      if (!container) {
+        retryTimerRef.current = setTimeout(attemptCreateIframe, 100);
+        return;
+      }
       const iframe = document.createElement('iframe');
       iframe.src = '/room-builder/index.html';
       iframe.title = 'Room Builder';
@@ -150,14 +170,16 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
         console.error('[UnityRoomBuilder] iframe failed to load /room-builder/index.html');
         clearLoadTimer();
         if (!isMountedRef.current) return;
+        statusRef.current = 'error';
         setErrorMsg('Room Builder failed to load. Check that /room-builder/index.html exists in the public folder.');
         setStatus('error');
       });
       container.appendChild(iframe);
       iframeRef.current = iframe;
     };
-    setTimeout(attemptCreateIframe, 0);
+    retryTimerRef.current = setTimeout(attemptCreateIframe, 0);
     return () => {
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
       try {
         const container = webContainerRef.current;
         if (container && iframeRef.current) container.removeChild(iframeRef.current);

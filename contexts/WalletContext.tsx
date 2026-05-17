@@ -411,9 +411,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, [activeAddress, applyPortfolioResult]);
 
   // Realtime balance updates via Solana WebSocket account subscriptions.
+  // Only enabled when using a direct (non-proxy) RPC URL that supports WebSocket.
   // Gracefully falls back to the existing 30s polling if WebSocket is not supported.
   useEffect(() => {
     if (!activeAddress) return;
+
+    const svc = SolanaConnectionService.getInstance();
+    if (svc.isUsingProxy()) {
+      // HTTP-only proxy cannot support WebSocket subscriptions.
+      // The 30s polling interval is sufficient for this configuration.
+      return;
+    }
 
     const subIds: number[] = [];
 
@@ -422,12 +430,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       wsDebounceRef.current = setTimeout(() => {
         const addr = activeAddressRef.current;
         if (!addr) return;
+        // Mark as refreshed so the 30s polling interval skips the next cycle
+        lastBgRefreshRef.current = Date.now();
         walletAssetLoader.loadSolanaWalletAssets(addr).then(applyPortfolioResult).catch(() => {});
-      }, 800);
+      }, 3000);
     };
 
     try {
-      const connection = SolanaConnectionService.getInstance().getConnection();
+      const connection = svc.getConnection();
       const { PublicKey } = require('@solana/web3.js');
       const pubkey = new PublicKey(activeAddress);
 
@@ -454,7 +464,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     return () => {
       if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
       try {
-        const connection = SolanaConnectionService.getInstance().getConnection();
+        const connection = svc.getConnection();
         subIds.forEach(id => {
           try { connection.removeAccountChangeListener(id); } catch {}
         });
