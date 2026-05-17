@@ -662,7 +662,7 @@ export default function DawenCityPage() {
           <View style={pageStyles.headerInner}>
             <View style={pageStyles.headerLogoRow}>
               <View style={pageStyles.headerLogoBadge}>
-                <Text style={pageStyles.headerLogoText}>D</Text>
+                <Image source={require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
               </View>
               <View>
                 <Text style={pageStyles.headerTitle}>Dawen City</Text>
@@ -736,11 +736,10 @@ const pageStyles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.25)',
   },
-  headerLogoText: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#fff',
-    fontFamily: 'monospace',
+  headerLogoImg: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
   },
   headerTitle: {
     fontSize: 28,

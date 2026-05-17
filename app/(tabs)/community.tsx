@@ -38,7 +38,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 export default function CommunityScreen() {
   const router = useRouter();
   const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
-  const { profile, loading: profileLoading, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount } = useProfile();
+  const { profile, loading: profileLoading, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount, unreadMessageCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1430,7 +1430,14 @@ export default function CommunityScreen() {
           activeOpacity={0.8}
         >
           {activeTab === 'messages' && <View style={styles.topTabActiveGlow} />}
-          <Mail size={20} color={activeTab === 'messages' ? colors.white : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
+          <View style={styles.topTabInner}>
+            <Mail size={20} color={activeTab === 'messages' ? colors.white : 'rgba(255,255,255,0.35)'} strokeWidth={2} />
+            {unreadMessageCount > 0 && activeTab !== 'messages' && (
+              <View style={styles.topTabBadge}>
+                <Text style={styles.topTabBadgeText}>{unreadMessageCount > 99 ? '99+' : unreadMessageCount}</Text>
+              </View>
+            )}
+          </View>
         </TouchableOpacity>
 
         {/* Alerts / Notifications */}

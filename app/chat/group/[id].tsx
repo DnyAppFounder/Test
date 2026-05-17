@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, UserCheck, UserMinus, Shield, ShieldOff, CreditCard as Edit2, LogOut } from 'lucide-react-native';
+import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -56,8 +56,6 @@ export default function GroupChatScreen() {
   const [searchingMembers, setSearchingMembers] = useState(false);
   const [addingMember, setAddingMember] = useState<string | null>(null);
 
-  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
-  const [togglingFollow, setTogglingFollow] = useState<string | null>(null);
   const [promotingMember, setPromotingMember] = useState<string | null>(null);
 
   const [viewingImage, setViewingImage] = useState<string | null>(null);
@@ -107,20 +105,6 @@ export default function GroupChatScreen() {
         else if (me?.role === 'admin') setMyRole('admin');
         else setMyRole('member');
 
-        // Batch-load follow states for all members except self
-        const memberIds: string[] = (details.members ?? [])
-          .filter((m: any) => m.id !== profile.id)
-          .map((m: any) => m.id);
-        if (memberIds.length > 0) {
-          const { data: followRows } = await supabase
-            .from('follows')
-            .select('following_id')
-            .eq('follower_id', profile.id)
-            .in('following_id', memberIds);
-          const followMap: Record<string, boolean> = {};
-          (followRows || []).forEach((r: any) => { followMap[r.following_id] = true; });
-          setFollowStates(followMap);
-        }
       }
 
       if (topicList.length > 0) {
@@ -388,17 +372,6 @@ export default function GroupChatScreen() {
     if (activeTopic?.id === topicId) {
       const def = topics.find(t => t.is_default);
       setActiveTopic(def ?? null);
-    }
-  };
-
-  const toggleFollow = async (memberId: string) => {
-    if (!profile || togglingFollow) return;
-    setTogglingFollow(memberId);
-    try {
-      const nowFollowing = await SocialService.toggleFollow(profile.id, memberId);
-      setFollowStates(prev => ({ ...prev, [memberId]: nowFollowing }));
-    } finally {
-      setTogglingFollow(null);
     }
   };
 
@@ -912,7 +885,6 @@ export default function GroupChatScreen() {
                 const role: string = myRole === 'creator' && m.id === groupDetails?.creator_id
                   ? 'creator'
                   : (m.role ?? 'member');
-                const isFollowing = followStates[m.id] ?? false;
                 return (
                   <View key={m.id} style={styles.adminMemberRow}>
                     <TouchableOpacity
@@ -940,24 +912,6 @@ export default function GroupChatScreen() {
                         </View>
                       )}
                     </TouchableOpacity>
-
-                    {/* Follow button for non-self members */}
-                    {!isMe && (
-                      <TouchableOpacity
-                        style={[styles.followBtn, isFollowing && styles.followBtnActive]}
-                        onPress={() => toggleFollow(m.id)}
-                        activeOpacity={0.8}
-                        disabled={togglingFollow === m.id}
-                      >
-                        {togglingFollow === m.id ? (
-                          <ActivityIndicator size="small" color={isFollowing ? colors.textMuted : colors.primary} />
-                        ) : isFollowing ? (
-                          <UserCheck size={13} color={colors.textMuted} strokeWidth={2} />
-                        ) : (
-                          <UserPlus size={13} color={colors.primary} strokeWidth={2} />
-                        )}
-                      </TouchableOpacity>
-                    )}
 
                     {/* Promote/demote — creator only, not self, not the other creator */}
                     {myRole === 'creator' && !isMe && role !== 'creator' && (
@@ -1446,16 +1400,6 @@ const styles = StyleSheet.create({
   memberNameWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
   memberName: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
   removeMemberBtn: { padding: 6 },
-  followBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)',
-    backgroundColor: 'rgba(59,130,246,0.08)',
-  },
-  followBtnActive: {
-    borderColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
   promoteBtn: {
     padding: 6, borderRadius: 8,
     backgroundColor: 'rgba(16,185,129,0.08)',

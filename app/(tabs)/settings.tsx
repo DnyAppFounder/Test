@@ -512,7 +512,7 @@ export default function SettingsScreen() {
         <View style={styles.headerContent}>
           <View style={styles.headerLogoRow}>
             <View style={styles.headerLogoBadge}>
-              <Text style={styles.headerLogoText}>D</Text>
+              <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
             </View>
             <View>
               <Text style={styles.headerTitle}>{t.settings.title}</Text>
@@ -1351,11 +1351,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.2)',
   },
-  headerLogoText: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#fff',
-    fontFamily: 'monospace',
+  headerLogoImg: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
   },
   headerTitle: {
     fontSize: fontSize.xl,
