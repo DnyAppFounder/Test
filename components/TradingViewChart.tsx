@@ -1325,13 +1325,12 @@ export function TradingViewChart({
               )}
 
               {mode === 'bar' && displayCandles.map((c, i) => {
-                // Skip synthetic live candle (vol=0) from bar rendering unless it's the last
-                if (c.volume === 0 && i !== n - 1) return null;
                 const up  = c.close >= c.open;
                 const col = up ? '#8B5CF6' : '#EC4899';
-                const cx  = Math.min(xOf(i), safeRightX);
                 const bw  = Math.max(isMobile ? 5 : 3, pixelPerBucket * 0.5);
                 const sw  = isMobile ? 1.5 : 1;
+                // Clamp center so the close tick (cx + bw) never exceeds safeRightX
+                const cx  = Math.min(xOf(i), safeRightX - bw);
                 return (
                   <G key={`bar${c.timestamp}`}>
                     <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={sw} />
@@ -1342,18 +1341,19 @@ export function TradingViewChart({
               })}
 
               {mode === 'candlestick' && displayCandles.map((c, i) => {
-                // Skip synthetic live candle (vol=0) from candlestick rendering unless it's last
-                if (c.volume === 0 && i !== n - 1) return null;
                 const up      = c.close >= c.open;
                 const col     = up ? '#8B5CF6' : '#EC4899';
-                const cx      = Math.min(xOf(i), safeRightX);
                 const wickW   = isMobile ? 1.5 : 1;
+                // Clamp center so the body right edge (cx + candleW/2) never exceeds safeRightX
+                const cx      = Math.min(xOf(i), safeRightX - candleW / 2);
                 const bodyTop = yOf(Math.max(c.open, c.close));
                 const bodyBot = yOf(Math.min(c.open, c.close));
                 const rawH    = bodyBot - bodyTop;
+                // Doji: open ≈ close — render as a clean horizontal tick spanning the body width
                 const isDoji  = rawH < 1;
                 return (
                   <G key={`cs${c.timestamp}`}>
+                    {/* Wick centered on cx — always within clamped bounds */}
                     <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
                     {isDoji ? (
                       <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
@@ -1401,17 +1401,19 @@ export function TradingViewChart({
               <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" opacity={1} />
             )}
 
-            {/* Volume bars — real candles only; synthetic live (vol=0) skipped */}
+            {/* Volume bars — zero-volume candles (including live synthetic) produce no bar */}
             {showVolume && displayCandles.map((c, i) => {
               if (c.volume === 0) return null;
               const h    = volBarH(c.volume);
-              const vx   = Math.min(xOf(i), safeRightX);
+              const w    = Math.max(barW, 1.5);
+              // Clamp so right edge (vx + w/2) never exceeds safeRightX
+              const vx   = Math.min(xOf(i), safeRightX - w / 2);
               const isUp = c.close >= c.open;
               return (
                 <Rect key={`v${c.timestamp}`}
-                  x={vx - barW / 2}
+                  x={vx - w / 2}
                   y={CHART_H + (VOL_H - h - 2)}
-                  width={Math.max(barW, 1.5)}
+                  width={w}
                   height={h}
                   fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
                   opacity={i === n - 1 ? 0.9 : 0.45}
