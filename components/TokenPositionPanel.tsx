@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { TrendingUp, TrendingDown, Wallet, Info } from 'lucide-react-native';
+import { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, Image, Share, Pressable } from 'react-native';
+import { Wallet, Share2, X } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 
 interface TokenPositionPanelProps {
@@ -8,6 +8,7 @@ interface TokenPositionPanelProps {
   tokenDecimals?: number;
   tokenPrice: number;
   tokenSymbol: string;
+  tokenName?: string;
   totalSupply?: number;
   activeAddress?: string | null;
 }
@@ -28,14 +29,24 @@ function fmtTokenAmt(val: number): string {
   return val.toPrecision(4);
 }
 
+function fmtPrice(p: number): string {
+  if (p < 0.000001) return p.toExponential(2);
+  if (p < 0.001) return p.toFixed(7);
+  if (p < 1) return p.toFixed(5);
+  return p.toFixed(4);
+}
+
 export function TokenPositionPanel({
   rawTokenBalance,
   tokenDecimals = 9,
   tokenPrice,
   tokenSymbol,
+  tokenName,
   totalSupply,
   activeAddress,
 }: TokenPositionPanelProps) {
+  const [shareVisible, setShareVisible] = useState(false);
+
   const uiBalance = useMemo(
     () => rawTokenBalance / Math.pow(10, tokenDecimals),
     [rawTokenBalance, tokenDecimals],
@@ -50,6 +61,22 @@ export function TokenPositionPanel({
     if (!totalSupply || totalSupply <= 0 || uiBalance <= 0) return null;
     return (uiBalance / totalSupply) * 100;
   }, [uiBalance, totalSupply]);
+
+  const handleShare = async () => {
+    setShareVisible(false);
+    const lines = [
+      `My ${tokenName ? tokenName + ' ' : ''}($${tokenSymbol}) position on DAWEN`,
+      ``,
+      `Balance: ${fmtTokenAmt(uiBalance)} ${tokenSymbol}`,
+      `Value: ${fmtUsd(currentValueUsd)} @ $${fmtPrice(tokenPrice)}`,
+      supplyPct != null ? `% of Supply: ${supplyPct < 0.01 ? '<0.01' : supplyPct.toFixed(2)}%` : null,
+      ``,
+      `Trade on DAWEN — Solana's social trading app`,
+    ].filter(Boolean).join('\n');
+    try {
+      await Share.share({ message: lines });
+    } catch {}
+  };
 
   if (!activeAddress) {
     return (
@@ -77,62 +104,124 @@ export function TokenPositionPanel({
   }
 
   return (
-    <View style={styles.card}>
-      <View style={styles.header}>
-        <Wallet size={14} color={colors.primary} strokeWidth={2} />
-        <Text style={styles.headerTitle}>My Position</Text>
-        {supplyPct != null && supplyPct > 0 && (
-          <View style={styles.supplyBadge}>
-            <Text style={styles.supplyBadgeText}>
-              {supplyPct < 0.01 ? '<0.01' : supplyPct.toFixed(2)}% of supply
-            </Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.mainRow}>
-        {/* Balance */}
-        <View style={styles.statBlock}>
-          <Text style={styles.statLabel}>Balance</Text>
-          <Text style={styles.statValue} numberOfLines={1}>
-            {fmtTokenAmt(uiBalance)}
-          </Text>
-          <Text style={styles.statSub}>{tokenSymbol}</Text>
-        </View>
-
-        <View style={styles.divider} />
-
-        {/* Current Value */}
-        <View style={styles.statBlock}>
-          <Text style={styles.statLabel}>Value</Text>
-          <Text style={[styles.statValue, { color: '#14F195' }]}>
-            {fmtUsd(currentValueUsd)}
-          </Text>
-          <Text style={styles.statSub}>
-            @ {tokenPrice < 0.000001
-              ? tokenPrice.toExponential(2)
-              : tokenPrice < 0.001
-                ? tokenPrice.toFixed(7)
-                : tokenPrice < 1
-                  ? tokenPrice.toFixed(5)
-                  : tokenPrice.toFixed(4)}
-          </Text>
-        </View>
-
-        {supplyPct != null && (
-          <>
-            <View style={styles.divider} />
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>% Supply</Text>
-              <Text style={styles.statValue}>
-                {supplyPct < 0.01 ? '<0.01%' : `${supplyPct.toFixed(2)}%`}
+    <>
+      <View style={styles.card}>
+        <View style={styles.header}>
+          <Wallet size={14} color={colors.primary} strokeWidth={2} />
+          <Text style={styles.headerTitle}>My Position</Text>
+          {supplyPct != null && supplyPct > 0 && (
+            <View style={styles.supplyBadge}>
+              <Text style={styles.supplyBadgeText}>
+                {supplyPct < 0.01 ? '<0.01' : supplyPct.toFixed(2)}% of supply
               </Text>
-              <Text style={styles.statSub}>held</Text>
             </View>
-          </>
-        )}
+          )}
+          <TouchableOpacity
+            style={styles.shareBtn}
+            onPress={() => setShareVisible(true)}
+            activeOpacity={0.75}
+          >
+            <Share2 size={13} color={colors.textMuted} strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.mainRow}>
+          <View style={styles.statBlock}>
+            <Text style={styles.statLabel}>Balance</Text>
+            <Text style={styles.statValue} numberOfLines={1}>
+              {fmtTokenAmt(uiBalance)}
+            </Text>
+            <Text style={styles.statSub}>{tokenSymbol}</Text>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.statBlock}>
+            <Text style={styles.statLabel}>Value</Text>
+            <Text style={[styles.statValue, { color: '#14F195' }]}>
+              {fmtUsd(currentValueUsd)}
+            </Text>
+            <Text style={styles.statSub}>@ {fmtPrice(tokenPrice)}</Text>
+          </View>
+
+          {supplyPct != null && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.statBlock}>
+                <Text style={styles.statLabel}>% Supply</Text>
+                <Text style={styles.statValue}>
+                  {supplyPct < 0.01 ? '<0.01%' : `${supplyPct.toFixed(2)}%`}
+                </Text>
+                <Text style={styles.statSub}>held</Text>
+              </View>
+            </>
+          )}
+        </View>
       </View>
-    </View>
+
+      <Modal visible={shareVisible} transparent animationType="fade" onRequestClose={() => setShareVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setShareVisible(false)}>
+          <Pressable style={styles.shareCard} onPress={() => {}}>
+            {/* Close */}
+            <TouchableOpacity style={styles.closeBtn} onPress={() => setShareVisible(false)}>
+              <X size={16} color={colors.textMuted} strokeWidth={2} />
+            </TouchableOpacity>
+
+            {/* Header with logo */}
+            <View style={styles.shareCardHeader}>
+              <Image
+                source={require('../dawenlogo.jpeg')}
+                style={styles.shareLogo}
+                resizeMode="contain"
+              />
+              <View>
+                <Text style={styles.shareAppName}>DAWEN</Text>
+                <Text style={styles.shareTagline}>Solana Social Trading</Text>
+              </View>
+            </View>
+
+            <View style={styles.shareCardDivider} />
+
+            {/* Token info */}
+            <View style={styles.shareTokenRow}>
+              <Text style={styles.shareTokenName}>{tokenName || tokenSymbol}</Text>
+              <View style={styles.shareSymbolBadge}>
+                <Text style={styles.shareSymbolText}>${tokenSymbol}</Text>
+              </View>
+            </View>
+
+            {/* Stats grid */}
+            <View style={styles.shareStatsGrid}>
+              <View style={styles.shareStatItem}>
+                <Text style={styles.shareStatLabel}>Balance</Text>
+                <Text style={styles.shareStatValue}>{fmtTokenAmt(uiBalance)}</Text>
+                <Text style={styles.shareStatSub}>{tokenSymbol}</Text>
+              </View>
+              <View style={styles.shareStatItem}>
+                <Text style={styles.shareStatLabel}>Value</Text>
+                <Text style={[styles.shareStatValue, { color: '#14F195' }]}>{fmtUsd(currentValueUsd)}</Text>
+                <Text style={styles.shareStatSub}>@ ${fmtPrice(tokenPrice)}</Text>
+              </View>
+              {supplyPct != null && (
+                <View style={styles.shareStatItem}>
+                  <Text style={styles.shareStatLabel}>% Supply</Text>
+                  <Text style={styles.shareStatValue}>
+                    {supplyPct < 0.01 ? '<0.01%' : `${supplyPct.toFixed(2)}%`}
+                  </Text>
+                  <Text style={styles.shareStatSub}>held</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Share button */}
+            <TouchableOpacity style={styles.shareActionBtn} onPress={handleShare} activeOpacity={0.8}>
+              <Share2 size={15} color={colors.black || '#000'} strokeWidth={2.5} />
+              <Text style={styles.shareActionText}>Share Position</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
   );
 }
 
@@ -174,6 +263,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
     letterSpacing: 0.3,
+  },
+  shareBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   mainRow: {
     flexDirection: 'row',
@@ -220,5 +319,136 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     fontWeight: '500',
+  },
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
+  shareCard: {
+    backgroundColor: '#0F0F1A',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    padding: spacing.xl,
+    width: '100%',
+    maxWidth: 380,
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  shareCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  shareLogo: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+  },
+  shareAppName: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: colors.textPrimary,
+    letterSpacing: 1.5,
+  },
+  shareTagline: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  shareCardDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginBottom: 16,
+  },
+  shareTokenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  shareTokenName: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  shareSymbolBadge: {
+    backgroundColor: 'rgba(139,92,246,0.18)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.35)',
+  },
+  shareSymbolText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  shareStatsGrid: {
+    flexDirection: 'row',
+    gap: 0,
+    marginBottom: 20,
+  },
+  shareStatItem: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    marginHorizontal: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    gap: 2,
+  },
+  shareStatLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  shareStatValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    letterSpacing: -0.2,
+  },
+  shareStatSub: {
+    fontSize: 9,
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
+  shareActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: 13,
+  },
+  shareActionText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#000',
+    letterSpacing: 0.3,
   },
 });

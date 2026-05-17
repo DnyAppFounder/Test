@@ -12,7 +12,7 @@ if (Platform.OS !== 'web') {
   WebView = require('react-native-webview').WebView;
 }
 
-const LOAD_TIMEOUT_MS = 20000;
+const LOAD_TIMEOUT_MS = 90000;
 
 interface Props {
   roomName: string;
@@ -25,10 +25,16 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
   const webViewRef = useRef<any>(null);
   const iframeRef = useRef<any>(null);
   const webContainerRef = useRef<any>(null);
+  const isMountedRef = useRef(true);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   const clearLoadTimer = useCallback(() => {
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
@@ -37,6 +43,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
   const startLoadTimer = useCallback(() => {
     clearLoadTimer();
     timeoutRef.current = setTimeout(() => {
+      if (!isMountedRef.current) return;
       setStatus(prev => {
         if (prev === 'loading') {
           setErrorMsg('Room Builder failed to load (timeout). The Unity WebGL files may not be served with the correct Content-Encoding headers for Brotli compression.');
@@ -50,6 +57,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
   useEffect(() => { return () => clearLoadTimer(); }, [clearLoadTimer]);
 
   const handleBuilderMessage = useCallback((msg: { type: string; data?: any }) => {
+    if (!isMountedRef.current) return;
     switch (msg.type) {
       case 'builder_ready':
       case 'builder_loaded':
@@ -83,6 +91,37 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
     return () => window.removeEventListener('message', handler);
   }, [handleBuilderMessage]);
 
+  // Web: catch unhandled errors from Unity WebGL and show error screen instead of crashing
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onError = (e: ErrorEvent) => {
+      if (!isMountedRef.current) return;
+      const src = e.filename || '';
+      if (src.includes('room-builder') || src.includes('Builds.') || src.includes('unity')) {
+        e.preventDefault();
+        clearLoadTimer();
+        setErrorMsg('Room Builder encountered a runtime error. Try a different browser or check WebGL 2.0 support.');
+        setStatus('error');
+      }
+    };
+    const onUnhandledRejection = (e: PromiseRejectionEvent) => {
+      if (!isMountedRef.current) return;
+      const reason = String(e.reason || '');
+      if (reason.includes('WebAssembly') || reason.includes('wasm') || reason.includes('Unity')) {
+        e.preventDefault();
+        clearLoadTimer();
+        setErrorMsg('Room Builder failed to initialize WebAssembly. Ensure the browser supports WebGL 2.0.');
+        setStatus('error');
+      }
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
+  }, [clearLoadTimer]);
+
   const onWebViewMessage = useCallback((event: any) => {
     try {
       const msg = typeof event.nativeEvent.data === 'string'
@@ -110,6 +149,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
       iframe.addEventListener('error', () => {
         console.error('[UnityRoomBuilder] iframe failed to load /room-builder/index.html');
         clearLoadTimer();
+        if (!isMountedRef.current) return;
         setErrorMsg('Room Builder failed to load. Check that /room-builder/index.html exists in the public folder.');
         setStatus('error');
       });
@@ -193,7 +233,7 @@ export function UnityRoomBuilder({ roomName, roomId, onSave, onCancel }: Props) 
             <LinearGradient colors={['#0D0A1A', '#1A0A2E']} style={StyleSheet.absoluteFill} />
             <ActivityIndicator size="large" color="#10B981" />
             <Text style={styles.loadingText}>Loading Room Builder...</Text>
-            <Text style={styles.loadingNote}>First load may take up to 20 seconds (WebGL)</Text>
+            <Text style={styles.loadingNote}>First load may take up to 90 seconds (WebGL)</Text>
           </View>
         )}
 
