@@ -40,6 +40,7 @@ import {
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
 import { liveTokenStore } from '@/services/liveTokenStore';
+import { supabase } from '@/lib/supabase';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -281,6 +282,9 @@ export function TradingViewChart({
   const fromStoreRef = useRef(false);
   // Set to true once the user manually picks a chart mode; suppresses auto-detection.
   const userSelectedModeRef = useRef(false);
+  // Stable supply: computed once from snapshot, never drifts with livePrice.
+  // Reset when tokenMint changes so a new token gets a fresh calculation.
+  const stableSupplyRef = useRef<number | null>(null);
 
   const [clockTick, setClockTick] = useState(0);
   const rightTimeRef  = useRef<number>(Date.now());
@@ -549,16 +553,32 @@ export function TradingViewChart({
     if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null; }
     // Reset mode selection so auto-detection can run for the new token.
     userSelectedModeRef.current = false;
+    // Reset supply so MCAP re-derives from the new token's snapshot.
+    stableSupplyRef.current = null;
   }, [tokenMint]);
 
-  // Auto-select chart mode based on token liquidity when data first loads.
-  // Sparse tokens default to candlestick (area fill looks bad with few candles).
-  // Liquid tokens default to area. Skipped once the user manually picks a mode.
+  // Auto-select chart mode based on token trading density.
+  // Uses gap/volume analysis to detect sparse tokens — these look bad with area fill.
+  // Skipped once the user manually picks a mode.
   useEffect(() => {
     if (!hasData || candles.length === 0 || userSelectedModeRef.current) return;
     const sevenDaysAgo = Date.now() - 7 * 86_400_000;
-    const recentCount = candles.filter(c => c.timestamp >= sevenDaysAgo).length;
-    setMode(recentCount >= 20 ? 'area' : 'candlestick');
+    const recent = candles.filter(c => c.timestamp >= sevenDaysAgo);
+    const count = recent.length;
+    if (count < 5) { setMode('candlestick'); return; }
+    // Volume coverage: candles with actual trading activity
+    const withVolume = recent.filter(c => c.volume > 0).length;
+    const volumeRatio = withVolume / count;
+    // Gap analysis: find max consecutive gap
+    let maxGapMs = 0;
+    for (let i = 1; i < recent.length; i++) {
+      const g = recent[i].timestamp - recent[i - 1].timestamp;
+      if (g > maxGapMs) maxGapMs = g;
+    }
+    const oneDayMs = 86_400_000;
+    // Sparse: few candles, poor volume coverage, or a gap > 1 day in recent history
+    const isSparse = count < 20 || volumeRatio < 0.3 || (count < 50 && maxGapMs > oneDayMs);
+    setMode(isSparse ? 'candlestick' : 'area');
   }, [hasData, tokenMint]);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
@@ -697,6 +717,36 @@ export function TradingViewChart({
     return unsub;
   }, [tokenMint, applyLivePrice]);
 
+  // Supabase realtime subscription for real on-chain trade events.
+  // Helius WS writes candles to token_candles; when a row changes we know a real trade occurred.
+  // Only 1m candles used here for maximum timestamp precision.
+  // isRealTrade=true tells applyLivePrice to create/update activeLiveCandle.
+  useEffect(() => {
+    if (!tokenMint) return;
+    const channel = supabase
+      .channel(`chart_trades_${tokenMint.slice(0, 8)}`)
+      .on(
+        'postgres_changes' as any,
+        {
+          event: '*',
+          schema: 'public',
+          table: 'token_candles',
+          filter: `token_mint=eq.${tokenMint}`,
+        },
+        (payload: any) => {
+          const row = payload.new;
+          if (!row || !row.close || !row.open_time) return;
+          if (row.timeframe !== '1m') return;
+          const price = parseFloat(row.close);
+          if (price > 0) {
+            applyLivePrice(price, Number(row.open_time), true);
+          }
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [tokenMint, applyLivePrice]);
+
   // Auto-scroll: when data loads but all candles are before the visible window,
   // pan back so the last real candle is visible near the right edge.
   useEffect(() => {
@@ -752,18 +802,24 @@ export function TradingViewChart({
   }, [candles, timeframe]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
-  // MCAP scale: derive token supply from snapshot, falling back to livePrice
-  // when snapshotPrice is zero (e.g. on initial load). All display surfaces
-  // (header, axis, bubble, crosshair) share this single scale so they agree.
-  const _snapshotPrice = resolvedInfo?.price;
-  const _snapshotMcap  = resolvedInfo?.marketCap ?? null;
-  const effectiveSnapshotPrice = (_snapshotPrice != null && _snapshotPrice > 0)
-    ? _snapshotPrice
-    : (livePrice && livePrice > 0 ? livePrice : null);
-  const tokenSupply = (effectiveSnapshotPrice != null && _snapshotMcap != null && _snapshotMcap > 0)
-    ? _snapshotMcap / effectiveSnapshotPrice
-    : null;
-  const mcapScale = valueMode === 'mcap' && tokenSupply != null ? tokenSupply : 1;
+  // MCAP scale: derive token supply from snapshot once and freeze it.
+  // stableSupplyRef is set on first valid snapshot and reset on token change.
+  // This prevents MCAP from drifting as livePrice changes — all display surfaces
+  // (header, axis, live pill, crosshair) use the same frozen supply so they always agree.
+  {
+    const sp = resolvedInfo?.price;
+    const sm = resolvedInfo?.marketCap;
+    if (stableSupplyRef.current === null && sp && sp > 0 && sm && sm > 0) {
+      stableSupplyRef.current = sm / sp;
+    }
+    // Second chance: if snapshot price was zero initially but livePrice is now available
+    if (stableSupplyRef.current === null && livePrice && livePrice > 0 && sm && sm > 0) {
+      stableSupplyRef.current = sm / livePrice;
+    }
+  }
+  const mcapScale = valueMode === 'mcap' && stableSupplyRef.current != null
+    ? stableSupplyRef.current
+    : 1;
 
   const plotW = chartWidth - PAD.left - PAD.right;
   plotWRef.current = plotW;
