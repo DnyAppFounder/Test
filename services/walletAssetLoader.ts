@@ -37,7 +37,10 @@ class WalletAssetLoaderService {
     this.solanaService = new SolanaWalletService();
   }
 
-  async loadSolanaWalletAssets(address: string): Promise<WalletAssetsResponse> {
+  async loadSolanaWalletAssets(
+    address: string,
+    onLogosResolved?: (assets: WalletAsset[]) => void,
+  ): Promise<WalletAssetsResponse> {
     if (!address) {
       return { assets: [], totalValue: 0, nativeBalance: 0, nativeValue: 0, loading: false };
     }
@@ -95,7 +98,7 @@ class WalletAssetLoaderService {
       allAssets.sort((a, b) => b.value - a.value);
 
       // Resolve missing logos in background (don't block display)
-      this.resolveLogosInBackground(tokenAssets);
+      this.resolveLogosInBackground(tokenAssets, allAssets, onLogosResolved);
 
       // Register all wallet-owned mints into the global token registry so they
       // become searchable and show proper metadata instead of "Token not found"
@@ -124,9 +127,15 @@ class WalletAssetLoaderService {
     }
   }
 
-  private async resolveLogosInBackground(assets: WalletAsset[]) {
+  private async resolveLogosInBackground(
+    assets: WalletAsset[],
+    allAssets: WalletAsset[],
+    onResolved?: (updated: WalletAsset[]) => void,
+  ) {
     const missing = assets.filter(a => !a.logoUrl);
     if (missing.length === 0) return;
+
+    let anyResolved = false;
 
     // Batch-resolve via tokenMetadataService (covers DAS, pump.fun, Jupiter, launchpad)
     try {
@@ -134,7 +143,11 @@ class WalletAssetLoaderService {
       const metaMap = await tokenMetadataService.getBatchTokenMetadata(mints);
       for (const asset of missing) {
         const meta = metaMap.get(asset.address);
-        if (meta?.logoURI) asset.logoUrl = meta.logoURI;
+        // Only update when the new value is a real non-empty URL; never overwrite valid with null
+        if (meta?.logoURI && !asset.logoUrl) {
+          asset.logoUrl = meta.logoURI;
+          anyResolved = true;
+        }
       }
     } catch {}
 
@@ -143,14 +156,27 @@ class WalletAssetLoaderService {
       if (asset.logoUrl) continue;
       try {
         const jupToken = await jupiterTokenListService.getTokenByAddress(asset.address);
-        if (jupToken?.logoURI) asset.logoUrl = jupToken.logoURI;
+        if (jupToken?.logoURI) {
+          asset.logoUrl = jupToken.logoURI;
+          anyResolved = true;
+        }
       } catch {}
+    }
+
+    // Notify the UI so it re-renders with the resolved logos.
+    // Spread creates a new array reference so React detects the change.
+    if (anyResolved && onResolved) {
+      onResolved([...allAssets]);
     }
   }
 
-  async loadWalletAssets(blockchain: string, address: string): Promise<WalletAssetsResponse> {
+  async loadWalletAssets(
+    blockchain: string,
+    address: string,
+    onLogosResolved?: (assets: WalletAsset[]) => void,
+  ): Promise<WalletAssetsResponse> {
     if (blockchain === 'solana') {
-      return this.loadSolanaWalletAssets(address);
+      return this.loadSolanaWalletAssets(address, onLogosResolved);
     }
     return {
       assets: [],
@@ -162,10 +188,14 @@ class WalletAssetLoaderService {
     };
   }
 
-  async refreshWalletAssets(blockchain: string, address: string): Promise<WalletAssetsResponse> {
+  async refreshWalletAssets(
+    blockchain: string,
+    address: string,
+    onLogosResolved?: (assets: WalletAsset[]) => void,
+  ): Promise<WalletAssetsResponse> {
     this.solanaService.refreshCache();
     jupiterTokenListService.clearCache();
-    return this.loadWalletAssets(blockchain, address);
+    return this.loadWalletAssets(blockchain, address, onLogosResolved);
   }
 }
 

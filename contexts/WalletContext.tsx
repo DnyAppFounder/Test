@@ -231,6 +231,25 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setIsPortfolioLoading(false);
   }, [connectedWallet]);
 
+  // Called by walletAssetLoader after background logo resolution finishes.
+  // Creates a new array reference so React detects the change and re-renders.
+  const onLogosResolved = useCallback((updatedAssets: WalletAsset[]) => {
+    setWalletAssets(updatedAssets);
+    setTokens(updatedAssets.map((asset) => ({
+      id: asset.id,
+      blockchain_id: 'solana',
+      contract_address: asset.address,
+      symbol: asset.symbol,
+      name: asset.name,
+      decimals: asset.decimals,
+      logo_url: asset.logoUrl ?? null,
+      is_verified: asset.verified,
+      coingecko_id: null,
+      balance: asset.balance,
+      balanceUSD: asset.value,
+    })));
+  }, []);
+
   const applyPortfolioResult = useCallback((result: { assets: any[]; totalValue: number; nativeBalance?: number }) => {
     // Register wallet-owned mints in the background registry
     const splMints = result.assets.filter(a => !a.isNative && a.address).map(a => a.address as string);
@@ -281,7 +300,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
     try {
       console.log('[WalletContext] Refreshing portfolio (cache cleared) for:', address);
-      const result = await walletAssetLoader.refreshWalletAssets('solana', address);
+      const result = await walletAssetLoader.refreshWalletAssets('solana', address, onLogosResolved);
       applyPortfolioResult(result);
     } catch (error) {
       console.error('[WalletContext] Error refreshing portfolio:', error);
@@ -347,7 +366,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       console.log('[WalletContext] Active wallet:', activeAddress);
       setIsPortfolioLoading(true);
       setPortfolioError(null);
-      walletAssetLoader.loadSolanaWalletAssets(activeAddress).then((result) => {
+      walletAssetLoader.loadSolanaWalletAssets(activeAddress, onLogosResolved).then((result) => {
         if (result.error) {
           console.error('[WalletContext] Portfolio error:', result.error);
           setPortfolioError(result.error);
@@ -386,7 +405,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (activeAddress) {
       refreshIntervalRef.current = setInterval(() => {
         lastBgRefreshRef.current = Date.now();
-        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress, onLogosResolved).then(applyPortfolioResult).catch(() => {});
       }, 30_000);
     }
     return () => {
@@ -403,7 +422,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (nextState === 'active' && activeAddress && Date.now() - lastBgRefreshRef.current > 30_000) {
         lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] App foregrounded, refreshing assets');
-        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress, onLogosResolved).then(applyPortfolioResult).catch(() => {});
       }
     };
     const sub = AppState.addEventListener('change', handleAppState);
@@ -417,7 +436,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (!document.hidden && activeAddress && Date.now() - lastBgRefreshRef.current > 30_000) {
         lastBgRefreshRef.current = Date.now();
         console.log('[WalletContext] Tab visible, refreshing assets for:', activeAddress.slice(0, 8));
-        walletAssetLoader.loadSolanaWalletAssets(activeAddress).then(applyPortfolioResult).catch(() => {});
+        walletAssetLoader.loadSolanaWalletAssets(activeAddress, onLogosResolved).then(applyPortfolioResult).catch(() => {});
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
@@ -446,7 +465,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         if (!addr) return;
         // Mark as refreshed so the 30s polling interval skips the next cycle
         lastBgRefreshRef.current = Date.now();
-        walletAssetLoader.loadSolanaWalletAssets(addr).then(applyPortfolioResult).catch(() => {});
+        walletAssetLoader.loadSolanaWalletAssets(addr, onLogosResolved).then(applyPortfolioResult).catch(() => {});
       }, 3000);
     };
 

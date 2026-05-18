@@ -359,6 +359,35 @@ async function fetchDasMetadataBatch(mints: string[]): Promise<Map<string, Token
     }
   }));
 
+  // Resolve metadata URIs for tokens that DAS found but without a direct image.
+  // Run in parallel (same behaviour as single-asset fetchDasMetadata).
+  const needsUriResolve = Array.from(result.entries()).filter(
+    ([, meta]) => !meta.logoURI && meta.metadataUri
+  );
+  if (needsUriResolve.length > 0) {
+    await Promise.all(needsUriResolve.map(async ([mint, meta]) => {
+      const image = await resolveImageFromUri(meta.metadataUri!);
+      if (image) {
+        meta.logoURI = image;
+        result.set(mint, meta);
+      }
+    }));
+  }
+
+  // For pump.fun mints still without a logo, try the pump.fun API.
+  const needsPump = Array.from(result.entries()).filter(
+    ([mint, meta]) => !meta.logoURI && mint.endsWith('pump')
+  );
+  if (needsPump.length > 0) {
+    await Promise.all(needsPump.map(async ([mint, meta]) => {
+      const pumpMeta = await fetchPumpFunMetadata(mint);
+      if (pumpMeta?.logoURI) {
+        meta.logoURI = pumpMeta.logoURI;
+        result.set(mint, meta);
+      }
+    }));
+  }
+
   return result;
 }
 
@@ -367,14 +396,28 @@ async function fetchDasMetadataBatch(mints: string[]): Promise<Map<string, Token
 async function fetchPumpFunMetadata(mint: string): Promise<TokenMetadata | null> {
   if (!mint.endsWith('pump')) return null;
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
+    // Route through the solana-rpc proxy to avoid browser CORS restrictions.
+    const proxy = getProxyBase();
+    let res: Response | null = null;
+    if (proxy) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      res = await fetch(`${proxy}?action=pumpfun&mint=${mint}`, {
+        headers: proxyHeaders(),
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+    } else {
+      // Fallback: direct fetch (works in non-browser / native environments)
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
+        headers: { Accept: 'application/json' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+    }
+    if (!res || !res.ok) return null;
     const data = await res.json();
     if (!data?.symbol) return null;
 

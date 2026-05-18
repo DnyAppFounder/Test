@@ -105,6 +105,36 @@ async function handleDas(req: Request): Promise<Response> {
   });
 }
 
+// ─── pump.fun proxy ────────────────────────────────────────────────────────
+// Proxies requests to pump.fun API to avoid browser CORS restrictions.
+
+async function handlePumpFun(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const mint = url.searchParams.get("mint") || "";
+  if (!mint) {
+    return new Response(JSON.stringify({ error: "mint required" }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+  try {
+    const res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    const text = await res.text();
+    return new Response(text, {
+      status: res.ok ? 200 : res.status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: String(e) }), {
+      status: 502,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+}
+
 // ─── Jupiter proxy ─────────────────────────────────────────────────────────
 
 async function handleJupiter(req: Request): Promise<Response> {
@@ -276,6 +306,11 @@ Deno.serve(async (req: Request) => {
     // DAS proxy: POST requests with ?action=das
     if (action === "das") {
       return await handleDas(req);
+    }
+
+    // pump.fun proxy: GET with ?action=pumpfun&mint=xxx
+    if (action === "pumpfun") {
+      return await handlePumpFun(req);
     }
 
     // Jupiter proxy: GET/POST with ?action=quote|swap|price|tokens
