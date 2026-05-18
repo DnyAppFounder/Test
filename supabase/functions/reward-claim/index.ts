@@ -21,7 +21,7 @@ const TREASURY_PRIVATE_KEY_B58 = Deno.env.get("TREASURY_PRIVATE_KEY_BASE58") || 
 const TREASURY_PUBLIC_KEY = (Deno.env.get("TREASURY_PUBLIC_KEY") ?? "")
   .trim()
   .replace(/^["']|["']$/g, ""); // strip surrounding " or ' if any
-const DWC_MINT_ENV = Deno.env.get("DWC_MINT") || "";
+const DWC_MINT_ENV = (Deno.env.get("DWC_MINT") ?? "").trim().replace(/^["']|["']$/g, "");
 
 // Increment this string each deploy so the client can verify freshness
 const DEPLOYED_AT = "2026-05-18T03:00:00Z";
@@ -169,21 +169,82 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     `[reward-claim] treasury verified: ${derivedPubStr.slice(0, 4)}...${derivedPubStr.slice(-4)}`,
   );
 
-  const mintPubkey = new PublicKey(mintAddress);
-  const toPubkey = new PublicKey(toWallet);
-  const token2022ProgramId = new PublicKey(TOKEN_2022_PROGRAM_ID_STR);
-  const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
-  const systemProgramId = new PublicKey(SYSTEM_PROGRAM_ID_STR);
+  // ── 4. Validate and parse all transfer-related public keys individually ───
+  // Each field is validated before use so the error response identifies exactly
+  // which value is wrong — never exposes private key.
+  const safeMint   = (mintAddress  ?? "").trim().replace(/^["']|["']$/g, "");
+  const safeWallet = (toWallet     ?? "").trim().replace(/^["']|["']$/g, "");
 
-  // ── 4. Fetch mint info — detect token program and decimals ────────────────
+  function keyDebug(field: string, raw: string): Record<string, unknown> {
+    const exists = raw.length > 0;
+    let parseOk = false;
+    try { if (exists) { new PublicKey(raw); parseOk = true; } } catch {}
+    return {
+      [`${field}Exists`]:  exists,
+      [`${field}Length`]:  raw.length,
+      [`${field}First4`]:  raw.slice(0, 4) || "(empty)",
+      [`${field}Last4`]:   raw.length >= 4 ? raw.slice(-4) : "(short)",
+      [`${field}ParseOk`]: parseOk,
+    };
+  }
+
+  const transferDebug: Record<string, unknown> = {
+    deployedAt: DEPLOYED_AT,
+    treasuryVerified: true,
+    tokenProgram: TOKEN_2022_PROGRAM_ID_STR,
+    ...keyDebug("userWallet", safeWallet),
+    ...keyDebug("dwcMint",    safeMint),
+  };
+
+  // Validate user wallet
+  if (!safeWallet) {
+    throw new ClaimError("Invalid user wallet address for claim.", {
+      ...transferDebug, userWalletError: "empty or missing",
+    });
+  }
+  let toPubkey: InstanceType<typeof PublicKey>;
+  try {
+    toPubkey = new PublicKey(safeWallet);
+  } catch {
+    throw new ClaimError("Invalid user wallet address for claim.", {
+      ...transferDebug, userWalletError: "failed to parse as Solana public key",
+    });
+  }
+
+  // Validate DWC_MINT
+  if (!safeMint) {
+    throw new ClaimError("Invalid DWC_MINT.", {
+      ...transferDebug, dwcMintError: "empty or missing",
+    });
+  }
+  let mintPubkey: InstanceType<typeof PublicKey>;
+  try {
+    mintPubkey = new PublicKey(safeMint);
+  } catch {
+    throw new ClaimError("Invalid DWC_MINT.", {
+      ...transferDebug, dwcMintError: "failed to parse as Solana public key",
+    });
+  }
+
+  const token2022ProgramId  = new PublicKey(TOKEN_2022_PROGRAM_ID_STR);
+  const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
+  const systemProgramId     = new PublicKey(SYSTEM_PROGRAM_ID_STR);
+
+  console.log(
+    `[reward-claim] userWallet: ${safeWallet.slice(0, 4)}...${safeWallet.slice(-4)}` +
+    ` | mint: ${safeMint.slice(0, 4)}...${safeMint.slice(-4)}`,
+  );
+
+  // ── 5. Fetch mint info — detect token program and decimals ────────────────
   const mintAccResult = await solanaRpc("getAccountInfo", [
-    mintAddress,
+    safeMint,
     { encoding: "jsonParsed", commitment: "confirmed" },
   ]) as any;
 
   if (!mintAccResult?.value) {
     throw new ClaimError(
-      `Invalid DWC_MINT: mint account not found on-chain for ${mintAddress}`,
+      `Invalid DWC_MINT: mint account not found on-chain for ${safeMint}`,
+      transferDebug,
     );
   }
 
@@ -194,21 +255,23 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
       `Token program mismatch: mint owner is ${tokenProgramDetected}, ` +
       `expected Token-2022 (${TOKEN_2022_PROGRAM_ID_STR}). ` +
       `Do not use classic SPL TOKEN_PROGRAM_ID for DWORLD.`,
+      transferDebug,
     );
   }
 
   const mintDecimals: number = mintAccResult.value.data?.parsed?.info?.decimals;
   if (typeof mintDecimals !== "number") {
     throw new ClaimError(
-      `Could not read decimals from on-chain mint info for ${mintAddress}`,
+      `Could not read decimals from on-chain mint info for ${safeMint}`,
+      transferDebug,
     );
   }
 
   console.log(
-    `[reward-claim] mint ${mintAddress} | program: Token-2022 | decimals: ${mintDecimals}`,
+    `[reward-claim] mint ${safeMint} | program: Token-2022 | decimals: ${mintDecimals}`,
   );
 
-  // ── 5. Derive Token-2022 ATAs ─────────────────────────────────────────────
+  // ── 6. Derive Token-2022 ATAs ─────────────────────────────────────────────
   // ATA seeds: [owner, TOKEN_2022_PROGRAM_ID, mint]  →  AssociatedTokenProgram
   function deriveATA(owner: InstanceType<typeof PublicKey>): InstanceType<typeof PublicKey> {
     const [ata] = PublicKey.findProgramAddressSync(
@@ -218,8 +281,20 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     return ata;
   }
 
-  const treasuryATA = deriveATA(treasury.publicKey);
-  const userATA = deriveATA(toPubkey);
+  let treasuryATA: InstanceType<typeof PublicKey>;
+  let userATA: InstanceType<typeof PublicKey>;
+  try {
+    treasuryATA = deriveATA(treasury.publicKey);
+    userATA     = deriveATA(toPubkey);
+  } catch (e: any) {
+    throw new ClaimError("Token-2022 ATA derivation failed.", {
+      ...transferDebug,
+      ataError: e?.message ?? String(e),
+    });
+  }
+
+  transferDebug.treasuryAta = treasuryATA.toBase58();
+  transferDebug.userAta     = userATA.toBase58();
 
   console.log(`[reward-claim] treasury T22 ATA: ${treasuryATA.toBase58()}`);
   console.log(`[reward-claim] user T22 ATA: ${userATA.toBase58()}`);
@@ -263,7 +338,8 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
 
   const txDebug: Record<string, unknown> = {
     ...configDebug,
-    dwcMint: mintAddress,
+    ...transferDebug,
+    dwcMint: safeMint,
     tokenProgramDetected,
     mintDecimals,
     treasuryDworldAta: treasuryATA.toBase58(),
