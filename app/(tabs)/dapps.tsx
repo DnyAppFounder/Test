@@ -418,7 +418,18 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     if (m === 'sol_duel') {
       setStage('entry');
     } else {
-      setGameSeed(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+      let seed: string;
+      if (selectedGame === 'decode_7_fragments') {
+        if (m === 'free') {
+          seed = 'DAWEN_LORE_SEED_V1';
+        } else {
+          // Rotate every 2 hours for ranked/duel
+          seed = `decode-${m}-${Math.floor(Date.now() / 7_200_000)}`;
+        }
+      } else {
+        seed = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      }
+      setGameSeed(seed);
       setStage('playing');
       onSetFullscreen?.(true);
     }
@@ -443,16 +454,18 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     onSetFullscreen?.(false);
     if (!walletAddress) return;
 
-    // First-time Decode reward: only Free Practice, only when all 7 fragments found
+    // First-time Decode reward: only Free Practice, all 7 found, not suspicious
     if (
       selectedGame === 'decode_7_fragments' &&
       mode === 'free' &&
       r.fragmentsFound === 7 &&
+      !r.suspicious &&
       walletAddress
     ) {
       const { success, alreadyUnlocked } = await DecodeRewardService.grantFirstReward(
         walletAddress,
         profile?.id ?? null,
+        r.completionTimeMs,
       );
       if (success && !alreadyUnlocked) {
         // First ever completion — show the one-time lore message

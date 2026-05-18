@@ -32,25 +32,30 @@ export class DecodeRewardService {
   }
 
   // Atomically inserts decode_reward_status + user_rewards via SECURITY DEFINER RPC.
-  // Returns { success, alreadyUnlocked } — safe to call multiple times.
+  // Returns { success, alreadyUnlocked, suspicious } — safe to call multiple times.
   static async grantFirstReward(
     walletAddress: string,
     userId: string | null,
-  ): Promise<{ success: boolean; alreadyUnlocked: boolean }> {
+    completionTimeMs?: number,
+  ): Promise<{ success: boolean; alreadyUnlocked: boolean; suspicious: boolean }> {
     try {
       const { data, error } = await supabase.rpc('grant_decode_first_reward', {
         p_wallet_address: walletAddress,
         p_user_id: userId ?? null,
+        p_completion_time_ms: completionTimeMs ?? 0,
       });
       if (error) throw error;
       const result = data as { success: boolean; reason?: string };
       if (!result.success && result.reason === 'already_unlocked') {
-        return { success: false, alreadyUnlocked: true };
+        return { success: false, alreadyUnlocked: true, suspicious: false };
       }
-      return { success: !!result.success, alreadyUnlocked: false };
+      if (!result.success && result.reason === 'suspicious_completion') {
+        return { success: false, alreadyUnlocked: false, suspicious: true };
+      }
+      return { success: !!result.success, alreadyUnlocked: false, suspicious: false };
     } catch (err) {
       console.error('[DecodeRewardService] grantFirstReward:', err);
-      return { success: false, alreadyUnlocked: false };
+      return { success: false, alreadyUnlocked: false, suspicious: false };
     }
   }
 

@@ -70,7 +70,7 @@ export const GAME_DEFINITIONS: GameDefinition[] = [
     color: '#EC4899',
     accentColor: '#F472B6',
     maxScore: 10_000,
-    durationMs: 300_000,
+    durationMs: 180_000,
   },
 ];
 
@@ -102,6 +102,9 @@ export interface UnifiedGameResult {
   // Decode 7 Fragments
   fragmentsFound: number;
   mistakes: number;
+  // Anti-cheat flags
+  suspicious?: boolean;
+  timedOut?: boolean;
 }
 
 export function emptyResult(sessionId: string, survivalTimeMs = 0): UnifiedGameResult {

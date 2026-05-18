@@ -20,8 +20,8 @@ function makeRng(seed: string) {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TICK_MS = 33;
-const GRAVITY = 0.7;
-const JUMP_VEL = -14;
+const GRAVITY = 1.4;
+const JUMP_VEL = -16;
 const GROUND_Y_FRAC = 0.75; // fraction of arena height
 const CHAR_X_FRAC = 0.18;
 const CHAR_W = 28;
