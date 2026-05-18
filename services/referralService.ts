@@ -59,12 +59,13 @@ export function buildShareMessage(code: string): string {
 
 export function formatRewardReason(reason: string): string {
   switch (reason) {
-    case 'early_user_first_100': return 'Early Member Reward';
-    case 'referral_referrer':    return 'Referral Reward';
-    case 'referral_referred':    return 'Welcome Bonus';
-    case 'top_rank':             return 'Top Rank Reward';
-    case 'game_reward':          return 'Game Reward';
-    case 'community_reward':     return 'Community Reward';
+    case 'early_user_first_100':     return 'Early Member Reward';
+    case 'referral_referrer':        return 'Referral Reward';
+    case 'referral_referred':        return 'Welcome Bonus';
+    case 'top_rank':                 return 'Top Rank Reward';
+    case 'game_reward':              return 'Game Reward';
+    case 'community_reward':         return 'Community Reward';
+    case 'decode_first_completion':  return 'Decode the 7 Fragments Reward';
     default: return reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 }
