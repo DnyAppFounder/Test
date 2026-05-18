@@ -114,11 +114,11 @@ const WELL_KNOWN: Record<string, TokenMetadata> = {
     logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png',
     decimals: 8, verified: true, tokenProgram: 'spl',
   },
-  '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump': {
-    mint: '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump',
-    name: 'DTEST', symbol: 'DTEST',
+  'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump': {
+    mint: 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump',
+    name: 'DAWORLD Coin', symbol: 'DWORLD',
     logoURI: undefined,
-    decimals: 6, verified: true, tokenProgram: 'spl',
+    decimals: 6, verified: true, tokenProgram: 'token2022',
   },
 };
 

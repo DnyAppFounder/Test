@@ -24,7 +24,7 @@ import { GameResultCard, GameResultData } from '@/components/game/GameResultCard
 import { TopRankLeaderboard } from '@/components/game/TopRankLeaderboard';
 import { DawenWorldPage } from '@/components/world/DawenWorldPage';
 
-const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+const DAWEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 const SELL_COLOR = '#D946EF';
 const SELL_MUTED = 'rgba(217,70,239,0.12)';
 
@@ -190,30 +190,33 @@ function TokenCitySection() {
           <LinearGradient colors={['rgba(139,92,246,0.25)', 'rgba(109,40,217,0.1)']} style={tkStyles.dawenGradient}>
             <View style={tkStyles.dawenHeader}>
               <View style={tkStyles.featuredPill}>
-                <Zap size={12} color={colors.warning} fill={colors.warning} />
+                <Zap size={11} color={colors.warning} fill={colors.warning} />
                 <Text style={tkStyles.featuredPillText}>FEATURED TOKEN</Text>
               </View>
-              <ArrowUpRight size={20} color={colors.primary} />
+              <ArrowUpRight size={18} color={colors.primary} />
             </View>
             <View style={tkStyles.dawenBody}>
               <View style={tkStyles.dawenLeft}>
                 {dawen.image ? <Image source={{ uri: dawen.image }} style={tkStyles.dawenLogo} /> :
-                  <View style={tkStyles.dawenLogoPlaceholder}><Text style={tkStyles.dawenLogoText}>DA</Text></View>}
+                  <View style={tkStyles.dawenLogoPlaceholder}><Text style={tkStyles.dawenLogoText}>DW</Text></View>}
                 <View>
-                  <Text style={tkStyles.dawenName}>{dawen.name || 'DAWEN'}</Text>
-                  <Text style={tkStyles.dawenSymbol}>{dawen.symbol || 'DAWEN'}</Text>
+                  <Text style={tkStyles.dawenName}>DAWORLD Coin</Text>
+                  <Text style={tkStyles.dawenSymbol}>DWORLD</Text>
                 </View>
               </View>
               <View style={tkStyles.dawenRight}>
                 <Text style={tkStyles.dawenPrice}>{formatPrice(dawen.price)}</Text>
                 <View style={[tkStyles.changePill, dawen.priceChange24h >= 0 ? tkStyles.changePillUp : tkStyles.changePillDown]}>
-                  {dawen.priceChange24h >= 0 ? <TrendingUp size={12} color={colors.primary} /> : <TrendingDown size={12} color={SELL_COLOR} />}
+                  {dawen.priceChange24h >= 0 ? <TrendingUp size={11} color={colors.primary} /> : <TrendingDown size={11} color={SELL_COLOR} />}
                   <Text style={[tkStyles.changeText, dawen.priceChange24h >= 0 ? tkStyles.changeUp : tkStyles.changeDown]}>
                     {Math.abs(dawen.priceChange24h).toFixed(2)}%
                   </Text>
                 </View>
               </View>
             </View>
+            <Text style={tkStyles.dawenUtility}>
+              Rare utility &amp; reward coin for Dawen World games and ecosystem rewards. Not the official main DAWEN token.
+            </Text>
             <View style={tkStyles.dawenStats}>
               <View style={tkStyles.dawenStat}><Text style={tkStyles.dawenStatLabel}>24h Volume</Text><Text style={tkStyles.dawenStatValue}>{formatVolume(dawen.volume24h)}</Text></View>
               <View style={tkStyles.dawenStatDivider} />
@@ -222,7 +225,7 @@ function TokenCitySection() {
             </View>
             <View style={tkStyles.dawenActions}>
               <TouchableOpacity style={tkStyles.tradeButton} onPress={() => router.push('/swap' as any)} activeOpacity={0.85}>
-                <Text style={tkStyles.tradeButtonText}>Buy DAWEN</Text>
+                <Text style={tkStyles.tradeButtonText}>Buy DWORLD</Text>
               </TouchableOpacity>
               <TouchableOpacity style={tkStyles.detailButton} onPress={() => openToken(dawen)} activeOpacity={0.85}>
                 <Text style={tkStyles.detailButtonText}>View Chart</Text>
@@ -288,34 +291,35 @@ const tkStyles = StyleSheet.create({
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surface, borderRadius: borderRadius.lg, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderWidth: 1, borderColor: colors.surfaceBorder },
   searchInput: { flex: 1, fontSize: fontSize.sm, color: colors.textPrimary, fontWeight: '500' },
   dawenCard: { marginHorizontal: spacing.xxl, borderRadius: borderRadius.xl, overflow: 'hidden', borderWidth: 1, borderColor: colors.primary, marginBottom: spacing.lg, ...elevation.md },
-  dawenGradient: { padding: spacing.xl },
-  dawenHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.lg },
-  featuredPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(245,158,11,0.15)', borderWidth: 1, borderColor: colors.warning, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: borderRadius.sm },
-  featuredPillText: { fontSize: 10, fontWeight: '800', color: colors.warning, letterSpacing: 0.5 },
-  dawenBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.lg },
-  dawenLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  dawenLogo: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface },
-  dawenLogoPlaceholder: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.primaryMuted, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: colors.primary },
-  dawenLogoText: { fontSize: fontSize.md, fontWeight: '800', color: colors.primary },
-  dawenName: { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary },
-  dawenSymbol: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  dawenGradient: { padding: 12 },
+  dawenHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  featuredPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(245,158,11,0.15)', borderWidth: 1, borderColor: colors.warning, paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.sm },
+  featuredPillText: { fontSize: 9, fontWeight: '800', color: colors.warning, letterSpacing: 0.5 },
+  dawenBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  dawenLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dawenLogo: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface },
+  dawenLogoPlaceholder: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primaryMuted, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: colors.primary },
+  dawenLogoText: { fontSize: fontSize.sm, fontWeight: '800', color: colors.primary },
+  dawenName: { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary },
+  dawenSymbol: { fontSize: fontSize.xs, fontWeight: '600', color: colors.textMuted },
   dawenRight: { alignItems: 'flex-end' },
-  dawenPrice: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary, marginBottom: 4 },
-  changePill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: borderRadius.sm },
+  dawenPrice: { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary, marginBottom: 3 },
+  changePill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: borderRadius.sm },
   changePillUp: { backgroundColor: colors.primaryMuted },
   changePillDown: { backgroundColor: SELL_MUTED },
-  changeText: { fontSize: fontSize.sm, fontWeight: '700' },
+  changeText: { fontSize: fontSize.xs, fontWeight: '700' },
   changeUp: { color: colors.primary },
   changeDown: { color: SELL_COLOR },
-  dawenStats: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.lg },
+  dawenUtility: { fontSize: 10, color: 'rgba(139,92,246,0.75)', fontWeight: '500', fontStyle: 'italic', marginBottom: 8, lineHeight: 14 },
+  dawenStats: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: borderRadius.md, padding: 8, marginBottom: 10 },
   dawenStat: { flex: 1, alignItems: 'center' },
-  dawenStatLabel: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500', marginBottom: 2 },
-  dawenStatValue: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
-  dawenStatDivider: { width: 1, height: 28, backgroundColor: colors.surfaceBorder },
-  dawenActions: { flexDirection: 'row', gap: spacing.md },
-  tradeButton: { flex: 1, backgroundColor: colors.primary, paddingVertical: spacing.md, borderRadius: borderRadius.md, alignItems: 'center' },
+  dawenStatLabel: { fontSize: 9, color: colors.textMuted, fontWeight: '500', marginBottom: 1 },
+  dawenStatValue: { fontSize: fontSize.xs, fontWeight: '700', color: colors.textPrimary },
+  dawenStatDivider: { width: 1, height: 24, backgroundColor: colors.surfaceBorder },
+  dawenActions: { flexDirection: 'row', gap: spacing.sm },
+  tradeButton: { flex: 1, backgroundColor: colors.primary, paddingVertical: 9, borderRadius: borderRadius.md, alignItems: 'center' },
   tradeButtonText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.white },
-  detailButton: { flex: 1, backgroundColor: colors.primaryMuted, paddingVertical: spacing.md, borderRadius: borderRadius.md, alignItems: 'center', borderWidth: 1, borderColor: colors.primary },
+  detailButton: { flex: 1, backgroundColor: colors.primaryMuted, paddingVertical: 9, borderRadius: borderRadius.md, alignItems: 'center', borderWidth: 1, borderColor: colors.primary },
   detailButtonText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
   discoverTabs: { flexDirection: 'row', marginHorizontal: spacing.xxl, marginBottom: spacing.lg, backgroundColor: colors.surface, borderRadius: borderRadius.lg, padding: 4, borderWidth: 1, borderColor: colors.surfaceBorder },
   discoverTab: { flex: 1, paddingVertical: spacing.sm, borderRadius: borderRadius.md, alignItems: 'center' },

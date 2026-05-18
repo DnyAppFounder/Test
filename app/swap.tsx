@@ -26,7 +26,7 @@ import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+const DAWEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 
 // Fallback logos for well-known tokens in case Jupiter list is unavailable
 const KNOWN_LOGOS: Record<string, string> = {
@@ -119,7 +119,7 @@ export default function SwapScreen() {
           if (prev) return prev;
           return all.find(t => t.address === DAWEN_MINT) ?? {
             address: DAWEN_MINT, chainId: 101, decimals: 6,
-            name: 'Dawen Testnet', symbol: 'DTEST',
+            name: 'DAWORLD Coin', symbol: 'DWORLD',
             logoURI: undefined, tags: ['community'],
           };
         });

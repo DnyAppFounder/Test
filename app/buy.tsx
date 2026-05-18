@@ -39,7 +39,7 @@ import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { Token } from '@/types/crypto';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const DAWEN_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+const DAWEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 
 // Synthetic SOL token entry for use as input selector item
 const SOL_TOKEN: Token = {
@@ -209,7 +209,7 @@ export default function BuyScreen() {
   const POPULAR_OUTPUT: Token[] = [
     {
       id: 'dawen', blockchain_id: 'solana', contract_address: DAWEN_MINT,
-      symbol: 'DTEST', name: 'DTEST (DAWEN)', decimals: 6,
+      symbol: 'DWORLD', name: 'DAWORLD Coin', decimals: 6,
       logo_url: null, is_verified: true, coingecko_id: null,
     },
     {

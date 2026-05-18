@@ -172,7 +172,7 @@ export default function RewardsScreen() {
     if (result.success) {
       const sig = (result as any).signature as string | undefined;
       setClaimSignature(sig ?? null);
-      setClaimMessage({ type: 'success', text: `Claim successful — ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} DWC sent to your wallet.` });
+      setClaimMessage({ type: 'success', text: `Claim successful — ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} $DWORLD sent to your wallet.` });
       // Refresh DWC balance after confirmed transfer
       refreshPortfolio().catch(() => {});
     } else {
@@ -275,7 +275,7 @@ export default function RewardsScreen() {
           <View style={styles.statCard}>
             <Coins size={24} color={colors.warning} />
             <Text style={styles.statValue}>{formatTokenAmount(stats.totalEarned)}</Text>
-            <Text style={styles.statLabel}>Earned (DWC)</Text>
+            <Text style={styles.statLabel}>Earned ($DWORLD)</Text>
           </View>
           <View style={styles.statCard}>
             <Gift size={24} color={colors.success} />
@@ -347,7 +347,7 @@ export default function RewardsScreen() {
             </View>
           </View>
           <Text style={styles.codeHint}>
-            Share your code or link. Friends get 150 DWC, you get 300 DWC when they join!
+            Share your code or link. Friends get 150 $DWORLD, you get 300 $DWORLD when they join!
           </Text>
         </View>
 
@@ -386,7 +386,7 @@ export default function RewardsScreen() {
             </TouchableOpacity>
           </View>
           {applySuccess && (
-            <Text style={styles.applySuccessText}>Referral applied successfully! Your 150 DWC reward is ready to claim.</Text>
+            <Text style={styles.applySuccessText}>Referral applied successfully! Your 150 $DWORLD reward is ready to claim.</Text>
           )}
           {!!applyError && (
             <Text style={styles.applyError}>{applyError}</Text>
@@ -449,11 +449,11 @@ export default function RewardsScreen() {
           </View>
           <View style={styles.infoStep}>
             <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
-            <Text style={styles.stepText}>You earn 300 DWC, they earn 150 DWC — claimable as real DawenWorld tokens!</Text>
+            <Text style={styles.stepText}>You earn 300 $DWORLD, they earn 150 $DWORLD — claimable as real DWORLD tokens!</Text>
           </View>
           <View style={styles.infoStep}>
             <View style={styles.stepNumber}><Text style={styles.stepNumberText}>4</Text></View>
-            <Text style={styles.stepText}>First 100 members who join get an additional 10,000 DWC Early Member Reward!</Text>
+            <Text style={styles.stepText}>First 100 members who join get an additional 10,000 $DWORLD Early Member Reward!</Text>
           </View>
         </View>
       </ScrollView>
@@ -525,7 +525,7 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
       <View style={styles.rewardInfo}>
         <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
         <Text style={styles.rewardAmount}>
-          {Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} DWC
+          {Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} $DWORLD
         </Text>
         {reward.status === 'sent' && reward.transaction_signature && (
           <TouchableOpacity

@@ -2,14 +2,14 @@ import { jupiterTokenListService, JupiterToken } from './jupiter/tokenListServic
 import { dexScreenerService } from './dexscreener/tokenDiscoveryService';
 import { tokenRegistryService } from './tokenRegistryService';
 
-const DTEST_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+const DTEST_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 
 const DTEST_TOKEN: JupiterToken = {
   address: DTEST_MINT,
   chainId: 101,
   decimals: 6,
-  name: 'Dawen Testnet',
-  symbol: 'DTEST',
+  name: 'DAWORLD Coin',
+  symbol: 'DWORLD',
   logoURI: undefined,
   tags: ['community'],
 };
@@ -67,7 +67,7 @@ class MergedTokenListService {
       }
     }
 
-    // Always ensure DTEST is present
+    // Always ensure DWORLD is present
     map.set(DTEST_TOKEN.address, DTEST_TOKEN);
 
     const merged = Array.from(map.values());
@@ -84,8 +84,8 @@ class MergedTokenListService {
     if (!query.trim()) return [];
     const q = query.toLowerCase().trim();
 
-    // DTEST shortcut
-    const dtestMatch = 'dtest'.includes(q) || 'dawen testnet'.includes(q) || DTEST_TOKEN.address.toLowerCase().includes(q);
+    // DWORLD shortcut
+    const dtestMatch = 'dworld'.includes(q) || 'daworld coin'.includes(q) || DTEST_TOKEN.address.toLowerCase().includes(q);
 
     // Registry search (covers all sources: Jupiter + DexScreener + Birdeye + Raydium + Meteora + on-chain)
     try {
