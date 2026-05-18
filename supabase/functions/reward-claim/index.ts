@@ -24,10 +24,10 @@ const TREASURY_PUBLIC_KEY = (Deno.env.get("TREASURY_PUBLIC_KEY") ?? "")
 const DWC_MINT_ENV = (Deno.env.get("DWC_MINT") ?? "").trim().replace(/^["']|["']$/g, "");
 
 // Increment this string each deploy so the client can verify freshness
-const DEPLOYED_AT = "2026-05-18T13:00:00Z";
+const DEPLOYED_AT = "2026-05-18T14:00:00Z";
 
 // Token-2022 (Token Extensions) program — DWORLD is a Token-2022 token
-const TOKEN_2022_PROGRAM_ID_STR = "TokenzQdBNbEquxqMsNaHqQiPFULmGE3kfFU53DnFmwR";
+const TOKEN_2022_PROGRAM_ID_STR = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const ASSOC_TOKEN_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const SYSTEM_PROGRAM_ID_STR = "11111111111111111111111111111111";
 const MIN_SOL_BALANCE = 0.002;
