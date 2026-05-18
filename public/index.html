@@ -25,20 +25,32 @@
       body {
         height: 100%;
       }
+      html {
+        overscroll-behavior: none;
+        overscroll-behavior-y: none;
+      }
       body {
         overflow: hidden;
         overscroll-behavior: none;
+        overscroll-behavior-y: none;
         -webkit-overflow-scrolling: touch;
       }
       #root {
         display: flex;
         height: 100%;
         flex: 1;
+        overscroll-behavior: none;
+        overscroll-behavior-y: none;
+      }
+      /* Block pull-to-refresh on ALL inner scroll containers (React Native Web creates these) */
+      * {
+        overscroll-behavior-y: none;
       }
       /* Prevent iOS auto-zoom on input focus (requires font-size >= 16px) */
       input, textarea, select {
         font-size: 16px !important;
         touch-action: manipulation;
+        overscroll-behavior-y: auto;
       }
     </style>
     <style id="dawen-focus-reset">
@@ -66,6 +78,27 @@
         -webkit-touch-callout: none;
       }
     </style>
+    <script>
+      // Once-per-session reload guard — prevents any code-driven reload loop.
+      // If location.reload() is called, it only fires once per browser session.
+      // Subsequent calls within the same session are silently ignored.
+      (function() {
+        var SESSION_KEY = 'dawen_reloaded_once';
+        var _nativeReload = window.location.reload.bind(window.location);
+        Object.defineProperty(window.location, 'reload', {
+          configurable: true,
+          writable: true,
+          value: function() {
+            if (sessionStorage.getItem(SESSION_KEY)) {
+              console.warn('[DAWEN] reload() blocked — already reloaded once this session');
+              return;
+            }
+            sessionStorage.setItem(SESSION_KEY, '1');
+            _nativeReload();
+          }
+        });
+      })();
+    </script>
     <script>
       // Must run before the main bundle to prevent process.version/nextTick crashes
       (function() {
