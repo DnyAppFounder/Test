@@ -41,6 +41,8 @@ import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
 import { liveTokenStore } from '@/services/liveTokenStore';
 
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
 export type ChartMode = 'line' | 'area' | 'candlestick' | 'bonding' | 'bar' | 'mountain';
 type ValueMode = 'mcap' | 'price';
 
@@ -232,7 +234,8 @@ export function TradingViewChart({
   // When this is non-zero, the pan correction useEffect fires.
   const [pendingPanCorrection, setPendingPanCorrection] = useState<number | null>(null);
 
-  const dotPulse = useRef(new Animated.Value(1)).current;
+  const headerPulseAnim = useRef(new Animated.Value(1)).current;
+  const chartPulseAnim  = useRef(new Animated.Value(0)).current;
 
   const [panOffsetCandles, setPanOffsetCandles] = useState(0);
   const panOffsetRef        = useRef(0);
@@ -337,15 +340,29 @@ export function TradingViewChart({
     return () => { cancelled = true; };
   }, [tokenMint, pairAddress]);
 
-  // Pulse live dot
+  // Header WS dot pulse — always running
   useEffect(() => {
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(dotPulse, { toValue: 2.2, duration: 400, useNativeDriver: true }),
-      Animated.timing(dotPulse, { toValue: 1,   duration: 400, useNativeDriver: true }),
+      Animated.timing(headerPulseAnim, { toValue: 2.2, duration: 400, useNativeDriver: true }),
+      Animated.timing(headerPulseAnim, { toValue: 1,   duration: 400, useNativeDriver: true }),
     ]));
     loop.start();
     return () => loop.stop();
   }, []);
+
+  // Chart endpoint pulse — only when a real live candle is active
+  useEffect(() => {
+    if (!activeLiveCandle) {
+      chartPulseAnim.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(chartPulseAnim, { toValue: 0.65, duration: 250, useNativeDriver: false }),
+      Animated.timing(chartPulseAnim, { toValue: 0,    duration: 650, useNativeDriver: false }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [activeLiveCandle]);
 
   // Live time engine — RAF slides the viewport forward in real time.
   // Throttled to 5fps (200ms) to avoid overheating.
@@ -1127,7 +1144,7 @@ export function TradingViewChart({
           <View style={styles.tokenNameRow}>
             <Text style={styles.tokenNameText} numberOfLines={1}>{resolvedInfo?.name ?? sym}</Text>
             {wsConnected && (
-              <Animated.View style={[styles.liveWsDot, { transform: [{ scale: dotPulse }] }]} />
+              <Animated.View style={[styles.liveWsDot, { transform: [{ scale: headerPulseAnim }] }]} />
             )}
           </View>
           {shortContractAddr ? (
@@ -1570,8 +1587,6 @@ export function TradingViewChart({
                 <>
                   <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Circle cx={lastX} cy={lastY} r={5} fill="#8B5CF6" opacity={0.18} />
-                  <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
                 </>
               )}
 
@@ -1580,7 +1595,6 @@ export function TradingViewChart({
                   {areaPaths.map((p, i) => p ? <Path key={`mf${i}`} d={p} fill="url(#mountainGrad)" /> : null)}
                   <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#8B5CF6" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
                 </>
               )}
 
@@ -1589,8 +1603,6 @@ export function TradingViewChart({
                   {areaPaths.map((p, i) => p ? <Path key={`bf${i}`} d={p} fill="url(#bondingGrad)" /> : null)}
                   <Path d={linePts} stroke="rgba(6,182,212,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#06B6D4" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Circle cx={lastX} cy={lastY} r={6} fill="#06B6D4" opacity={0.18} />
-                  <Circle cx={lastX} cy={lastY} r={3.5} fill="#06B6D4" stroke="#fff" strokeWidth={1} />
                 </>
               )}
 
@@ -1700,9 +1712,23 @@ export function TradingViewChart({
               </>
             )}
 
-            {/* Endpoint dot — area/line/mountain use this; bonding has its own styled dot inside chartClip */}
-            {(mode === 'area' || mode === 'line' || mode === 'mountain') && (
-              <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" opacity={1} />
+            {/* Endpoint marker — single authoritative dot + optional animated ring when live */}
+            {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
+              <G>
+                {activeLiveCandle && (
+                  <AnimatedCircle
+                    cx={lastX} cy={lastY} r={10}
+                    fill="none"
+                    stroke={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
+                    strokeWidth={1.5}
+                    opacity={chartPulseAnim}
+                  />
+                )}
+                <Circle
+                  cx={lastX} cy={lastY} r={3.5}
+                  fill={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
+                />
+              </G>
             )}
 
             {/* Volume bars — zero-volume candles (including live synthetic) produce no bar */}
@@ -1761,19 +1787,6 @@ export function TradingViewChart({
             )}
           </Svg>
 
-          {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
-            <Animated.View
-              style={[
-                styles.livePulse,
-                {
-                  left: lastX - 10, top: lastY - 10,
-                  transform: [{ scale: dotPulse }],
-                  backgroundColor: mode === 'bonding' ? 'rgba(6,182,212,0.22)' : 'rgba(167,139,250,0.22)',
-                },
-              ]}
-              pointerEvents="none"
-            />
-          )}
         </View>
       </View>
     </View>
@@ -1864,7 +1877,6 @@ const styles = StyleSheet.create({
   unavailableWrap: { height: 160, justifyContent: 'center', alignItems: 'center', gap: spacing.sm },
   unavailableText: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
   priceFallback:   { fontSize: 24, fontWeight: '900', color: colors.primary },
-  livePulse: { position: 'absolute', width: 20, height: 20, borderRadius: 10, pointerEvents: 'none' },
   returnLiveBtn: {
     alignSelf: 'center',
     backgroundColor: 'rgba(139,92,246,0.15)',
