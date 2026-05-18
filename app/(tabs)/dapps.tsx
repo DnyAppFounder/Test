@@ -1,14 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Animated,
   Image, ActivityIndicator, TextInput, RefreshControl, ImageBackground,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight,
+  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight, Gift,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
+import { DecodeRewardService } from '@/services/decodeRewardService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useWallet } from '@/contexts/WalletContext';
@@ -393,6 +394,7 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
   const { activeWallet } = useWallet();
   const { profile } = useProfile();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   const [stage, setStage] = useState<GameStage>('game_select');
   const [selectedGame, setSelectedGame] = useState<GameId | null>(null);
@@ -401,6 +403,8 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
   const [entry, setEntry] = useState<DuelEntry | null>(null);
   const [match, setMatch] = useState<DuelMatch | null>(null);
   const [result, setResult] = useState<UnifiedGameResult | null>(null);
+  const [showLoreModal, setShowLoreModal] = useState(false);
+  const [rewardJustUnlocked, setRewardJustUnlocked] = useState(false);
 
   const walletAddress = activeWallet?.address ?? '';
 
@@ -438,6 +442,26 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     setStage('result');
     onSetFullscreen?.(false);
     if (!walletAddress) return;
+
+    // First-time Decode reward: only Free Practice, only when all 7 fragments found
+    if (
+      selectedGame === 'decode_7_fragments' &&
+      mode === 'free' &&
+      r.fragmentsFound === 7 &&
+      walletAddress
+    ) {
+      const { success, alreadyUnlocked } = await DecodeRewardService.grantFirstReward(
+        walletAddress,
+        profile?.id ?? null,
+      );
+      if (success && !alreadyUnlocked) {
+        // First ever completion — show the one-time lore message
+        setShowLoreModal(true);
+        setRewardJustUnlocked(true);
+      }
+      // alreadyUnlocked=true → silently continue, no lore shown again
+    }
+
     try {
       await submitGameResult({
         match_id: match?.id ?? null,
@@ -472,6 +496,7 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     setStage('game_select');
     setSelectedGame(null); setMode(null); setEntry(null);
     setMatch(null); setResult(null); setGameSeed('');
+    setShowLoreModal(false); setRewardJustUnlocked(false);
     onSetFullscreen?.(false);
   };
 
@@ -590,16 +615,44 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       )}
 
       {stage === 'result' && result && (
-        <GameResultCard
-          result={result}
-          gameId={selectedGame ?? 'dawen_rush'}
-          mode={mode!}
-          entryId={entry?.id}
-          matchId={match?.id}
-          walletAddress={walletAddress}
-          entryAmountSol={entry ? Number(entry.entry_amount_sol) : undefined}
-          onPlayAgain={handlePlayAgain}
-        />
+        <>
+          {rewardJustUnlocked && !showLoreModal && (
+            <TouchableOpacity
+              style={gameStyles.rewardBanner}
+              onPress={() => router.push('/rewards')}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['rgba(236,72,153,0.18)', 'rgba(244,114,182,0.12)']}
+                style={StyleSheet.absoluteFill}
+              />
+              <Gift size={18} color="#EC4899" strokeWidth={2} />
+              <View style={{ flex: 1 }}>
+                <Text style={gameStyles.rewardBannerTitle}>15,000 DWORLD Unlocked!</Text>
+                <Text style={gameStyles.rewardBannerSub}>Tap to claim in Rewards & Referrals</Text>
+              </View>
+              <ChevronRight size={16} color="#EC4899" />
+            </TouchableOpacity>
+          )}
+          <GameResultCard
+            result={result}
+            gameId={selectedGame ?? 'dawen_rush'}
+            mode={mode!}
+            entryId={entry?.id}
+            matchId={match?.id}
+            walletAddress={walletAddress}
+            entryAmountSol={entry ? Number(entry.entry_amount_sol) : undefined}
+            onPlayAgain={handlePlayAgain}
+          />
+          {showLoreModal && (
+            <DecodeLoreModal
+              onDismiss={() => {
+                setShowLoreModal(false);
+                DecodeRewardService.markMessageShown(walletAddress).catch(() => {});
+              }}
+            />
+          )}
+        </>
       )}
     </ScrollView>
   );
@@ -672,6 +725,201 @@ const gameStyles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.textMuted,
     fontWeight: '500',
+  },
+  rewardBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: 'rgba(236,72,153,0.45)',
+    overflow: 'hidden',
+  },
+  rewardBannerTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: '#F472B6',
+  },
+  rewardBannerSub: {
+    fontSize: fontSize.xs,
+    color: 'rgba(244,114,182,0.7)',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+});
+
+// ─── DecodeLoreModal ─────────────────────────────────────────────────────────
+
+const LORE_LINES = [
+  { text: 'Seven fragments.', style: 'title' as const },
+  { text: 'Seven truths.', style: 'title' as const },
+  { text: '', style: 'spacer' as const },
+  { text: 'Decentralization breaks the old order.', style: 'body' as const },
+  { text: 'Destiny calls the builders.', style: 'body' as const },
+  { text: 'The Digital Era rewrites the world.', style: 'body' as const },
+  { text: 'Determination separates the believers from the crowd.', style: 'body' as const },
+  { text: 'Dominance comes to those who endure.', style: 'body' as const },
+  { text: 'Disruption destroys the old systems.', style: 'body' as const },
+  { text: '', style: 'spacer' as const },
+  { text: 'And what rises after the collapse\u2026', style: 'italic' as const },
+  { text: '', style: 'spacer' as const },
+  { text: 'A Dynasty.', style: 'dynasty' as const },
+];
+
+function DecodeLoreModal({ onDismiss }: { onDismiss: () => void }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: 1, duration: 600, useNativeDriver: true }).start();
+  }, []);
+
+  const handleDismiss = () => {
+    Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(onDismiss);
+  };
+
+  return (
+    <Modal transparent animationType="none" visible onRequestClose={handleDismiss}>
+      <Animated.View style={[loreStyles.overlay, { opacity }]}>
+        <ScrollView
+          contentContainerStyle={loreStyles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={loreStyles.card}>
+            <LinearGradient
+              colors={['rgba(236,72,153,0.15)', 'rgba(0,0,0,0)']}
+              style={loreStyles.cardGlow}
+            />
+            <Text style={loreStyles.eyebrow}>FIRST COMPLETION</Text>
+            <View style={loreStyles.divider} />
+            {LORE_LINES.map((line, i) => {
+              if (line.style === 'spacer') return <View key={i} style={loreStyles.spacer} />;
+              if (line.style === 'title') return (
+                <Text key={i} style={loreStyles.loreTitle}>{line.text}</Text>
+              );
+              if (line.style === 'italic') return (
+                <Text key={i} style={loreStyles.loreItalic}>{line.text}</Text>
+              );
+              if (line.style === 'dynasty') return (
+                <Text key={i} style={loreStyles.loreDynasty}>{line.text}</Text>
+              );
+              return <Text key={i} style={loreStyles.loreBody}>{line.text}</Text>;
+            })}
+            <View style={loreStyles.divider} />
+            <View style={loreStyles.rewardBox}>
+              <Gift size={20} color="#EC4899" strokeWidth={2} />
+              <Text style={loreStyles.rewardText}>15,000 DWORLD Unlocked</Text>
+            </View>
+            <Text style={loreStyles.rewardSub}>Claim your reward in Rewards & Referrals</Text>
+            <TouchableOpacity style={loreStyles.dismissBtn} onPress={handleDismiss} activeOpacity={0.85}>
+              <Text style={loreStyles.dismissText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const loreStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+  },
+  content: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  card: {
+    backgroundColor: 'rgba(15,15,20,0.98)',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    borderColor: 'rgba(236,72,153,0.35)',
+    padding: spacing.xxl,
+    overflow: 'hidden',
+  },
+  cardGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: borderRadius.xl,
+  },
+  eyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#EC4899',
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: spacing.md,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(236,72,153,0.2)',
+    marginVertical: spacing.lg,
+  },
+  spacer: { height: spacing.sm },
+  loreTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '700',
+    color: '#F9FAFB',
+    textAlign: 'center',
+    lineHeight: 28,
+  },
+  loreBody: {
+    fontSize: fontSize.sm,
+    fontWeight: '400',
+    color: 'rgba(243,244,246,0.78)',
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  loreItalic: {
+    fontSize: fontSize.md,
+    fontStyle: 'italic',
+    color: 'rgba(243,244,246,0.55)',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  loreDynasty: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#EC4899',
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
+  rewardBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: 'rgba(236,72,153,0.12)',
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(236,72,153,0.3)',
+  },
+  rewardText: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: '#F472B6',
+  },
+  rewardSub: {
+    fontSize: fontSize.xs,
+    color: 'rgba(244,114,182,0.6)',
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    fontWeight: '500',
+  },
+  dismissBtn: {
+    backgroundColor: '#EC4899',
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.lg,
+  },
+  dismissText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });
 

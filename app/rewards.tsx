@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink } from 'lucide-react-native';
+import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import {
@@ -24,6 +24,7 @@ import {
   buildShareMessage,
   formatRewardReason,
 } from '@/services/referralService';
+import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeRewardService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
 
@@ -45,6 +46,8 @@ export default function RewardsScreen() {
   const [claimingId, setClaimingId]               = useState<string | null>(null);
   const [claimMessage, setClaimMessage]           = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [claimSignature, setClaimSignature]       = useState<string | null>(null);
+  const [decodeStatus, setDecodeStatus]           = useState<DecodeRewardStatus | null>(null);
+  const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -63,16 +66,21 @@ export default function RewardsScreen() {
       ]);
       setEarlyRewardExhausted(exhausted);
 
-      const [code, refs, rwds, sts] = await Promise.all([
+      const [code, refs, rwds, sts, dStatus, dReward] = await Promise.all([
         ReferralService.getOrCreateReferralCode(activeAddress),
         ReferralService.getUserReferrals(activeAddress),
         ReferralService.getUserRewards(activeAddress),
         ReferralService.getReferralStats(activeAddress),
+        DecodeRewardService.getStatus(activeAddress),
+        DecodeRewardService.getDecodeUserReward(activeAddress),
       ]);
 
       if (code) setReferralCode(code.code);
       setReferrals(refs);
-      setRewards(rwds);
+      // Filter decode reward out of the generic list — shown in its own dedicated card
+      setRewards(rwds.filter(r => r.reason !== 'decode_first_completion'));
+      setDecodeStatus(dStatus);
+      setDecodeReward(dReward);
       setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
     } catch (err: any) {
       console.error('[RewardsScreen] loadData error:', err);
@@ -393,7 +401,18 @@ export default function RewardsScreen() {
           )}
         </View>
 
-        {/* Reward cards */}
+        {/* Decode the 7 Fragments Reward */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Decode the 7 Fragments Reward</Text>
+          <DecodeRewardCard
+            status={decodeStatus}
+            reward={decodeReward}
+            claimingId={claimingId}
+            onClaim={handleClaimReward}
+          />
+        </View>
+
+        {/* Regular reward cards */}
         {rewards.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Your Rewards</Text>
@@ -457,6 +476,105 @@ export default function RewardsScreen() {
           </View>
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+// ── Decode reward card ────────────────────────────────────────────────────────
+
+interface DecodeRewardCardProps {
+  status: DecodeRewardStatus | null;
+  reward: UserReward | null;
+  claimingId: string | null;
+  onClaim: (reward: UserReward) => void;
+}
+
+function DecodeRewardCard({ status, reward, claimingId, onClaim }: DecodeRewardCardProps) {
+  const isLocked    = !status?.reward_unlocked;
+  const isClaimed   = reward?.status === 'sent';
+  const isFailed    = reward?.status === 'failed';
+  const isClaiming  = reward ? claimingId === reward.id : false;
+  const isReady     = reward?.status === 'ready' || reward?.status === 'failed';
+
+  const statusColor = isClaimed ? colors.success : isLocked ? colors.textMuted : '#EC4899';
+
+  const action = (() => {
+    if (isLocked) {
+      return (
+        <View style={styles.claimedBadge}>
+          <Lock size={13} color={colors.textMuted} />
+          <Text style={[styles.claimedText, { color: colors.textMuted }]}>Locked</Text>
+        </View>
+      );
+    }
+    if (isClaimed) {
+      return (
+        <View style={styles.claimedBadge}>
+          <Check size={14} color={colors.success} />
+          <Text style={styles.claimedText}>Claimed</Text>
+        </View>
+      );
+    }
+    if (isClaiming) {
+      return (
+        <View style={styles.claimedBadge}>
+          <ActivityIndicator size="small" color="#EC4899" />
+        </View>
+      );
+    }
+    if (isReady && reward) {
+      return (
+        <TouchableOpacity
+          style={[styles.claimButton, { backgroundColor: '#EC4899' }, !!claimingId && styles.claimButtonDisabled]}
+          onPress={() => onClaim(reward)}
+          disabled={!!claimingId}
+        >
+          <Text style={styles.claimButtonText}>{isFailed ? 'Retry' : 'Claim'}</Text>
+        </TouchableOpacity>
+      );
+    }
+    return null;
+  })();
+
+  return (
+    <View style={[styles.rewardCard, { borderColor: isLocked ? colors.surfaceBorder : 'rgba(236,72,153,0.3)' }]}>
+      <View style={[styles.rewardIcon, { backgroundColor: isLocked ? colors.surface : 'rgba(236,72,153,0.12)' }]}>
+        <Gift size={20} color={statusColor} />
+      </View>
+      <View style={styles.rewardInfo}>
+        <Text style={styles.rewardType}>Decode the 7 Fragments Reward</Text>
+        <Text style={[styles.rewardAmount, { color: statusColor }]}>15,000 $DWORLD</Text>
+        {isLocked && (
+          <Text style={styles.failedText}>
+            Complete Free Practice to unlock
+          </Text>
+        )}
+        {!isLocked && !isClaimed && (
+          <Text style={[styles.failedText, { color: '#F472B6' }]}>
+            You unlocked 15,000 DWORLD. Claim now.
+          </Text>
+        )}
+        {isClaimed && reward?.transaction_signature && (
+          <TouchableOpacity
+            onPress={() => {
+              const url = `https://solscan.io/tx/${reward.transaction_signature}`;
+              if (Platform.OS === 'web') {
+                (window as any).open(url, '_blank', 'noopener,noreferrer');
+              } else {
+                Linking.openURL(url).catch(() => {});
+              }
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 }}
+            activeOpacity={0.7}
+          >
+            <ExternalLink size={11} color={colors.primary} strokeWidth={2} />
+            <Text style={styles.txHash} numberOfLines={1}>
+              {reward.transaction_signature.slice(0, 18)}…
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {action}
     </View>
   );
 }
