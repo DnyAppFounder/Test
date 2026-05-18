@@ -246,6 +246,9 @@ export function TradingViewChart({
   const activeLiveCandleRef = useRef<CandleData | null>(null);
 
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
+  // Tracks which resolution was actually used when timeframe === 'ALL'.
+  // Starts at 1D; auto-degrades to 1H or 5m for newer/sparser tokens.
+  const [allEffectiveTf, setAllEffectiveTf] = useState<TimeFrame>('1D');
   const [mode, setMode] = useState<ChartMode>('area');
   const [internalValueMode, setInternalValueMode] = useState<ValueMode>('mcap');
   const valueMode: ValueMode = externalValueMode ?? internalValueMode;
@@ -283,6 +286,12 @@ export function TradingViewChart({
   const touchStartXRef      = useRef(0);
   const touchStartYRef      = useRef(0);
   const touchStartTimeRef   = useRef(0);
+
+  // All ranked DexScreener pair addresses for the current token.
+  // Stored so we can fall back to the next pair if the primary WS fails repeatedly.
+  const rankedPairsRef = useRef<string[]>([]);
+  // true once the current pair's WS has delivered at least one valid price — gate for caching.
+  const wsPriceCachedRef = useRef(false);
 
   // Stable price scale — recomputed only when visible candle set changes, not on clock tick.
   const priceScaleRef    = useRef({ maxP: 0, minP: 0, priceRange: 1, maxVol: 1 });
@@ -369,9 +378,12 @@ export function TradingViewChart({
         );
         const ranked = (usable.length > 0 ? usable : pairs)
           .sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-        const addr = ranked[0].pairAddress;
-        if (!cancelled) {
-          resolvedPairCache.set(tokenMint, addr);
+        const allAddrs = ranked.map((p: any) => p.pairAddress).filter(Boolean) as string[];
+        const addr = allAddrs[0];
+        if (!cancelled && addr) {
+          // Store all ranked pairs for WS fallback; do not cache until WS validates.
+          rankedPairsRef.current = allAddrs;
+          wsPriceCachedRef.current = false;
           setResolvedPairAddr(addr);
           pairAddrRef.current = addr;
         }
@@ -548,6 +560,11 @@ export function TradingViewChart({
             const price = livePriceRef.current ?? np;
             // DexScreener WS provides price quotes, not real timestamped trades.
             applyLivePrice(price, Date.now(), false);
+            // Cache the pair once it delivers a valid price — validates it has live data.
+            if (!wsPriceCachedRef.current && tokenMint && pairAddrRef.current) {
+              wsPriceCachedRef.current = true;
+              resolvedPairCache.set(tokenMint, pairAddrRef.current);
+            }
           }, 400);
           livePriceRef.current = np;
         } catch {}
@@ -557,7 +574,24 @@ export function TradingViewChart({
         try { setWsConnected(false); } catch {}
         wsRef.current = null;
         // Stop retrying after 5 attempts — pair is likely unavailable or bad.
-        if (wsRetryCountRef.current >= 5) return;
+        if (wsRetryCountRef.current >= 5) {
+          // Try the next ranked pair if available (max 3 pairs total to avoid runaway loops).
+          const currentIdx = rankedPairsRef.current.findIndex(a => a === pairAddrRef.current);
+          const nextAddr = currentIdx >= 0 && currentIdx < 2
+            ? rankedPairsRef.current[currentIdx + 1]
+            : undefined;
+          if (nextAddr) {
+            pairAddrRef.current = nextAddr;
+            wsRetryCountRef.current = 0;
+            wsPriceCachedRef.current = false;
+            if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
+            wsReconnectTimerRef.current = setTimeout(() => {
+              wsReconnectTimerRef.current = null;
+              if (wsRef.current === null) connectWebSocket(nextAddr);
+            }, 5000);
+          }
+          return;
+        }
         // Don't reconnect when the tab or chart is not visible.
         if (typeof document !== 'undefined' && document.hidden) return;
         if (!chartVisibleRef.current) return;
@@ -591,6 +625,11 @@ export function TradingViewChart({
     userSelectedModeRef.current = false;
     // Reset supply so MCAP re-derives from the new token's snapshot.
     stableSupplyRef.current = null;
+    // Reset ALL effective timeframe to default.
+    setAllEffectiveTf('1D');
+    // Reset pair fallback state for the new token.
+    rankedPairsRef.current = [];
+    wsPriceCachedRef.current = false;
   }, [tokenMint]);
 
   // Auto-select chart mode based on token trading density.
@@ -622,9 +661,34 @@ export function TradingViewChart({
     const myId = ++reqIdRef.current;
     if (!silent) setLoading(true);
     try {
-      const effectiveTf: TimeFrame = tf === 'ALL' ? '1D' : tf;
-      const limitOverride = tf === 'ALL' ? 365 : undefined;
-      const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
+      if (tf === 'ALL') {
+        // ALL mode: choose the finest resolution that yields >= 7 candles,
+        // trying coarse→fine so older tokens use 1D while new tokens degrade to 1H/5m.
+        const allCandidates: TimeFrame[] = ['1D', '1H', '5m'];
+        let bestCleaned: CandleData[] = [];
+        let bestTf: TimeFrame = '1D';
+        for (const candidateTf of allCandidates) {
+          if (myId !== reqIdRef.current) return;
+          const raw = await chartDataService.getOHLCVData(tokenMint!, candidateTf, undefined);
+          if (myId !== reqIdRef.current) return;
+          const cleaned = sanitizeRawCandles(raw ?? []);
+          if (cleaned.length > bestCleaned.length) {
+            bestCleaned = cleaned;
+            bestTf = candidateTf;
+          }
+          if (bestCleaned.length >= 7) break; // enough data at this resolution
+        }
+        if (bestCleaned.length > 0) {
+          setCandles(bestCleaned);
+          setAllEffectiveTf(bestTf);
+          setHasData(true);
+        } else {
+          if (!silent) { setHasData(false); setCandles([]); }
+        }
+        return;
+      }
+
+      const data = await chartDataService.getOHLCVData(tokenMint!, tf, undefined);
       if (myId !== reqIdRef.current) return;
       if (data && data.length > 0) {
         // Sanitize and repair raw candles before trusting hasData.
@@ -1543,10 +1607,17 @@ export function TradingViewChart({
     }
   }
 
-  // Live price line — reuse liveScaledValue (same formula) so header and pill always agree
-  const scaledLivePrice = liveScaledValue;
-  const clampedLive = scaledLivePrice > maxP ? maxP : scaledLivePrice < minP ? minP : scaledLivePrice;
-  const currentY    = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedLive)));
+  // Guide line: anchored to real candle data so it never contradicts candle closes.
+  // Quote-only sources (DexScreener WS, Jupiter REST) update the header freely but must
+  // not move the guide line — that would create a detached Y position with no matching candle.
+  // Rule: guide uses activeLiveCandle (real trade) if present, else last real candle close.
+  const realChartClose = activeLiveCandle
+    ? activeLiveCandle.close
+    : (mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : 0);
+  const scaledGuidePrice = realChartClose > 0 ? realChartClose * mcapScale : 0;
+  const scaledLivePrice  = liveScaledValue; // header/display only — can include quote prices
+  const clampedGuide = scaledGuidePrice > maxP ? maxP : scaledGuidePrice < minP ? minP : scaledGuidePrice;
+  const currentY     = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedGuide)));
 
   // History start indicator
   const historyOldestTs   = candles.length > 0 ? candles[0].timestamp : Date.now();
@@ -1791,8 +1862,9 @@ export function TradingViewChart({
               />
             )}
 
-            {/* Live price dashed guide line + pill — drawn outside chartClip so it's always visible */}
-            {showPriceLine && (
+            {/* Price guide line + pill — anchored to last real candle close (never quote-only).
+                Only rendered when we have a real chart price to anchor to. */}
+            {showPriceLine && scaledGuidePrice > 0 && (
               <>
                 <Line
                   x1={PAD.left} y1={currentY} x2={chartWidth - PAD.right} y2={currentY}
@@ -1804,7 +1876,7 @@ export function TradingViewChart({
                 <SvgText
                   x={chartWidth - PAD.right + (PAD.right - 2) / 2 + 1} y={currentY + 4.5}
                   fontSize={isMobile ? 10 : 7.5} fill="#fff" textAnchor="middle" fontWeight="700">
-                  {fmtValue(scaledLivePrice, valueMode)}
+                  {fmtValue(scaledGuidePrice, valueMode)}
                 </SvgText>
               </>
             )}
@@ -1854,7 +1926,7 @@ export function TradingViewChart({
             {timeLabels.map(({ ts, x }) => (
               <SvgText key={`tl${ts}`} x={x} y={CHART_H + VOL_H + TIME_H - 3}
                 fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
-                {fmtTime(ts, timeframe)}
+                {fmtTime(ts, timeframe === 'ALL' ? allEffectiveTf : timeframe)}
               </SvgText>
             ))}
 
