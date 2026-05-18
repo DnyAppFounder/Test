@@ -356,8 +356,10 @@ export function TradingViewChart({
   // ── Single price pipeline ────────────────────────────────────────────────────
   // All price sources funnel through applyLivePrice. Each call carries a timestamp
   // so that a late-arriving REST response never overwrites a fresher live price.
+  // isRealTrade = true  → a timestamped on-chain trade; may create/update activeLiveCandle.
+  // isRealTrade = false → REST/WS quote, DexScreener, Jupiter; updates display only.
   // The active live candle (current bucket only) is updated separately from history.
-  const applyLivePrice = useCallback((price: number, sourceTs?: number) => {
+  const applyLivePrice = useCallback((price: number, sourceTs?: number, isRealTrade = false) => {
     if (!price || price <= 0) return;
     const ts = sourceTs ?? Date.now();
     // Reject if this update is more than 1s older than the last accepted price.
@@ -367,6 +369,10 @@ export function TradingViewChart({
     livePriceRef.current = price;
     setLivePrice(price);
     if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
+
+    // REST/WS quote sources only update the header price display — they must NOT
+    // create or mutate activeLiveCandle because they carry no real trade timestamp.
+    if (!isRealTrade) return;
 
     const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
     // Use the real event timestamp for bucket allocation so the live candle
@@ -431,7 +437,8 @@ export function TradingViewChart({
           wsDebounceRef.current = setTimeout(() => {
             wsDebounceRef.current = null;
             const price = livePriceRef.current ?? np;
-            applyLivePrice(price, Date.now());
+            // DexScreener WS provides price quotes, not real timestamped trades.
+            applyLivePrice(price, Date.now(), false);
           }, 400);
           livePriceRef.current = np;
         } catch {}
@@ -472,13 +479,10 @@ export function TradingViewChart({
       const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
       if (myId !== reqIdRef.current) return;
       if (data && data.length > 0) {
-        // Store real historical candles only — never include the active live bucket here.
-        // The activeLiveCandle is maintained separately and merged at render time.
-        const bMs = BUCKET_MS[tf === 'ALL' ? '1D' : tf] ?? 3_600_000;
-        const activeBucket = Math.floor(Date.now() / bMs) * bMs;
-        // Exclude any candle that falls in the current active bucket — activeLiveCandle owns it.
-        const historicalOnly = data.filter(c => Math.floor(c.timestamp / bMs) * bMs < activeBucket);
-        setCandles(historicalOnly.length > 0 ? historicalOnly : data);
+        // Store all OHLCV candles as returned by the API. The mergedCandles
+        // useMemo deduplicates the active bucket when activeLiveCandle is present,
+        // so there is no need to blindly strip the current bucket here.
+        setCandles(data);
         setHasData(true);
       } else {
         if (!silent) { setHasData(false); setCandles([]); }
@@ -542,7 +546,8 @@ export function TradingViewChart({
         if (jupRes.ok) {
           const jupData = await jupRes.json();
           const jupPrice = Number(jupData?.data?.[tokenMint!]?.price ?? 0);
-          if (jupPrice > 0) { applyLivePrice(jupPrice, startTs); return; }
+          // Jupiter REST is a fallback quote — not a real trade event.
+          if (jupPrice > 0) { applyLivePrice(jupPrice, startTs, false); return; }
         }
       } catch {}
       // Fallback: DexScreener REST
@@ -557,7 +562,8 @@ export function TradingViewChart({
         const pairData = data.pair ?? data.pairs?.[0];
         if (!pairData) return;
         const p = parseFloat(pairData.priceUsd || '0');
-        if (p > 0) applyLivePrice(p, startTs);
+        // DexScreener REST is a fallback quote — not a real trade event.
+        if (p > 0) applyLivePrice(p, startTs, false);
       } catch {}
     };
 
@@ -576,18 +582,17 @@ export function TradingViewChart({
     if (!externalPrice || externalPrice <= 0) return;
     if (externalPrice === prevExternalPriceRef.current) return;
     prevExternalPriceRef.current = externalPrice;
-    // External price carries its own (older) timestamp context — use a slightly older ts
-    // so it doesn't overwrite a fresher live WS price
-    applyLivePrice(externalPrice, Date.now() - 2000);
+    // External price from parent is a snapshot/API value — not a real trade event.
+    applyLivePrice(externalPrice, Date.now() - 2000, false);
   }, [resolvedInfo?.price, applyLivePrice]);
 
   // liveTokenStore subscription — pushed by other parts of the app
   useEffect(() => {
     if (!tokenMint) return;
     const unsub = liveTokenStore.watch(tokenMint, (price) => {
-      // liveTokenStore receives prices pushed from Helius/PumpSwap/on-chain sources —
-      // treat with the same priority as WebSocket (full Date.now() timestamp).
-      if (price > 0) applyLivePrice(price, Date.now());
+      // liveTokenStore aggregates prices from various parts of the app.
+      // Without a confirmed real-trade source flag, treat as display-only.
+      if (price > 0) applyLivePrice(price, Date.now(), false);
     });
     return unsub;
   }, [tokenMint, applyLivePrice]);
@@ -645,14 +650,18 @@ export function TradingViewChart({
   }, [candles, timeframe]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
-  // MCAP scale: use a stable ratio from the same snapshot (marketCap / price).
-  // This ensures header, axis, bubble, and crosshair all use the same scale.
+  // MCAP scale: derive token supply from snapshot, falling back to livePrice
+  // when snapshotPrice is zero (e.g. on initial load). All display surfaces
+  // (header, axis, bubble, crosshair) share this single scale so they agree.
   const _snapshotPrice = resolvedInfo?.price;
   const _snapshotMcap  = resolvedInfo?.marketCap ?? null;
-  const mcapScale = valueMode === 'mcap' && _snapshotMcap != null && _snapshotMcap > 0 &&
-                    _snapshotPrice != null && _snapshotPrice > 0
-    ? _snapshotMcap / _snapshotPrice
-    : 1;
+  const effectiveSnapshotPrice = (_snapshotPrice != null && _snapshotPrice > 0)
+    ? _snapshotPrice
+    : (livePrice && livePrice > 0 ? livePrice : null);
+  const tokenSupply = (effectiveSnapshotPrice != null && _snapshotMcap != null && _snapshotMcap > 0)
+    ? _snapshotMcap / effectiveSnapshotPrice
+    : null;
+  const mcapScale = valueMode === 'mcap' && tokenSupply != null ? tokenSupply : 1;
 
   const plotW = chartWidth - PAD.left - PAD.right;
   plotWRef.current = plotW;
