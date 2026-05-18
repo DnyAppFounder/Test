@@ -132,6 +132,42 @@ function filterValidCandles(cs: CandleData[]): CandleData[] {
   });
 }
 
+// Repair and validate raw API candles before storing.
+// Fresh/new tokens may return partial OHLC where open/high/low are 0 but close is valid.
+// Rules:
+//  - Reject candles with invalid timestamp or close <= 0.
+//  - Repair open/high/low by falling back to close — never invent movement.
+//  - Enforce high >= open, high >= close; low <= open, low <= close.
+//  - Reject if high < low after repair (truly impossible candle).
+//  - Zero or negative volume is clamped to 0 (no volume bar will be rendered).
+function sanitizeRawCandles(cs: CandleData[]): CandleData[] {
+  const result: CandleData[] = [];
+  for (const c of cs) {
+    if (!c) continue;
+    const ts = c.timestamp;
+    if (!isFinite(ts) || ts <= 0) continue;
+    const close = isFinite(c.close) && c.close > 0 ? c.close : 0;
+    if (close <= 0) continue;
+    // Repair missing OHLC fields — fall back to close, never invent movement
+    const open  = isFinite(c.open)  && c.open  > 0 ? c.open  : close;
+    const high  = isFinite(c.high)  && c.high  > 0 ? c.high  : close;
+    const low   = isFinite(c.low)   && c.low   > 0 ? c.low   : close;
+    // Enforce valid OHLC relationship
+    const safeHigh = Math.max(high, open, close);
+    const safeLow  = Math.min(low,  open, close);
+    if (safeHigh < safeLow) continue; // should never happen after above, but guard anyway
+    result.push({
+      timestamp: ts,
+      open,
+      high: safeHigh,
+      low:  safeLow,
+      close,
+      volume: isFinite(c.volume) && c.volume > 0 ? c.volume : 0,
+    });
+  }
+  return result;
+}
+
 // Keep the best real candle per bucket (highest volume wins; real beats synthetic vol=0).
 function dedupByBucket(cs: CandleData[], bucketMs: number): CandleData[] {
   if (cs.length === 0) return cs;
@@ -591,11 +627,16 @@ export function TradingViewChart({
       const data = await chartDataService.getOHLCVData(tokenMint, effectiveTf, limitOverride);
       if (myId !== reqIdRef.current) return;
       if (data && data.length > 0) {
-        // Store all OHLCV candles as returned by the API. The mergedCandles
-        // useMemo deduplicates the active bucket when activeLiveCandle is present,
-        // so there is no need to blindly strip the current bucket here.
-        setCandles(data);
-        setHasData(true);
+        // Sanitize and repair raw candles before trusting hasData.
+        // Fresh tokens can return incomplete OHLC; sanitizeRawCandles repairs them.
+        // Only set hasData=true when at least one valid candle survives validation.
+        const cleaned = sanitizeRawCandles(data);
+        if (cleaned.length > 0) {
+          setCandles(cleaned);
+          setHasData(true);
+        } else {
+          if (!silent) { setHasData(false); setCandles([]); }
+        }
       } else {
         if (!silent) { setHasData(false); setCandles([]); }
       }
@@ -1787,9 +1828,9 @@ export function TradingViewChart({
               </G>
             )}
 
-            {/* Volume bars — zero-volume candles (including live synthetic) produce no bar */}
+            {/* Volume bars — zero/null/negative volume produces no bar (includes live synthetic candles) */}
             {showVolume && displayCandles.map((c, i) => {
-              if (c.volume === 0) return null;
+              if (!c.volume || c.volume <= 0) return null;
               const h    = volBarH(c.volume);
               const w    = Math.max(barW, 1.5);
               // Clamp so right edge (vx + w/2) never exceeds safeRightX
