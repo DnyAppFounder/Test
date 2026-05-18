@@ -17,7 +17,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL") || "";
 const TREASURY_PRIVATE_KEY_B58 = Deno.env.get("TREASURY_PRIVATE_KEY_BASE58") || "";
-const TREASURY_PUBLIC_KEY = Deno.env.get("TREASURY_PUBLIC_KEY") || "";
+const TREASURY_PUBLIC_KEY = Deno.env.get("TREASURY_PUBLIC_KEY")?.trim() || "";
 const DWC_MINT_ENV = Deno.env.get("DWC_MINT") || "";
 
 // Token-2022 (Token Extensions) program — DWORLD is a Token-2022 token
@@ -97,10 +97,19 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   const treasuryPubStr = treasury.publicKey.toBase58();
   console.log(`[reward-claim] treasury: ${treasuryPubStr}`);
 
-  if (TREASURY_PUBLIC_KEY && treasuryPubStr !== TREASURY_PUBLIC_KEY) {
-    throw new Error(
-      `Treasury keypair mismatch: derived ${treasuryPubStr}, expected ${TREASURY_PUBLIC_KEY}`,
-    );
+  // Validate TREASURY_PUBLIC_KEY is present and is a parseable Solana address
+  if (!TREASURY_PUBLIC_KEY) {
+    throw new Error("Invalid TREASURY_PUBLIC_KEY. It must be the treasury wallet address.");
+  }
+  try {
+    new PublicKey(TREASURY_PUBLIC_KEY);
+  } catch {
+    throw new Error("Invalid TREASURY_PUBLIC_KEY. It must be the treasury wallet address.");
+  }
+
+  // Verify the private key's derived public key matches TREASURY_PUBLIC_KEY
+  if (treasuryPubStr !== TREASURY_PUBLIC_KEY) {
+    throw new Error("Treasury private key does not match treasury public key");
   }
 
   const mintPubkey = new PublicKey(mintAddress);
