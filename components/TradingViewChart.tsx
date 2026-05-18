@@ -85,7 +85,7 @@ const CHART_MODES: { key: ChartMode; icon: any; label: string }[] = [
   { key: 'candlestick', icon: CandlestickChart, label: 'Candles' },
   { key: 'bar',         icon: BarChart2,        label: 'Bars' },
   { key: 'mountain',    icon: Activity,         label: 'Mountain' },
-  { key: 'bonding',     icon: TrendingUp,       label: 'Live' },
+  { key: 'bonding',     icon: TrendingUp,       label: 'Pulse' },
 ];
 
 const TIME_H = 18;
@@ -173,6 +173,10 @@ function fmtValue(v: number, mode: ValueMode): string {
   return mode === 'mcap' ? fmtMcap(v) : `$${fmtPrice(v)}`;
 }
 
+// Module-level cache: resolved pair address per token mint.
+// Avoids a redundant DexScreener fetch every time the component remounts for the same token.
+const resolvedPairCache = new Map<string, string>();
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export function TradingViewChart({
   tokenInfo,
@@ -213,6 +217,7 @@ export function TradingViewChart({
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [live24hChange, setLive24hChange] = useState<number | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [showModePanel, setShowModePanel] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
@@ -243,10 +248,12 @@ export function TradingViewChart({
   const priceScaleRef    = useRef({ maxP: 0, minP: 0, priceRange: 1, maxVol: 1 });
   const priceScaleKeyRef = useRef('');
 
-  const pollTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wsRef          = useRef<WebSocket | null>(null);
-  const livePriceRef   = useRef<number | null>(null);
-  const wsDebounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef               = useRef<WebSocket | null>(null);
+  const livePriceRef        = useRef<number | null>(null);
+  const wsDebounceRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRetryCountRef     = useRef(0);
   const svgContainerRef = useRef<View>(null);
   const svgOffsetRef   = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const candlesRef     = useRef<CandleData[]>([]);
@@ -284,12 +291,20 @@ export function TradingViewChart({
   useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
   useEffect(() => { activeLiveCandleRef.current = activeLiveCandle; }, [activeLiveCandle]);
 
-  // Resolve best pair address from DexScreener when token mint changes
+  // Resolve best pair address from DexScreener when token mint changes.
+  // Prefers pairs with usable live price data (non-zero priceUsd + liquidity/volume).
+  // Caches the resolved address per mint so the fetch only happens once per token.
   useEffect(() => {
     if (!tokenMint) return;
     if (pairAddress) {
       setResolvedPairAddr(pairAddress);
       pairAddrRef.current = pairAddress;
+      return;
+    }
+    const cached = resolvedPairCache.get(tokenMint);
+    if (cached) {
+      setResolvedPairAddr(cached);
+      pairAddrRef.current = cached;
       return;
     }
     let cancelled = false;
@@ -303,9 +318,20 @@ export function TradingViewChart({
         const data = await res.json();
         const pairs: any[] = (data.pairs || []).filter((p: any) => p.chainId === 'solana');
         if (pairs.length === 0 || cancelled) return;
-        pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-        const addr = pairs[0].pairAddress;
-        if (!cancelled) { setResolvedPairAddr(addr); pairAddrRef.current = addr; }
+        // Prefer pairs with usable live price data (non-zero priceUsd and some activity).
+        // This avoids getting stuck on a dead AMM with no recent trades.
+        const usable = pairs.filter((p: any) =>
+          parseFloat(p.priceUsd || '0') > 0 &&
+          ((p.liquidity?.usd || 0) > 0 || (p.volume?.h24 || 0) > 0)
+        );
+        const ranked = (usable.length > 0 ? usable : pairs)
+          .sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        const addr = ranked[0].pairAddress;
+        if (!cancelled) {
+          resolvedPairCache.set(tokenMint, addr);
+          setResolvedPairAddr(addr);
+          pairAddrRef.current = addr;
+        }
       } catch {}
     })();
     return () => { cancelled = true; };
@@ -473,11 +499,19 @@ export function TradingViewChart({
       ws.onclose = () => {
         try { setWsConnected(false); } catch {}
         wsRef.current = null;
-        const t = setTimeout(() => {
+        // Stop retrying after 5 attempts — pair is likely unavailable or bad.
+        if (wsRetryCountRef.current >= 5) return;
+        // Don't reconnect when the tab or chart is not visible.
+        if (typeof document !== 'undefined' && document.hidden) return;
+        if (!chartVisibleRef.current) return;
+        // Exponential backoff: 5s → 10s → 20s → 40s → 60s (cap).
+        const delay = Math.min(5000 * Math.pow(2, wsRetryCountRef.current), 60_000);
+        wsRetryCountRef.current++;
+        if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = setTimeout(() => {
+          wsReconnectTimerRef.current = null;
           if (pairAddrRef.current && wsRef.current === null) connectWebSocket(pairAddrRef.current);
-        }, 5000);
-        if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
-        (wsRef as any)._reconnectTimer = t;
+        }, delay);
       };
     } catch { setWsConnected(false); }
   }, [applyLivePrice]);
@@ -490,9 +524,12 @@ export function TradingViewChart({
     setActiveLiveCandle(null);
     setHasData(false);
     setLivePrice(null);
+    setLive24hChange(null);
     livePriceRef.current = null;
     latestPriceTsRef.current = 0;
     hasAutoScrolledRef.current = false;
+    wsRetryCountRef.current = 0;
+    if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null; }
     // Reset mode selection so auto-detection can run for the new token.
     userSelectedModeRef.current = false;
   }, [tokenMint]);
@@ -552,8 +589,9 @@ export function TradingViewChart({
     if (!resolvedPairAddr) return;
     connectWebSocket(resolvedPairAddr);
     return () => {
-      if (wsDebounceRef.current) clearTimeout(wsDebounceRef.current);
-      if ((wsRef as any)._reconnectTimer) clearTimeout((wsRef as any)._reconnectTimer);
+      if (wsDebounceRef.current) { clearTimeout(wsDebounceRef.current); wsDebounceRef.current = null; }
+      if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null; }
+      wsRetryCountRef.current = 0;
       if (wsRef.current) {
         wsRef.current.onclose = null; wsRef.current.onerror = null;
         wsRef.current.onmessage = null;
@@ -633,6 +671,10 @@ export function TradingViewChart({
         fromStoreRef.current = true;
         applyLivePrice(state.price, state.lastUpdatedAt, false);
         fromStoreRef.current = false;
+      }
+      // Capture 24h change from store — refreshed every 30s by DexScreener polls.
+      if (state.priceChange24h !== 0) {
+        setLive24hChange(state.priceChange24h);
       }
     });
     return unsub;
@@ -1045,8 +1087,12 @@ export function TradingViewChart({
 
   // Header always shows actual marketCap from snapshot (no stale scale multiplication).
   // Axis labels use mcapScale for consistency.
-  const mcapVal    = resolvedInfo?.marketCap ?? null;
-  const change24h  = resolvedInfo?.priceChange24h ?? 0;
+  const mcapVal = resolvedInfo?.marketCap ?? null;
+  // 24h change: prefer live value from store (refreshed every 30s); fall back to snapshot.
+  // Show "—" when neither source has a real non-zero value — avoids showing "0.00%" for new tokens.
+  const raw24h  = resolvedInfo?.priceChange24h;
+  const change24h = live24hChange ?? raw24h ?? 0;
+  const has24h    = live24hChange !== null || (raw24h !== undefined && raw24h !== 0);
   const isUp       = change24h >= 0;
   const changeColor = isUp ? '#10B981' : '#EC4899';
   // Use the same live-scaled formula as the chart axis and live pill so all four displays agree.
@@ -1098,12 +1144,18 @@ export function TradingViewChart({
             <Text style={styles.tokenBigPrice}>{headerValue}</Text>
           </TouchableOpacity>
           <View style={styles.tokenChangeRow}>
-            {isUp
-              ? <TrendingUp  size={11} color={changeColor} strokeWidth={2.5} />
-              : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
-            <Text style={[styles.tokenChangePct, { color: changeColor }]}>
-              {isUp ? '+' : ''}{change24h.toFixed(2)}%
-            </Text>
+            {has24h ? (
+              <>
+                {isUp
+                  ? <TrendingUp  size={11} color={changeColor} strokeWidth={2.5} />
+                  : <TrendingDown size={11} color={changeColor} strokeWidth={2.5} />}
+                <Text style={[styles.tokenChangePct, { color: changeColor }]}>
+                  {isUp ? '+' : ''}{change24h.toFixed(2)}%
+                </Text>
+              </>
+            ) : (
+              <Text style={[styles.tokenChangePct, { color: 'rgba(255,255,255,0.3)' }]}>—</Text>
+            )}
           </View>
         </View>
       </View>}
@@ -1461,9 +1513,9 @@ export function TradingViewChart({
                 <Stop offset="100%" stopColor="#8B5CF6" stopOpacity="0" />
               </SvgLinearGradient>
               <SvgLinearGradient id="bondingGrad" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%"   stopColor="#A78BFA" stopOpacity="0.45" />
-                <Stop offset="50%"  stopColor="#7C3AED" stopOpacity="0.2" />
-                <Stop offset="100%" stopColor="#4C1D95" stopOpacity="0" />
+                <Stop offset="0%"   stopColor="#06B6D4" stopOpacity="0.45" />
+                <Stop offset="60%"  stopColor="#06B6D4" stopOpacity="0.1" />
+                <Stop offset="100%" stopColor="#06B6D4" stopOpacity="0" />
               </SvgLinearGradient>
               <SvgLinearGradient id="volGradGreen" x1="0" y1="0" x2="0" y2="1">
                 <Stop offset="0%"   stopColor="#8B5CF6" stopOpacity="0.8" />
@@ -1535,10 +1587,10 @@ export function TradingViewChart({
               {mode === 'bonding' && (
                 <>
                   {areaPaths.map((p, i) => p ? <Path key={`bf${i}`} d={p} fill="url(#bondingGrad)" /> : null)}
-                  <Path d={linePts} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Circle cx={lastX} cy={lastY} r={6} fill="#A78BFA" opacity={0.18} />
-                  <Circle cx={lastX} cy={lastY} r={3.5} fill="#A78BFA" stroke="#fff" strokeWidth={1} />
+                  <Path d={linePts} stroke="rgba(6,182,212,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#06B6D4" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Circle cx={lastX} cy={lastY} r={6} fill="#06B6D4" opacity={0.18} />
+                  <Circle cx={lastX} cy={lastY} r={3.5} fill="#06B6D4" stroke="#fff" strokeWidth={1} />
                 </>
               )}
 
@@ -1713,7 +1765,11 @@ export function TradingViewChart({
             <Animated.View
               style={[
                 styles.livePulse,
-                { left: lastX - 10, top: lastY - 10, transform: [{ scale: dotPulse }], backgroundColor: 'rgba(167,139,250,0.22)' },
+                {
+                  left: lastX - 10, top: lastY - 10,
+                  transform: [{ scale: dotPulse }],
+                  backgroundColor: mode === 'bonding' ? 'rgba(6,182,212,0.22)' : 'rgba(167,139,250,0.22)',
+                },
               ]}
               pointerEvents="none"
             />

@@ -111,12 +111,6 @@ class ChartDataService {
 
       const candles = dedupeAndSort(result.candles ?? []);
 
-      console.log(
-        `[ChartDataService] mint=${tokenAddress.slice(0, 8)} tf=${timeFrame}` +
-        ` source=${result.source} marketType=${result.marketType} candles=${candles.length}` +
-        (result.reason ? ` reason="${result.reason}"` : ''),
-      );
-
       if (candles.length > 0) {
         this.cache.set(key, { data: candles, ts: Date.now(), mint: tokenAddress });
       }
