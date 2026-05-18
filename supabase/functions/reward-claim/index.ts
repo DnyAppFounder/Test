@@ -24,7 +24,7 @@ const TREASURY_PUBLIC_KEY = (Deno.env.get("TREASURY_PUBLIC_KEY") ?? "")
 const DWC_MINT_ENV = (Deno.env.get("DWC_MINT") ?? "").trim().replace(/^["']|["']$/g, "");
 
 // Increment this string each deploy so the client can verify freshness
-const DEPLOYED_AT = "2026-05-18T03:00:00Z";
+const DEPLOYED_AT = "2026-05-18T12:00:00Z";
 
 // Token-2022 (Token Extensions) program — DWORLD is a Token-2022 token
 const TOKEN_2022_PROGRAM_ID_STR = "TokenzQdBNbEquxqMsNaHqQiPFULmGE3kfFU53DnFmwR";
@@ -226,12 +226,25 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     });
   }
 
-  const token2022ProgramId  = new PublicKey(TOKEN_2022_PROGRAM_ID_STR);
-  const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
-  const systemProgramId     = new PublicKey(SYSTEM_PROGRAM_ID_STR);
+  let token2022ProgramId: InstanceType<typeof PublicKey>;
+  let assocTokenProgramId: InstanceType<typeof PublicKey>;
+  let systemProgramId: InstanceType<typeof PublicKey>;
+  try {
+    token2022ProgramId  = new PublicKey(TOKEN_2022_PROGRAM_ID_STR);
+    assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
+    systemProgramId     = new PublicKey(SYSTEM_PROGRAM_ID_STR);
+  } catch (e: any) {
+    throw new ClaimError(`Program ID parse failed: ${e?.message}`, {
+      ...transferDebug,
+      programIdError: e?.message,
+      token2022ProgramIdStr: TOKEN_2022_PROGRAM_ID_STR,
+      assocTokenProgramIdStr: ASSOC_TOKEN_PROGRAM_ID_STR,
+    });
+  }
 
   console.log(
-    `[reward-claim] userWallet: ${safeWallet.slice(0, 4)}...${safeWallet.slice(-4)}` +
+    `[reward-claim] deployedAt: ${DEPLOYED_AT}` +
+    ` | userWallet: ${safeWallet.slice(0, 4)}...${safeWallet.slice(-4)}` +
     ` | mint: ${safeMint.slice(0, 4)}...${safeMint.slice(-4)}`,
   );
 
