@@ -1213,7 +1213,9 @@ export function TradingViewChart({
 
   // Per-segment area fill paths (each segment closes its own polygon to avoid fill bridging).
   // Single-point segments are skipped — they would produce a vertical wall at the baseline.
-  const areaPaths: string[] = gapSegments.map((seg, si) => {
+  // The fill always ends at the last real candle's x position; the dashed continuation
+  // line is drawn separately and must NOT extend the fill (would create a fake "wall").
+  const areaPaths: string[] = gapSegments.map((seg) => {
     if (seg.length < 2) return '';
     const firstX = xOf(seg[0]).toFixed(1);
     const linePart = seg.map((idx, j) => {
@@ -1223,8 +1225,9 @@ export function TradingViewChart({
     }).join(' ');
     const lastIdx = seg[seg.length - 1];
     const lastYStr = yOf(displayCandles[lastIdx].close).toFixed(1);
-    const isLastSeg = si === gapSegments.length - 1;
-    const segRightX = (isLastSeg && showContinuation ? contRightX : xOf(lastIdx)).toFixed(1);
+    // Always close at the actual last candle — never extend to contRightX.
+    // The dashed continuation line is rendered separately outside this fill polygon.
+    const segRightX = xOf(lastIdx).toFixed(1);
     return `${linePart} L${segRightX},${lastYStr} L${segRightX},${bottomY} L${firstX},${bottomY} Z`;
   });
 
@@ -1246,12 +1249,12 @@ export function TradingViewChart({
 
     const fmt = (v: number): string => {
       if (valueMode !== 'mcap') return `$${fmtPrice(v)}`;
-      // Choose precision so labels are distinct even when range is small
-      const relRange = range / Math.max(Math.abs(v), 1);
-      if (v >= 1e9) return `$${(v / 1e9).toFixed(relRange < 0.05 ? 3 : 2)}B`;
-      if (v >= 1e6) return `$${(v / 1e6).toFixed(relRange < 0.05 ? 3 : 2)}M`;
-      if (v >= 1e3) return `$${(v / 1e3).toFixed(relRange < 0.1  ? 2 : 1)}K`;
-      return `$${v.toFixed(0)}`;
+      // Relative range: small ratio → need more decimal places to distinguish labels
+      const relRange = range / Math.max(Math.abs(hi), 1);
+      if (v >= 1e9) return `$${(v / 1e9).toFixed(relRange < 0.02 ? 3 : relRange < 0.06 ? 2 : 1)}B`;
+      if (v >= 1e6) return `$${(v / 1e6).toFixed(relRange < 0.02 ? 3 : relRange < 0.06 ? 2 : 1)}M`;
+      if (v >= 1e3) return `$${(v / 1e3).toFixed(relRange < 0.02 ? 3 : relRange < 0.08 ? 2 : 1)}K`;
+      return `$${v.toFixed(relRange < 0.05 ? 4 : 2)}`;
     };
 
     for (let p = start; p <= hi + step * 0.01 && levels.length < gridCount + 2; p += step) {
@@ -1263,15 +1266,31 @@ export function TradingViewChart({
     }
     return levels;
   }
-  const priceGridLines = buildGridLines(minP, maxP, 5);
+  const priceGridLines = buildGridLines(minP, maxP, 6);
 
-  // Time labels
-  const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(visibleBuckets / 6));
+  // Time labels — always spaced by a "nice" human-readable interval derived from
+  // the actual visible time window (xVisibleMs), not from bucketMs × visibleBuckets.
+  // This ensures the axis looks clean even when the adaptive x-range has expanded
+  // or contracted the window for sparse tokens.
+  function niceTimeStepMs(targetMs: number): number {
+    const steps = [
+      60_000, 2*60_000, 5*60_000, 10*60_000, 15*60_000, 30*60_000,
+      3_600_000, 2*3_600_000, 4*3_600_000, 6*3_600_000, 12*3_600_000,
+      86_400_000, 2*86_400_000, 7*86_400_000, 14*86_400_000,
+      30*86_400_000, 90*86_400_000,
+    ];
+    for (const s of steps) {
+      if (s >= targetMs * 0.75) return s;
+    }
+    return steps[steps.length - 1];
+  }
+  const timeLabelStepMs = niceTimeStepMs(xVisibleMs / 5);
   const firstLabelTs    = Math.ceil(xLeft / timeLabelStepMs) * timeLabelStepMs;
   const timeLabels: { ts: number; x: number }[] = [];
-  for (let ts = firstLabelTs; ts <= rightTime; ts += timeLabelStepMs) {
+  const timeLabelRight  = xLeft + xVisibleMs + timeLabelStepMs * 0.01;
+  for (let ts = firstLabelTs; ts <= timeLabelRight; ts += timeLabelStepMs) {
     const x = tsToX(ts);
-    if (x >= PAD.left + 16 && x <= chartWidth - PAD.right - 10) {
+    if (x >= PAD.left + 10 && x <= chartWidth - PAD.right - 8) {
       timeLabels.push({ ts, x });
     }
   }
@@ -1443,6 +1462,25 @@ export function TradingViewChart({
                   <Circle cx={lastX} cy={lastY} r={3.5} fill="#A78BFA" stroke="#fff" strokeWidth={1} />
                 </>
               )}
+
+              {/* Isolated single-candle dots for sparse gaps — otherwise area/line paths
+                  produce invisible bare M x,y moves for 1-point segments */}
+              {(mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') &&
+                gapSegments
+                  .filter(seg => seg.length === 1)
+                  .map(seg => {
+                    const idx = seg[0];
+                    const c = displayCandles[idx];
+                    const cx = xOf(idx);
+                    const cy = yOf(c.close);
+                    return (
+                      <G key={`isol${c.timestamp}`}>
+                        <Circle cx={cx} cy={cy} r={5} fill="#8B5CF6" opacity={0.18} />
+                        <Circle cx={cx} cy={cy} r={3} fill="#A78BFA" />
+                      </G>
+                    );
+                  })
+              }
 
               {mode === 'bar' && displayCandles.map((c, i) => {
                 const up  = c.close >= c.open;
