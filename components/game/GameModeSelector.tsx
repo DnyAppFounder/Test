@@ -1,12 +1,16 @@
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Gamepad2, Trophy, Swords, Shield, ChevronRight } from 'lucide-react-native';
+import { Gamepad2, Trophy, Swords, Shield, ChevronRight, ArrowLeft } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
+import type { GameId } from '@/services/game/gameTypes';
 
 export type GameMode = 'free' | 'ranked' | 'sol_duel';
 
 interface Props {
+  gameId?: GameId;
+  gameName?: string;
   onSelect: (mode: GameMode) => void;
+  onBack?: () => void;
 }
 
 const MODES = [
@@ -14,7 +18,7 @@ const MODES = [
     key: 'free' as GameMode,
     icon: Gamepad2,
     label: 'Free Practice',
-    desc: 'Play DAWEN Rush without SOL.',
+    desc: 'Play without staking SOL.',
     sub: 'Score shown after run. No payout.',
     badge: 'INSTANT',
     badgeColor: colors.primary,
@@ -26,7 +30,7 @@ const MODES = [
     key: 'ranked' as GameMode,
     icon: Trophy,
     label: 'Ranked Practice',
-    desc: 'Play for real score on the leaderboard.',
+    desc: 'Submit your score to the leaderboard.',
     sub: 'No SOL required. Uses your profile.',
     badge: 'RANKED',
     badgeColor: '#C084FC',
@@ -48,19 +52,27 @@ const MODES = [
   },
 ] as const;
 
-export function GameModeSelector({ onSelect }: Props) {
+export function GameModeSelector({ gameId, gameName, onSelect, onBack }: Props) {
+  const displayName = gameName ?? 'Dawen Rush';
   return (
     <View style={styles.container}>
-      {/* Skill disclaimer */}
+      {onBack && (
+        <TouchableOpacity style={styles.backBtn} onPress={onBack} activeOpacity={0.7}>
+          <ArrowLeft size={16} color={colors.textMuted} strokeWidth={2} />
+          <Text style={styles.backText}>All Games</Text>
+        </TouchableOpacity>
+      )}
+
+      <Text style={styles.gameName}>{displayName}</Text>
+
       <View style={styles.disclaimer}>
         <Shield size={14} color='#C084FC' strokeWidth={2} />
         <Text style={styles.disclaimerText}>
-          DAWEN Rush Duel is a skill-based competition. Winners are decided by performance,
-          score, accuracy, and survival — not random chance.
+          {displayName} is a skill-based competition. Winners are decided by performance,
+          accuracy, and strategy — not random chance.
         </Text>
       </View>
 
-      {/* Mode cards */}
       {MODES.map(mode => {
         const Icon = mode.icon;
         return (
@@ -99,6 +111,29 @@ export function GameModeSelector({ onSelect }: Props) {
 
 const styles = StyleSheet.create({
   container: { gap: spacing.md },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  backText: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  gameName: {
+    fontSize: fontSize.xl,
+    fontWeight: '900',
+    color: colors.textPrimary,
+    marginTop: spacing.xs,
+  },
   disclaimer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -127,45 +162,21 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   iconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
+    width: 48, height: 48,
+    borderRadius: 14, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
   },
   body: { flex: 1 },
   titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: 3,
+    flexDirection: 'row', alignItems: 'center',
+    gap: spacing.sm, marginBottom: 3,
   },
-  label: {
-    fontSize: fontSize.md,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  badge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  badgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
+  label: { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary },
+  badge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  badgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   desc: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    fontWeight: '500',
-    marginBottom: 2,
+    fontSize: fontSize.sm, color: colors.textSecondary,
+    fontWeight: '500', marginBottom: 2,
   },
-  sub: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontWeight: '500',
-  },
+  sub: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
 });

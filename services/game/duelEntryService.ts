@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { GAME_TREASURY_WALLET } from './gameConfig';
+import type { GameId } from './gameTypes';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ export interface DuelEntry {
   refund_tx_signature: string | null;
   status: DuelEntryStatus;
   mode: DuelMode;
+  game_id: GameId;
   created_at: string;
 }
 
@@ -49,13 +51,25 @@ export interface GameResultInput {
   entry_id: string | null;
   wallet_address: string;
   mode: DuelMode;
+  game_id: GameId;
   score: number;
   survival_time_ms: number;
+  completion_time_ms?: number;
   orbs_collected: number;
   obstacles_hit: number;
   traps_hit: number;
   combo_max: number;
   accuracy: number;
+  // Aim Duel
+  hits?: number;
+  misses?: number;
+  // Runner
+  distance_units?: number;
+  // Memory Duel
+  pairs_found?: number;
+  // Decode 7 Fragments
+  fragments_found?: number;
+  mistakes?: number;
   raw_actions: object;
   session_id: string;
   map_seed: string | null;
@@ -81,6 +95,7 @@ export async function createDuelEntryAfterPayment(params: {
   badgeStatus: string;
   entryAmountSol: number;
   paymentTxSignature: string;
+  gameId: GameId;
 }): Promise<DuelEntry> {
   return callGameFunction('game-duel-entry', 'create', {
     wallet_address: params.walletAddress,
@@ -90,6 +105,7 @@ export async function createDuelEntryAfterPayment(params: {
     entry_amount_sol: params.entryAmountSol,
     payment_tx_signature: params.paymentTxSignature,
     treasury_wallet: GAME_TREASURY_WALLET,
+    game_id: params.gameId,
   });
 }
 
@@ -110,10 +126,12 @@ export async function cancelDuelEntryAndRefund(params: {
 export async function triggerMatchmaking(params: {
   entryId: string;
   walletAddress: string;
+  gameId: GameId;
 }): Promise<{ matched: boolean; match?: DuelMatch }> {
   return callGameFunction('game-duel-payout', 'match', {
     entry_id: params.entryId,
     wallet_address: params.walletAddress,
+    game_id: params.gameId,
   });
 }
 

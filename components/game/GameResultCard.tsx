@@ -3,23 +3,16 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Trophy, Target, Clock, Zap, Star, ExternalLink, RotateCcw } from 'lucide-react-native';
+import { Trophy, Target, Clock, Zap, Star, ExternalLink, RotateCcw, Crosshair, Route, Brain, BookOpen } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { DuelMatch, getMatchForEntry, finalizeMatchPayout } from '@/services/game/duelEntryService';
+import type { UnifiedGameResult, GameId } from '@/services/game/gameTypes';
 
-export interface GameResultData {
-  score: number;
-  survivalTimeMs: number;
-  orbsCollected: number;
-  trapsHit: number;
-  obstaclesHit: number;
-  comboMax: number;
-  accuracy: number;
-  sessionId: string;
-}
+export type { UnifiedGameResult as GameResultData };
 
 interface Props {
-  result: GameResultData;
+  result: UnifiedGameResult;
+  gameId?: GameId;
   mode: 'free' | 'ranked' | 'sol_duel';
   entryId?: string | null;
   matchId?: string | null;
@@ -40,7 +33,7 @@ function openSolscan(sig: string) {
   if (Platform.OS === 'web') (window as any).open(url, '_blank', 'noopener,noreferrer');
 }
 
-export function GameResultCard({ result, mode, entryId, matchId, walletAddress, entryAmountSol, onPlayAgain }: Props) {
+export function GameResultCard({ result, gameId = 'dawen_rush', mode, entryId, matchId, walletAddress, entryAmountSol, onPlayAgain }: Props) {
   const [match, setMatch] = useState<DuelMatch | null>(null);
   const [finalized, setFinalized] = useState(false);
   const [payoutTx, setPayoutTx] = useState<string | null>(null);
@@ -109,8 +102,18 @@ export function GameResultCard({ result, mode, entryId, matchId, walletAddress, 
     }
   }
 
+  // Game-specific accent color
+  const GAME_COLOR: Record<GameId, string> = {
+    dawen_rush: '#A78BFA',
+    dawen_aim_duel: '#FCD34D',
+    dawen_runner: '#34D399',
+    dawen_memory: '#60A5FA',
+    decode_7_fragments: '#F472B6',
+  };
+  const accentColor = GAME_COLOR[gameId];
+
   const scoreColor =
-    result.score >= 8000 ? '#A78BFA'
+    result.score >= 8000 ? accentColor
     : result.score >= 5000 ? colors.primary
     : result.score >= 2000 ? '#C084FC'
     : colors.textSecondary;
@@ -127,22 +130,54 @@ export function GameResultCard({ result, mode, entryId, matchId, walletAddress, 
       {/* Score hero */}
       <View style={styles.heroCard}>
         <LinearGradient
-          colors={['rgba(139,92,246,0.25)', 'rgba(0,0,0,0)']}
+          colors={[`${accentColor}33`, 'rgba(0,0,0,0)']}
           style={StyleSheet.absoluteFill}
         />
-        <View style={styles.gradeCircle}>
+        <View style={[styles.gradeCircle, { borderColor: accentColor, backgroundColor: `${accentColor}22` }]}>
           <Text style={[styles.gradeText, { color: scoreColor }]}>{grade}</Text>
         </View>
         <Text style={[styles.bigScore, { color: scoreColor }]}>{result.score.toLocaleString()}</Text>
         <Text style={styles.scoreLabel}>FINAL SCORE</Text>
       </View>
 
-      {/* Stats grid */}
+      {/* Stats grid — game-specific */}
       <View style={styles.statsGrid}>
-        <StatBox icon={Clock} label="Survived" value={fmtMs(result.survivalTimeMs)} />
-        <StatBox icon={Zap} label="Orbs" value={String(result.orbsCollected)} />
-        <StatBox icon={Star} label="Max Combo" value={`×${result.comboMax}`} />
-        <StatBox icon={Target} label="Accuracy" value={`${Math.round(result.accuracy * 100)}%`} />
+        {gameId === 'dawen_aim_duel' ? (
+          <>
+            <StatBox icon={Crosshair} label="Hits" value={String(result.hits)} color={accentColor} />
+            <StatBox icon={Target} label="Misses" value={String(result.misses)} color="#F87171" />
+            <StatBox icon={Star} label="Max Combo" value={`×${result.comboMax}`} color={accentColor} />
+            <StatBox icon={Clock} label="Accuracy" value={`${Math.round(result.accuracy * 100)}%`} color={accentColor} />
+          </>
+        ) : gameId === 'dawen_runner' ? (
+          <>
+            <StatBox icon={Route} label="Distance" value={`${result.distanceUnits}m`} color={accentColor} />
+            <StatBox icon={Clock} label="Survived" value={fmtMs(result.survivalTimeMs)} color={accentColor} />
+            <StatBox icon={Star} label="Max Combo" value={`×${result.comboMax}`} color={accentColor} />
+            <StatBox icon={Zap} label="Coins" value={String(result.orbsCollected)} color={accentColor} />
+          </>
+        ) : gameId === 'dawen_memory' ? (
+          <>
+            <StatBox icon={Brain} label="Pairs" value={`${result.pairsFound}/8`} color={accentColor} />
+            <StatBox icon={Target} label="Errors" value={String(result.mistakes)} color={result.mistakes > 5 ? '#F87171' : accentColor} />
+            <StatBox icon={Clock} label="Time" value={fmtMs(result.survivalTimeMs)} color={accentColor} />
+            <StatBox icon={Star} label="Accuracy" value={`${Math.round(result.accuracy * 100)}%`} color={accentColor} />
+          </>
+        ) : gameId === 'decode_7_fragments' ? (
+          <>
+            <StatBox icon={BookOpen} label="Fragments" value={`${result.fragmentsFound}/7`} color={accentColor} />
+            <StatBox icon={Target} label="Errors" value={String(result.mistakes)} color={result.mistakes > 5 ? '#F87171' : accentColor} />
+            <StatBox icon={Clock} label="Time" value={fmtMs(result.survivalTimeMs)} color={accentColor} />
+            <StatBox icon={Star} label="Accuracy" value={`${Math.round(result.accuracy * 100)}%`} color={accentColor} />
+          </>
+        ) : (
+          <>
+            <StatBox icon={Clock} label="Survived" value={fmtMs(result.survivalTimeMs)} color={accentColor} />
+            <StatBox icon={Zap} label="Orbs" value={String(result.orbsCollected)} color={accentColor} />
+            <StatBox icon={Star} label="Max Combo" value={`×${result.comboMax}`} color={accentColor} />
+            <StatBox icon={Target} label="Accuracy" value={`${Math.round(result.accuracy * 100)}%`} color={accentColor} />
+          </>
+        )}
       </View>
 
       {/* Duel result */}
@@ -204,10 +239,10 @@ export function GameResultCard({ result, mode, entryId, matchId, walletAddress, 
   );
 }
 
-function StatBox({ icon: Icon, label, value }: { icon: any; label: string; value: string }) {
+function StatBox({ icon: Icon, label, value, color = colors.primary }: { icon: any; label: string; value: string; color?: string }) {
   return (
     <View style={statStyles.box}>
-      <Icon size={14} color={colors.primary} strokeWidth={2} />
+      <Icon size={14} color={color} strokeWidth={2} />
       <Text style={statStyles.value}>{value}</Text>
       <Text style={statStyles.label}>{label}</Text>
     </View>

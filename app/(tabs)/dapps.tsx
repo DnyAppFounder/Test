@@ -16,11 +16,18 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { dexScreenerService } from '@/services/dexscreener/tokenDiscoveryService';
 import { submitGameResult, DuelEntry, DuelMatch } from '@/services/game/duelEntryService';
+import type { GameId, UnifiedGameResult } from '@/services/game/gameTypes';
+import { getGameDef } from '@/services/game/gameTypes';
 import { GameModeSelector, GameMode } from '@/components/game/GameModeSelector';
+import { GameHub } from '@/components/game/GameHub';
 import { SolDuelEntryPanel } from '@/components/game/SolDuelEntryPanel';
 import { SolDuelWaitingQueue } from '@/components/game/SolDuelWaitingQueue';
 import { DawenRushArena } from '@/components/game/DawenRushArena';
-import { GameResultCard, GameResultData } from '@/components/game/GameResultCard';
+import { DawenAimDuel } from '@/components/game/DawenAimDuel';
+import { DawenRunner } from '@/components/game/DawenRunner';
+import { DawenMemoryDuel } from '@/components/game/DawenMemoryDuel';
+import { Decode7Fragments } from '@/components/game/Decode7Fragments';
+import { GameResultCard } from '@/components/game/GameResultCard';
 import { TopRankLeaderboard } from '@/components/game/TopRankLeaderboard';
 import { DawenWorldPage } from '@/components/world/DawenWorldPage';
 
@@ -30,7 +37,7 @@ const SELL_MUTED = 'rgba(217,70,239,0.12)';
 
 type CityTab = 'token' | 'game' | 'rank';
 type DiscoverTab = 'featured' | 'trending' | 'new';
-type GameStage = 'menu' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result' | 'world';
+type GameStage = 'game_select' | 'mode_select' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result' | 'world';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -387,14 +394,20 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
   const { profile } = useProfile();
   const insets = useSafeAreaInsets();
 
-  const [stage, setStage] = useState<GameStage>('menu');
+  const [stage, setStage] = useState<GameStage>('game_select');
+  const [selectedGame, setSelectedGame] = useState<GameId | null>(null);
   const [mode, setMode] = useState<GameMode | null>(null);
   const [gameSeed, setGameSeed] = useState('');
   const [entry, setEntry] = useState<DuelEntry | null>(null);
   const [match, setMatch] = useState<DuelMatch | null>(null);
-  const [result, setResult] = useState<GameResultData | null>(null);
+  const [result, setResult] = useState<UnifiedGameResult | null>(null);
 
   const walletAddress = activeWallet?.address ?? '';
+
+  const handleGameSelect = (gameId: GameId) => {
+    setSelectedGame(gameId);
+    setStage('mode_select');
+  };
 
   const handleModeSelect = (m: GameMode) => {
     setMode(m);
@@ -420,7 +433,7 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     setTimeout(() => setStage('playing'), 3000);
   };
 
-  const handleGameEnd = async (r: GameResultData) => {
+  const handleGameEnd = async (r: UnifiedGameResult) => {
     setResult(r);
     setStage('result');
     onSetFullscreen?.(false);
@@ -431,13 +444,21 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
         entry_id: entry?.id ?? null,
         wallet_address: walletAddress,
         mode: mode!,
+        game_id: selectedGame ?? 'dawen_rush',
         score: r.score,
         survival_time_ms: r.survivalTimeMs,
+        completion_time_ms: r.completionTimeMs,
         orbs_collected: r.orbsCollected,
         obstacles_hit: r.obstaclesHit,
         traps_hit: r.trapsHit,
         combo_max: r.comboMax,
         accuracy: r.accuracy,
+        hits: r.hits,
+        misses: r.misses,
+        distance_units: r.distanceUnits,
+        pairs_found: r.pairsFound,
+        fragments_found: r.fragmentsFound,
+        mistakes: r.mistakes,
         raw_actions: {},
         session_id: r.sessionId,
         map_seed: gameSeed,
@@ -448,8 +469,15 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
   };
 
   const handlePlayAgain = () => {
-    setStage('menu'); setMode(null); setEntry(null); setMatch(null); setResult(null); setGameSeed('');
+    setStage('game_select');
+    setSelectedGame(null); setMode(null); setEntry(null);
+    setMatch(null); setResult(null); setGameSeed('');
     onSetFullscreen?.(false);
+  };
+
+  const handleBackToGameSelect = () => {
+    setStage('game_select');
+    setSelectedGame(null); setMode(null);
   };
 
   // ── DAWEN World: full screen ──
@@ -459,23 +487,36 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
         walletAddress={walletAddress}
         username={profile?.username ?? ''}
         isPremium={profile?.is_premium ?? false}
-        onExit={() => { setStage('menu'); onSetFullscreen?.(false); }}
+        onExit={() => { setStage('game_select'); onSetFullscreen?.(false); }}
       />
     );
   }
 
   // ── Playing stage: no scroll, arena fills available space ──
   if (stage === 'playing' && gameSeed) {
+    const arenaProps = {
+      seed: gameSeed,
+      mode: mode!,
+      entryId: entry?.id,
+      matchId: match?.id,
+      onGameEnd: handleGameEnd,
+    };
     return (
       <View style={[gameStyles.arenaContainer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <DawenRushArena
-          seed={gameSeed}
-          mode={mode!}
-          entryId={entry?.id}
-          matchId={match?.id}
-          entryAmountSol={entry?.entry_amount_sol}
-          onGameEnd={handleGameEnd}
-        />
+        {selectedGame === 'dawen_aim_duel' ? (
+          <DawenAimDuel {...arenaProps} />
+        ) : selectedGame === 'dawen_runner' ? (
+          <DawenRunner {...arenaProps} />
+        ) : selectedGame === 'dawen_memory' ? (
+          <DawenMemoryDuel {...arenaProps} />
+        ) : selectedGame === 'decode_7_fragments' ? (
+          <Decode7Fragments {...arenaProps} />
+        ) : (
+          <DawenRushArena
+            {...arenaProps}
+            entryAmountSol={entry?.entry_amount_sol}
+          />
+        )}
       </View>
     );
   }
@@ -486,9 +527,9 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       contentContainerStyle={gameStyles.scrollContent}
       showsVerticalScrollIndicator={false}
     >
-      {stage === 'menu' && (
+      {stage === 'game_select' && (
         <>
-          <GameModeSelector onSelect={handleModeSelect} />
+          <GameHub onSelect={handleGameSelect} />
           <TouchableOpacity
             style={gameStyles.worldCard}
             onPress={() => { setStage('world'); onSetFullscreen?.(true); }}
@@ -516,13 +557,22 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
         </>
       )}
 
+      {stage === 'mode_select' && selectedGame && (
+        <GameModeSelector
+          gameId={selectedGame}
+          gameName={getGameDef(selectedGame).name}
+          onSelect={handleModeSelect}
+          onBack={handleBackToGameSelect}
+        />
+      )}
+
       {stage === 'entry' && (
         <SolDuelEntryPanel
           username={profile?.username ?? null}
           avatarUrl={profile?.avatar_url ?? null}
           badgeStatus={profile?.is_premium ? 'premium' : 'none'}
           onEntryCreated={handleEntryCreated}
-          onBack={() => setStage('menu')}
+          onBack={() => setStage('mode_select')}
         />
       )}
 
@@ -542,6 +592,7 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       {stage === 'result' && result && (
         <GameResultCard
           result={result}
+          gameId={selectedGame ?? 'dawen_rush'}
           mode={mode!}
           entryId={entry?.id}
           matchId={match?.id}
