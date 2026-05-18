@@ -672,14 +672,11 @@ export function TradingViewChart({
     return [...withoutSameBucket, activeLiveCandle].sort((a, b) => a.timestamp - b.timestamp);
   }, [candles, activeLiveCandle, bucketMs]);
 
-  // For tokens with very few real candles (≤5), always show all of them
-  // rather than relying on the clock-based window which may leave them off-screen.
-  const isSparse = mergedCandles.length > 0 && mergedCandles.length <= 5;
-  const filledRaw = isSparse
-    ? mergedCandles
-    : mergedCandles.filter(c =>
-        c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
-      );
+  // Filter to the visible time window — auto-scroll handles the case where all
+  // candles are older than the window by panning back automatically.
+  const filledRaw = mergedCandles.filter(c =>
+    c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+  );
 
   // Apply MCAP scale for rendering
   const displayCandles = mcapScale !== 1
@@ -696,38 +693,18 @@ export function TradingViewChart({
   const n = displayCandles.length;
 
   // ── Adaptive x-range ─────────────────────────────────────────────────────
+  // Keep the time axis anchored to the standard visibleMs window so candle
+  // positions are honest (no stretching to fill sparse data).
+  // Only adjust leftward when all data sits in the far-right of the window.
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
   if (displayCandles.length > 0 && panOffsetCandles === 0) {
-    if (isSparse) {
-      // Sparse data: fit the window snugly around the real candle timestamps.
-      // Find the effective last timestamp: when the live synthetic candle is far
-      // ahead of history, cap it at lastHistTs + 1 bucket to avoid empty gaps.
-      const histCandles = displayCandles.filter(c => c.volume > 0);
-      const firstTs     = displayCandles[0].timestamp;
-      const lastHistTs  = histCandles.length > 0
-        ? histCandles[histCandles.length - 1].timestamp
-        : displayCandles[displayCandles.length - 1].timestamp;
-      const liveC       = displayCandles[displayCandles.length - 1];
-      const lastEffTs   =
-        liveC.volume === 0 && liveC.timestamp - lastHistTs > bucketMs * 2
-          ? lastHistTs + bucketMs           // cap live-gap at 1 bucket
-          : displayCandles[displayCandles.length - 1].timestamp;
-      const dataSpan    = Math.max(lastEffTs - firstTs, bucketMs);
-      // More padding when fewer candles so a single candle doesn't dominate
-      const padBuckets  = displayCandles.length === 1 ? 3
-                        : displayCandles.length <= 3  ? 2
-                        : 1.5;
-      const padMs       = bucketMs * padBuckets;
-      xLeft      = firstTs - padMs;
-      xVisibleMs = dataSpan + padMs * 2 + bucketMs;
-    } else {
-      // Dense data: shift window left only when data starts unusually far right
-      const firstDataTs = displayCandles[0].timestamp;
-      if (firstDataTs > leftTime + visibleMs * 0.35) {
-        xLeft      = firstDataTs - bucketMs * 2;
-        xVisibleMs = rightTime - xLeft;
-      }
+    const firstDataTs = displayCandles[0].timestamp;
+    // Slide the window left so the first real candle is never hidden off the left
+    // edge, but keep at least bucketMs * 2 of left-padding before it.
+    if (firstDataTs > leftTime + visibleMs * 0.35) {
+      xLeft      = firstDataTs - bucketMs * 2;
+      xVisibleMs = rightTime - xLeft;
     }
   }
   leftTimeRef.current  = xLeft;
@@ -744,9 +721,10 @@ export function TradingViewChart({
     const dcLen   = displayCandles.length;
     const dcFirst = displayCandles[0];
     const dcLast  = displayCandles[dcLen - 1];
-    // Restrict to visible window for scale computation
+    // Restrict to visible window for scale computation — use xLeft (post-adjustment)
+    // so the Y scale matches exactly what is rendered, not the wider raw time window.
     const visibleOnly = displayCandles.filter(
-      c => c.timestamp >= leftTime && c.timestamp <= rightTime
+      c => c.timestamp >= xLeft && c.timestamp <= rightTime
     );
     const scaleBase   = visibleOnly.length > 0 ? visibleOnly : displayCandles;
     // Real candles (volume > 0) take priority for scale; synthetic live (volume=0) expands it
@@ -796,13 +774,17 @@ export function TradingViewChart({
     }
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
-  const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : plotW / visibleBuckets;
-  // Hard caps: keep candles and bars proportional at all densities.
-  // Lower caps prevent fat slabs on sparse / higher timeframes.
+  // slotW is the pixel-width of one candle slot based on the timeframe's TARGET density,
+  // not on how many candles are actually visible. This prevents sparse data from making
+  // candles fat — the body width stays consistent regardless of data density.
+  const slotW = plotW / visibleBuckets;
+  // pixelPerBucket still used for volume bar sizing (scale with actual density)
+  const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : slotW;
   const MAX_CANDLE_W = isMobile ? 14 : 10;
-  const MAX_BAR_W    = isMobile ?  6 :  5; // bar tick half-width (open left / close right)
-  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2   : 1.5, pixelPerBucket * 0.38));
-  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 3   : 2,   pixelPerBucket * (isMobile ? 0.60 : 0.55)));
+  const MAX_BAR_W    = isMobile ?  6 :  5;
+  // Body/tick widths derived from slotW so they never widen due to sparse data
+  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2 : 1.5, slotW * 0.38));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 3 : 2,   slotW * (isMobile ? 0.60 : 0.55)));
 
   function xOf(i: number): number {
     const c = displayCandles[i];
@@ -1180,9 +1162,9 @@ export function TradingViewChart({
   const contY            = lastY;
   const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
-  // Gap-aware segment builder: break paths when two candles are > 3 buckets apart.
+  // Gap-aware segment builder: break paths when two candles are > 2.5 buckets apart.
   // Prevents fake flat bridges on sparse / low-liquidity tokens.
-  const GAP_THRESHOLD_MS = bucketMs * 3;
+  const GAP_THRESHOLD_MS = bucketMs * 2.5;
   const gapSegments: number[][] = [];
   {
     let seg: number[] = [];
@@ -1221,8 +1203,6 @@ export function TradingViewChart({
     const segRightX = (isLastSeg && showContinuation ? contRightX : xOf(lastIdx)).toFixed(1);
     return `${linePart} L${segRightX},${lastYStr} L${segRightX},${bottomY} L${firstX},${bottomY} Z`;
   });
-  // Convenience for single-path gradient fills (join all segments)
-  const areaPath = areaPaths.join(' ');
 
   // ── Smart grid: use "nice" steps to avoid duplicate rounded labels ─────────
   // Computes up to `gridCount` evenly-spaced price levels using a "round number" step
