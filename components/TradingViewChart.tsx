@@ -265,6 +265,13 @@ export function TradingViewChart({
   // stale API responses from overwriting fresher live prices.
   const latestPriceTsRef = useRef<number>(0);
 
+  // true = chart SVG is intersecting the viewport; RAF skips setClockTick when false.
+  const chartVisibleRef = useRef(true);
+  // Set to true while applying a liveTokenStore-sourced update to prevent push-back.
+  const fromStoreRef = useRef(false);
+  // Set to true once the user manually picks a chart mode; suppresses auto-detection.
+  const userSelectedModeRef = useRef(false);
+
   const [clockTick, setClockTick] = useState(0);
   const rightTimeRef  = useRef<number>(Date.now());
   const leftTimeRef   = useRef<number>(Date.now() - 3_600_000 * 60);
@@ -332,10 +339,10 @@ export function TradingViewChart({
     }
 
     const tick = (now: number) => {
-      // Do nothing (including no ref writes) when the tab is hidden — avoids
-      // unnecessary work and prevents the right-edge clock from jumping forward
-      // when the tab regains focus after a long pause.
-      if (!tabHidden) {
+      // Skip work when the tab is hidden OR chart is scrolled off-screen.
+      // Prevents the right-edge clock from jumping forward after long pauses and
+      // avoids unnecessary re-renders when the chart is not visible.
+      if (!tabHidden && chartVisibleRef.current) {
         rightTimeRef.current = Date.now();
         if (now - lastRender >= RENDER_INTERVAL) {
           lastRender = now;
@@ -353,6 +360,24 @@ export function TradingViewChart({
     };
   }, []);
 
+  // Viewport visibility — pause setClockTick when chart is scrolled off-screen.
+  // Uses IntersectionObserver on web; native always stays active.
+  // Re-runs when hasData changes so the observer attaches after the SVG mounts.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof IntersectionObserver === 'undefined') return;
+    if (!hasData) { chartVisibleRef.current = true; return; }
+    const el = svgContainerRef.current as unknown as Element;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      chartVisibleRef.current = entries[0]?.isIntersecting ?? true;
+    }, { threshold: 0 });
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      chartVisibleRef.current = true;
+    };
+  }, [hasData]);
+
   // ── Single price pipeline ────────────────────────────────────────────────────
   // All price sources funnel through applyLivePrice. Each call carries a timestamp
   // so that a late-arriving REST response never overwrites a fresher live price.
@@ -368,7 +393,8 @@ export function TradingViewChart({
     latestPriceTsRef.current = Math.max(latestPriceTsRef.current, ts);
     livePriceRef.current = price;
     setLivePrice(price);
-    if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
+    // Don't push back to store when the update itself came from the store — prevents loop.
+    if (tokenMint && !fromStoreRef.current) liveTokenStore.pushPrice(tokenMint, price);
 
     // REST/WS quote sources only update the header price display — they must NOT
     // create or mutate activeLiveCandle because they carry no real trade timestamp.
@@ -467,7 +493,19 @@ export function TradingViewChart({
     livePriceRef.current = null;
     latestPriceTsRef.current = 0;
     hasAutoScrolledRef.current = false;
+    // Reset mode selection so auto-detection can run for the new token.
+    userSelectedModeRef.current = false;
   }, [tokenMint]);
+
+  // Auto-select chart mode based on token liquidity when data first loads.
+  // Sparse tokens default to candlestick (area fill looks bad with few candles).
+  // Liquid tokens default to area. Skipped once the user manually picks a mode.
+  useEffect(() => {
+    if (!hasData || candles.length === 0 || userSelectedModeRef.current) return;
+    const sevenDaysAgo = Date.now() - 7 * 86_400_000;
+    const recentCount = candles.filter(c => c.timestamp >= sevenDaysAgo).length;
+    setMode(recentCount >= 20 ? 'area' : 'candlestick');
+  }, [hasData, tokenMint]);
 
   const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
     if (!tokenMint) { if (!silent) setLoading(false); return; }
@@ -586,13 +624,16 @@ export function TradingViewChart({
     applyLivePrice(externalPrice, Date.now() - 2000, false);
   }, [resolvedInfo?.price, applyLivePrice]);
 
-  // liveTokenStore subscription — pushed by other parts of the app
+  // liveTokenStore subscription — pushed by other parts of the app.
+  // fromStoreRef prevents applyLivePrice from pushing right back into the store.
   useEffect(() => {
     if (!tokenMint) return;
-    const unsub = liveTokenStore.watch(tokenMint, (price) => {
-      // liveTokenStore aggregates prices from various parts of the app.
-      // Without a confirmed real-trade source flag, treat as display-only.
-      if (price > 0) applyLivePrice(price, Date.now(), false);
+    const unsub = liveTokenStore.watch(tokenMint, (state) => {
+      if (state.price > 0) {
+        fromStoreRef.current = true;
+        applyLivePrice(state.price, state.lastUpdatedAt, false);
+        fromStoreRef.current = false;
+      }
     });
     return unsub;
   }, [tokenMint, applyLivePrice]);
@@ -699,22 +740,28 @@ export function TradingViewChart({
   const MIN_LIVE_CANDLES = 6;
   let filledRaw: CandleData[];
   {
-    const standardRaw = mergedCandles.filter(c =>
-      c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
-    );
-    if (panOffsetCandles === 0 && standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
-      // Not enough candles in the live window — include recent historical context.
-      // When the last merged candle is old (> 3 buckets ago), cap the takeCount to
-      // avoid pulling in too much history and creating a huge leftward expansion.
-      const lastMergedTs = mergedCandles[mergedCandles.length - 1].timestamp;
-      const isOldData = (rightTime - lastMergedTs) > bucketMs * 3;
-      const maxTake = isOldData
-        ? Math.min(Math.max(MIN_LIVE_CANDLES * 2, Math.floor(visibleBuckets * 0.4)), mergedCandles.length)
-        : Math.min(visibleBuckets, mergedCandles.length);
-      const takeCount = Math.min(maxTake, mergedCandles.length);
-      filledRaw = mergedCandles.slice(-takeCount);
+    if (timeframe === 'ALL') {
+      // ALL mode: show every candle in history — the adaptive x-range below will
+      // fit the full span without constraining to the standard visibleMs window.
+      filledRaw = mergedCandles;
     } else {
-      filledRaw = standardRaw;
+      const standardRaw = mergedCandles.filter(c =>
+        c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+      );
+      if (panOffsetCandles === 0 && standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
+        // Not enough candles in the live window — include recent historical context.
+        // When the last merged candle is old (> 3 buckets ago), cap the takeCount to
+        // avoid pulling in too much history and creating a huge leftward expansion.
+        const lastMergedTs = mergedCandles[mergedCandles.length - 1].timestamp;
+        const isOldData = (rightTime - lastMergedTs) > bucketMs * 3;
+        const maxTake = isOldData
+          ? Math.min(Math.max(MIN_LIVE_CANDLES * 2, Math.floor(visibleBuckets * 0.4)), mergedCandles.length)
+          : Math.min(visibleBuckets, mergedCandles.length);
+        const takeCount = Math.min(maxTake, mergedCandles.length);
+        filledRaw = mergedCandles.slice(-takeCount);
+      } else {
+        filledRaw = standardRaw;
+      }
     }
   }
 
@@ -740,19 +787,21 @@ export function TradingViewChart({
   //   2. Data was expanded backward past leftTime (sparse live mode: fit all).
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
-  if (displayCandles.length > 0 && panOffsetCandles === 0) {
+  if (displayCandles.length > 0) {
     const firstDataTs = displayCandles[0].timestamp;
-    // Case 1: data starts past 35% of the window (normal sparse token)
-    // Case 2: data was expanded back before leftTime (sparse live expansion)
-    if (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime) {
+    // ALL always fits full data range; other timeframes adapt only when data is outside
+    // the standard window or when sparse data was expanded beyond leftTime.
+    const shouldAdapt = timeframe === 'ALL' ||
+      (panOffsetCandles === 0 &&
+        (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime));
+    if (shouldAdapt) {
       xLeft = firstDataTs - bucketMs * 2;
-      // Cap the right edge of the visible window when data is old and no live candle
-      // is active — prevents blank dead space on the right side of the chart for
-      // tokens with infrequent trading. Allow a small future context (up to 6 buckets).
+      // Cap right edge: prevents blank dead space for tokens with old/infrequent trades.
+      // For ALL mode, allow the right edge to reach current time naturally.
       const futureCtx = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
       const lastDataTs = displayCandles[displayCandles.length - 1].timestamp;
       const gapToNow = rightTime - lastDataTs;
-      const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
+      const cappedRight = (gapToNow > futureCtx && !activeLiveCandle && timeframe !== 'ALL')
         ? lastDataTs + futureCtx
         : rightTime;
       xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
@@ -825,10 +874,11 @@ export function TradingViewChart({
     }
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
-  // slotW is the pixel-width of one candle slot based on the timeframe's TARGET density,
-  // not on how many candles are actually visible. This prevents sparse data from making
-  // candles fat — the body width stays consistent regardless of data density.
-  const slotW = plotW / visibleBuckets;
+  // slotW: pixel-width of one candle slot.
+  // For ALL mode we base it on the actual candle count so candles don't collide.
+  // For other modes we use the target density (visibleBuckets) to keep widths stable.
+  const effectiveBuckets = (timeframe === 'ALL' && n > visibleBuckets) ? n : visibleBuckets;
+  const slotW = plotW / effectiveBuckets;
   // pixelPerBucket still used for volume bar sizing (scale with actual density)
   const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : slotW;
   const MAX_CANDLE_W = isMobile ? 14 : 10;
@@ -1099,7 +1149,7 @@ export function TradingViewChart({
               <TouchableOpacity
                 key={m.key}
                 style={[styles.modePanelItem, active && styles.modePanelItemActive]}
-                onPress={() => { setMode(m.key); setShowModePanel(false); }}
+                onPress={() => { userSelectedModeRef.current = true; setMode(m.key); setShowModePanel(false); }}
                 activeOpacity={0.75}>
                 <IconComp size={14} color={active ? '#fff' : 'rgba(255,255,255,0.45)'} strokeWidth={active ? 2.5 : 2} />
                 <Text style={[styles.modePanelLabel, active && styles.modePanelLabelActive]}>{m.label}</Text>
@@ -1352,7 +1402,8 @@ export function TradingViewChart({
           <Text style={styles.crosshairDate}>{fmtDateTime(crosshair.ts)}</Text>
           <Text style={styles.crosshairPrice}>{fmtValue(crosshair.price, valueMode)}</Text>
           <Text style={[styles.crosshairPct, { color: (crosshair.pct ?? 0) >= 0 ? '#10B981' : '#EC4899' }]}>
-            {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%
+            {(crosshair.pct ?? 0) >= 0 ? '+' : ''}{crosshair.pct?.toFixed(2)}%{' '}
+            <Text style={styles.crosshairPctRange}>range</Text>
           </Text>
           <TouchableOpacity onPress={dismissCrosshair} style={styles.crosshairClose}>
             <Text style={styles.crosshairCloseText}>✕</Text>
@@ -1750,6 +1801,7 @@ const styles = StyleSheet.create({
   crosshairDate:  { fontSize: 10, color: colors.textMuted, fontWeight: '600', flex: 1 },
   crosshairPrice: { fontSize: 11, color: colors.textPrimary, fontWeight: '800' },
   crosshairPct:   { fontSize: 11, fontWeight: '700', minWidth: 52, textAlign: 'right' },
+  crosshairPctRange: { fontSize: 9, fontWeight: '400', color: 'rgba(255,255,255,0.35)' },
   crosshairClose: { padding: 4 },
   crosshairCloseText: { fontSize: 11, color: colors.textMuted },
   chartArea: { position: 'relative' },
