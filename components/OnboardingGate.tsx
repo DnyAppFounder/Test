@@ -27,6 +27,10 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   // key, which then gets read by every future wallet address via the legacy-key
   // fallback in readKey(), silently skipping all onboarding steps.
   useEffect(() => {
+    console.log('[OnboardingGate] isReady:', isReady, '| nextStep:', nextStep);
+  }, [isReady, nextStep]);
+
+  useEffect(() => {
     if (isReady && activeWallet && nextStep === null && !onboardingComplete) {
       completeOnboarding(profile?.id);
       if (profile?.id) logEvent(profile.id, 'onboarding_completed');

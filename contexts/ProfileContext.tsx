@@ -47,10 +47,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
+    console.log('[ProfileContext] profile fetch started for', activeAddress.slice(0, 8));
     setLoading(true);
     try {
       const p = await SocialService.getOrCreateProfile(activeAddress);
       setProfile(p);
+      console.log('[ProfileContext] profile fetch finished:', p?.username || '(no username)');
     } catch (e) {
       console.error('[ProfileContext] refreshProfile error:', e);
     } finally {

@@ -396,7 +396,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
         { pubkey: token2022ProgramId, isSigner: false, isWritable: false }, // Token-2022
       ],
       // 0x01 = CreateIdempotent
-      data: Buffer.from([1]),
+      data: new Uint8Array([1]),
     }));
   }
 

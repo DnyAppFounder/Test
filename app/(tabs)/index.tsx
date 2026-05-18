@@ -34,7 +34,6 @@ import { PortfolioTracker } from '@/components/PortfolioTracker';
 import { WalletActivity } from '@/components/WalletActivity';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import SparklineChart from '@/components/SparklineChart';
-import { useLiveToken } from '@/hooks/useLiveToken';
 import { AnimatedBalance } from '@/components/AnimatedBalance';
 
 type TabKey = 'market' | 'assets' | 'watchlist' | 'portfolio' | 'activity';
@@ -50,9 +49,9 @@ function DiscoverTokenRow({
   isLast: boolean;
   onPress: () => void;
 }) {
-  const live = useLiveToken(token.address);
-  const price = (live?.price && live.price > 0) ? live.price : token.price;
-  const change = live?.priceChange24h ?? token.priceChange24h;
+  // Use data from parent's batch fetch — no per-row polling to avoid overloading the device
+  const price = token.price;
+  const change = token.priceChange24h;
   const changePositive = change >= 0;
   return (
     <TouchableOpacity
@@ -94,10 +93,10 @@ function WatchlistTokenRow({
   onPress: () => void;
   onRemove: () => void;
 }) {
-  const live = useLiveToken(item.token_address);
-  const price = (live?.price && live.price > 0) ? live.price : (baseData?.price ?? 0);
-  const change = live?.priceChange24h ?? baseData?.priceChange24h ?? 0;
-  const marketCap = live?.marketCap ?? baseData?.marketCap;
+  // Use enriched data from parent's batch fetch — no per-row polling
+  const price = baseData?.price ?? 0;
+  const change = baseData?.priceChange24h ?? 0;
+  const marketCap = baseData?.marketCap;
   const isUp = change >= 0;
   const image = baseData?.image;
   const sparkData = baseData?.sparkline && baseData.sparkline.length >= 2 ? baseData.sparkline :

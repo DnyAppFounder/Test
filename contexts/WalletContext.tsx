@@ -327,12 +327,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
     const initialize = async () => {
       if (!mounted) return;
-      console.log('[WalletContext] Initializing — loading accounts and restoring session');
+      console.log('[WalletContext] wallet reconnect effect started');
       await loadAccounts();
+      console.log('[WalletContext] accounts loaded');
       await restoreExternalWallet();
+      console.log('[WalletContext] session restore complete');
       if (mounted) {
         setIsInitialized(true);
-        console.log('[WalletContext] Initialized');
+        console.log('[WalletContext] initialized — isInitialized=true');
       }
     };
     initialize();

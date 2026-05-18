@@ -296,7 +296,15 @@ export default function RewardsScreen() {
 
           <View style={styles.codeCard}>
             <View style={styles.codeDisplay}>
-              <Text style={styles.codeText}>{referralCode || (loading ? 'Loading...' : '—')}</Text>
+              {referralCode ? (
+                <Text style={styles.codeText}>{referralCode}</Text>
+              ) : (
+                <TouchableOpacity onPress={loadData} activeOpacity={0.7} style={{ alignItems: 'center' }}>
+                  <Text style={[styles.codeText, { fontSize: 16, color: colors.textMuted }]}>
+                    Tap to generate code
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             {!!referralCode && (

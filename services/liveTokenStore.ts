@@ -23,7 +23,7 @@ interface WatchEntry {
   isFetching: boolean;
 }
 
-const POLL_INTERVAL = 10_000;
+const POLL_INTERVAL = 30_000;
 const DEX_BASE = 'https://api.dexscreener.com';
 
 function makeDefault(mint: string): LiveTokenState {
