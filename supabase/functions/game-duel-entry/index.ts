@@ -247,6 +247,8 @@ Deno.serve(async (req: Request) => {
 
       const badgeStatus = profile?.is_premium ? "premium" : "none";
 
+      const gameId = (body.game_id as string) || "dawen_rush";
+
       const { data: entry, error: insertErr } = await db
         .from("duel_entries")
         .insert({
@@ -259,6 +261,7 @@ Deno.serve(async (req: Request) => {
           payment_tx_signature: paymentTxSignature,
           status: "waiting",
           mode: "sol_duel",
+          game_id: gameId,
         })
         .select()
         .single();

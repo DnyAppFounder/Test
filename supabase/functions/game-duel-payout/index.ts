@@ -15,7 +15,14 @@ const TREASURY_PK_RAW = Deno.env.get("GAME_TREASURY_PRIVATE_KEY") || "";
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PLATFORM_FEE_BPS = 500; // 5%
 const MAX_SCORE = 10_000;
-const GAME_DURATION_MS = 45_000;
+
+const GAME_DURATION_MAP: Record<string, number> = {
+  dawen_rush:         45_000,
+  dawen_aim_duel:     30_000,
+  dawen_runner:       60_000,
+  dawen_memory:      180_000,
+  decode_7_fragments: 300_000,
+};
 
 // ─── Solana helpers ───────────────────────────────────────────────────────────
 
@@ -85,15 +92,27 @@ function validateScore(result: Record<string, unknown>): { valid: boolean; reaso
   const score = Number(result.score);
   if (score < 0 || score > MAX_SCORE) return { valid: false, reason: "Score out of range" };
 
+  const gameId = (result.game_id as string) || "dawen_rush";
+  const maxDurationMs = (GAME_DURATION_MAP[gameId] ?? 300_000) + 10_000;
   const survMs = Number(result.survival_time_ms);
-  if (survMs < 0 || survMs > GAME_DURATION_MS + 5000) {
+  if (survMs < 0 || survMs > maxDurationMs) {
     return { valid: false, reason: "Survival time out of range" };
   }
 
-  const orbs = Number(result.orbs_collected);
-  const traps = Number(result.traps_hit);
-  const obs = Number(result.obstacles_hit);
-  if (orbs < 0 || traps < 0 || obs < 0) return { valid: false, reason: "Negative action counts" };
+  if (gameId === "dawen_rush") {
+    const orbs = Number(result.orbs_collected ?? 0);
+    const traps = Number(result.traps_hit ?? 0);
+    const obs = Number(result.obstacles_hit ?? 0);
+    if (orbs < 0 || traps < 0 || obs < 0) return { valid: false, reason: "Negative action counts" };
+  } else if (gameId === "dawen_aim_duel") {
+    if (Number(result.hits ?? 0) < 0 || Number(result.misses ?? 0) < 0) return { valid: false, reason: "Negative hit counts" };
+  } else if (gameId === "dawen_memory") {
+    const pairs = Number(result.pairs_found ?? 0);
+    if (pairs < 0 || pairs > 8) return { valid: false, reason: "Invalid pairs count" };
+  } else if (gameId === "decode_7_fragments") {
+    const frags = Number(result.fragments_found ?? 0);
+    if (frags < 0 || frags > 7) return { valid: false, reason: "Invalid fragments count" };
+  }
 
   return { valid: true };
 }
@@ -202,12 +221,15 @@ Deno.serve(async (req: Request) => {
         return Response.json({ matched: false, reason: "Entry not waiting" }, { headers: corsHeaders });
       }
 
-      // Find opponent: same amount, different wallet, oldest first
+      const gameId = (body.game_id as string) || myEntry.game_id || "dawen_rush";
+
+      // Find opponent: same game, same amount, different wallet, oldest first
       const { data: opponent } = await db
         .from("duel_entries")
         .select("*")
         .eq("status", "waiting")
         .eq("entry_amount_sol", myEntry.entry_amount_sol)
+        .eq("game_id", gameId)
         .neq("wallet_address", walletAddress)
         .neq("id", entryId)
         .order("created_at", { ascending: true })
@@ -237,6 +259,7 @@ Deno.serve(async (req: Request) => {
         .insert({
           entry_amount_sol: myEntry.entry_amount_sol,
           match_seed: matchSeed,
+          game_id: gameId,
           player1_entry_id: opponent.id,
           player2_entry_id: myEntry.id,
           player1_user_id: opponent.user_id,
@@ -338,13 +361,21 @@ Deno.serve(async (req: Request) => {
           user_id: result.user_id ?? null,
           wallet_address: result.wallet_address,
           mode: result.mode,
+          game_id: result.game_id ?? "dawen_rush",
           score: result.score,
           survival_time_ms: result.survival_time_ms,
-          orbs_collected: result.orbs_collected,
-          obstacles_hit: result.obstacles_hit,
-          traps_hit: result.traps_hit,
-          combo_max: result.combo_max,
-          accuracy: result.accuracy,
+          completion_time_ms: result.completion_time_ms ?? null,
+          orbs_collected: result.orbs_collected ?? 0,
+          obstacles_hit: result.obstacles_hit ?? 0,
+          traps_hit: result.traps_hit ?? 0,
+          combo_max: result.combo_max ?? 0,
+          accuracy: result.accuracy ?? 0,
+          hits: result.hits ?? null,
+          misses: result.misses ?? null,
+          distance_units: result.distance_units ?? null,
+          pairs_found: result.pairs_found ?? null,
+          fragments_found: result.fragments_found ?? null,
+          mistakes: result.mistakes ?? null,
           raw_actions: result.raw_actions,
           session_id: sessionId,
           map_seed: result.map_seed ?? null,
