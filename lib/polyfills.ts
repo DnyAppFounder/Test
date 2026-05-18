@@ -1,10 +1,13 @@
 import { Buffer } from 'buffer';
 
-const g = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : (typeof window !== 'undefined' ? window : {}) as any;
+// Set Buffer on every possible global reference — no conditional check,
+// so a partially-initialized global is always overwritten with the real implementation.
+if (typeof globalThis !== 'undefined') (globalThis as any).Buffer = Buffer;
+if (typeof global !== 'undefined') (global as any).Buffer = Buffer;
+if (typeof window !== 'undefined') (window as any).Buffer = Buffer;
+if (typeof self !== 'undefined') (self as any).Buffer = Buffer;
 
-if (!g.Buffer) {
-  g.Buffer = Buffer;
-}
+const g: any = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : (typeof window !== 'undefined' ? window : {});
 
 // Ensure process.version exists (readable-stream calls process.version.slice() at init)
 if (!g.process) {
