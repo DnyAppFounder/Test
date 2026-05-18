@@ -329,10 +329,15 @@ export function TradingViewChart({
     }
 
     const tick = (now: number) => {
-      rightTimeRef.current = Date.now();
-      if (!tabHidden && now - lastRender >= RENDER_INTERVAL) {
-        lastRender = now;
-        setClockTick(t => t + 1);
+      // Do nothing (including no ref writes) when the tab is hidden — avoids
+      // unnecessary work and prevents the right-edge clock from jumping forward
+      // when the tab regains focus after a long pause.
+      if (!tabHidden) {
+        rightTimeRef.current = Date.now();
+        if (now - lastRender >= RENDER_INTERVAL) {
+          lastRender = now;
+          setClockTick(t => t + 1);
+        }
       }
       rafId = requestAnimationFrame(tick);
     };
@@ -361,7 +366,11 @@ export function TradingViewChart({
     if (tokenMint) liveTokenStore.pushPrice(tokenMint, price);
 
     const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
-    const activeBucket = Math.floor(Date.now() / bMs) * bMs;
+    // Use the real event timestamp for bucket allocation so the live candle
+    // lands at the same bucket as the source trade, not at Date.now() which
+    // can be ahead of historical data and create a visual gap.
+    const priceEventTs = sourceTs ?? Date.now();
+    const activeBucket = Math.floor(priceEventTs / bMs) * bMs;
     const hist = candlesRef.current;
     const lastHistClose = hist.length > 0 ? hist[hist.length - 1].close : price;
 
@@ -504,6 +513,10 @@ export function TradingViewChart({
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
     const fetchPrice = async () => {
+      // Skip REST polling when a real-time source (WS, liveTokenStore, Helius)
+      // already provided a fresh price in the last 7 seconds — avoids stale
+      // REST responses overwriting live prices and reduces mobile CPU usage.
+      if (Date.now() - latestPriceTsRef.current < 7000) return;
       const startTs = Date.now();
       // Primary: Jupiter Price API
       try {
@@ -557,7 +570,9 @@ export function TradingViewChart({
   useEffect(() => {
     if (!tokenMint) return;
     const unsub = liveTokenStore.watch(tokenMint, (price) => {
-      if (price > 0) applyLivePrice(price, Date.now() - 500);
+      // liveTokenStore receives prices pushed from Helius/PumpSwap/on-chain sources —
+      // treat with the same priority as WebSocket (full Date.now() timestamp).
+      if (price > 0) applyLivePrice(price, Date.now());
     });
     return unsub;
   }, [tokenMint, applyLivePrice]);
@@ -653,10 +668,14 @@ export function TradingViewChart({
     return [...withoutSameBucket, activeLiveCandle].sort((a, b) => a.timestamp - b.timestamp);
   }, [candles, activeLiveCandle, bucketMs]);
 
-  // Filter to visible window + 1 buffer bucket on each side
-  const filledRaw = mergedCandles.filter(c =>
-    c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
-  );
+  // For tokens with very few real candles (≤5), always show all of them
+  // rather than relying on the clock-based window which may leave them off-screen.
+  const isSparse = mergedCandles.length > 0 && mergedCandles.length <= 5;
+  const filledRaw = isSparse
+    ? mergedCandles
+    : mergedCandles.filter(c =>
+        c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+      );
 
   // Apply MCAP scale for rendering
   const displayCandles = mcapScale !== 1
@@ -676,10 +695,35 @@ export function TradingViewChart({
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
   if (displayCandles.length > 0 && panOffsetCandles === 0) {
-    const firstDataTs = displayCandles[0].timestamp;
-    if (firstDataTs > leftTime + visibleMs * 0.35) {
-      xLeft      = firstDataTs - bucketMs * 2;
-      xVisibleMs = rightTime - xLeft;
+    if (isSparse) {
+      // Sparse data: fit the window snugly around the real candle timestamps.
+      // Find the effective last timestamp: when the live synthetic candle is far
+      // ahead of history, cap it at lastHistTs + 1 bucket to avoid empty gaps.
+      const histCandles = displayCandles.filter(c => c.volume > 0);
+      const firstTs     = displayCandles[0].timestamp;
+      const lastHistTs  = histCandles.length > 0
+        ? histCandles[histCandles.length - 1].timestamp
+        : displayCandles[displayCandles.length - 1].timestamp;
+      const liveC       = displayCandles[displayCandles.length - 1];
+      const lastEffTs   =
+        liveC.volume === 0 && liveC.timestamp - lastHistTs > bucketMs * 2
+          ? lastHistTs + bucketMs           // cap live-gap at 1 bucket
+          : displayCandles[displayCandles.length - 1].timestamp;
+      const dataSpan    = Math.max(lastEffTs - firstTs, bucketMs);
+      // More padding when fewer candles so a single candle doesn't dominate
+      const padBuckets  = displayCandles.length === 1 ? 3
+                        : displayCandles.length <= 3  ? 2
+                        : 1.5;
+      const padMs       = bucketMs * padBuckets;
+      xLeft      = firstTs - padMs;
+      xVisibleMs = dataSpan + padMs * 2 + bucketMs;
+    } else {
+      // Dense data: shift window left only when data starts unusually far right
+      const firstDataTs = displayCandles[0].timestamp;
+      if (firstDataTs > leftTime + visibleMs * 0.35) {
+        xLeft      = firstDataTs - bucketMs * 2;
+        xVisibleMs = rightTime - xLeft;
+      }
     }
   }
   leftTimeRef.current  = xLeft;
@@ -749,8 +793,12 @@ export function TradingViewChart({
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
   const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : plotW / visibleBuckets;
-  const barW    = Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55);
-  const candleW = Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6));
+  // Hard caps prevent a single candle from becoming visually overwhelming on
+  // sparse or short timeframes where pixelPerBucket would otherwise be huge.
+  const MAX_CANDLE_W = isMobile ? 28 : 20;
+  const MAX_BAR_W    = isMobile ? 14 : 10;
+  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6)));
 
   function xOf(i: number): number {
     const c = displayCandles[i];
