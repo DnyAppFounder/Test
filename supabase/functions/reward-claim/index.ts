@@ -2,6 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import bs58 from "npm:bs58@5";
 
+// NOTE: @solana/spl-token is intentionally NOT imported.
+// Version 0.4.x pulls in @solana/spl-token-group which imports mapEncoder from
+// @solana/codecs — a missing export that crashes the edge runtime.
+// All Token-2022 instructions are built manually below using only @solana/web3.js.
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -15,12 +20,12 @@ const TREASURY_PRIVATE_KEY_B58 = Deno.env.get("TREASURY_PRIVATE_KEY_BASE58") || 
 const TREASURY_PUBLIC_KEY = Deno.env.get("TREASURY_PUBLIC_KEY") || "";
 const DWC_MINT_ENV = Deno.env.get("DWC_MINT") || "";
 
-// Token-2022 (Token Extensions) program — DWORLD uses this, not classic SPL
+// Token-2022 (Token Extensions) program — DWORLD is a Token-2022 token
 const TOKEN_2022_PROGRAM_ID_STR = "TokenzQdBNbEquxqMsNaHqQiPFULmGE3kfFU53DnFmwR";
 const ASSOC_TOKEN_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8";
 const SYSTEM_PROGRAM_ID_STR = "11111111111111111111111111111111";
 const MIN_SOL_BALANCE = 0.002;
-const CLAIM_DISPLAY_AMOUNT = 10_000; // display units
+const CLAIM_DISPLAY_AMOUNT = 10_000; // display units of DWORLD
 
 function loadTreasuryKeypairBytes(): Uint8Array {
   const raw = TREASURY_PRIVATE_KEY_B58.trim();
@@ -32,7 +37,9 @@ function loadTreasuryKeypairBytes(): Uint8Array {
     throw new Error("Invalid TREASURY_PRIVATE_KEY_BASE58: not valid base58");
   }
   if (decoded.length !== 64) {
-    throw new Error(`Invalid TREASURY_PRIVATE_KEY_BASE58: decoded to ${decoded.length} bytes, expected 64`);
+    throw new Error(
+      `Invalid TREASURY_PRIVATE_KEY_BASE58: decoded to ${decoded.length} bytes, expected 64`,
+    );
   }
   return decoded;
 }
@@ -53,11 +60,19 @@ async function pollConfirmation(sig: string, timeoutMs = 60000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2500));
-    const result = await solanaRpc("getSignatureStatuses", [[sig], { searchTransactionHistory: true }]) as any;
+    const result = await solanaRpc("getSignatureStatuses", [
+      [sig],
+      { searchTransactionHistory: true },
+    ]) as any;
     const status = result?.value?.[0];
     if (status) {
-      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
-      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") return;
+      if (status.err) {
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+      }
+      if (
+        status.confirmationStatus === "confirmed" ||
+        status.confirmationStatus === "finalized"
+      ) return;
     }
   }
   throw new Error("Transaction confirmation failed: not confirmed within 60s");
@@ -72,23 +87,15 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   if (!SOLANA_RPC_URL) throw new Error("SOLANA_RPC_URL is not configured");
   if (!TREASURY_PRIVATE_KEY_B58) throw new Error("TREASURY_PRIVATE_KEY_BASE58 is not configured");
 
-  // ── 1. Load treasury keypair ──────────────────────────────────────────────
-  const secretKey = loadTreasuryKeypairBytes();
-
+  // ── Only @solana/web3.js — no spl-token dependency ────────────────────────
   const { Keypair, PublicKey, Transaction, TransactionInstruction } =
     await import("npm:@solana/web3.js@1.98.4");
 
-  const {
-    TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-    getAssociatedTokenAddressSync,
-    createAssociatedTokenAccountInstruction,
-    createTransferCheckedInstruction,
-  } = await import("npm:@solana/spl-token@0.4.6");
-
+  // ── 1. Load and verify treasury keypair ──────────────────────────────────
+  const secretKey = loadTreasuryKeypairBytes();
   const treasury = Keypair.fromSecretKey(secretKey);
   const treasuryPubStr = treasury.publicKey.toBase58();
-  console.log(`[reward-claim] treasury wallet: ${treasuryPubStr}`);
+  console.log(`[reward-claim] treasury: ${treasuryPubStr}`);
 
   if (TREASURY_PUBLIC_KEY && treasuryPubStr !== TREASURY_PUBLIC_KEY) {
     throw new Error(
@@ -98,6 +105,9 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
 
   const mintPubkey = new PublicKey(mintAddress);
   const toPubkey = new PublicKey(toWallet);
+  const token2022ProgramId = new PublicKey(TOKEN_2022_PROGRAM_ID_STR);
+  const assocTokenProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
+  const systemProgramId = new PublicKey(SYSTEM_PROGRAM_ID_STR);
 
   // ── 2. Fetch mint info — detect token program and decimals ────────────────
   const mintAccResult = await solanaRpc("getAccountInfo", [
@@ -124,32 +134,30 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     throw new Error(`Could not read decimals from on-chain mint info for ${mintAddress}`);
   }
 
-  console.log(`[reward-claim] mint: ${mintAddress}, program: ${tokenProgramDetected}, decimals: ${mintDecimals}`);
+  console.log(`[reward-claim] mint ${mintAddress} | program: Token-2022 | decimals: ${mintDecimals}`);
 
   // ── 3. Derive Token-2022 ATAs ─────────────────────────────────────────────
-  // ATA seed: [owner, TOKEN_2022_PROGRAM_ID, mint]  →  AssociatedTokenProgram
-  const treasuryDworldAta = getAssociatedTokenAddressSync(
-    mintPubkey,
-    treasury.publicKey,
-    false,             // allowOwnerOffCurve
-    TOKEN_2022_PROGRAM_ID,
-  );
+  // ATA seeds: [owner, TOKEN_2022_PROGRAM_ID, mint]  →  AssociatedTokenProgram
+  function deriveATA(owner: typeof PublicKey.prototype): typeof PublicKey.prototype {
+    const [ata] = PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), token2022ProgramId.toBuffer(), mintPubkey.toBuffer()],
+      assocTokenProgramId,
+    );
+    return ata;
+  }
 
-  const userDworldAta = getAssociatedTokenAddressSync(
-    mintPubkey,
-    toPubkey,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-  );
+  const treasuryATA = deriveATA(treasury.publicKey);
+  const userATA = deriveATA(toPubkey);
 
-  console.log(`[reward-claim] treasury T22 ATA: ${treasuryDworldAta.toBase58()}`);
-  console.log(`[reward-claim] user T22 ATA: ${userDworldAta.toBase58()}`);
+  console.log(`[reward-claim] treasury T22 ATA: ${treasuryATA.toBase58()}`);
+  console.log(`[reward-claim] user T22 ATA: ${userATA.toBase58()}`);
 
   // ── 4. Check treasury Token-2022 DWORLD balance ───────────────────────────
+  // Use getTokenAccountBalance — works for both classic and Token-2022 ATAs
   let treasuryDworldBalance = 0;
   try {
     const balResult = await solanaRpc("getTokenAccountBalance", [
-      treasuryDworldAta.toBase58(),
+      treasuryATA.toBase58(),
     ]) as any;
     const ui = balResult?.value?.uiAmount;
     if (ui != null) {
@@ -160,9 +168,8 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     }
   } catch (e: any) {
     throw new Error(
-      `Treasury Token-2022 ATA not found: ${treasuryDworldAta.toBase58()}. ` +
-      `Ensure the treasury wallet holds DWORLD tokens in a Token-2022 account. ` +
-      `(${e?.message || e})`,
+      `Treasury Token-2022 ATA not found: ${treasuryATA.toBase58()}. ` +
+      `Ensure treasury wallet holds DWORLD in a Token-2022 account. (${e?.message || e})`,
     );
   }
 
@@ -174,13 +181,13 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
 
   // ── 5. Check if user Token-2022 ATA exists ────────────────────────────────
   const userAtaInfo = await solanaRpc("getAccountInfo", [
-    userDworldAta.toBase58(),
+    userATA.toBase58(),
     { encoding: "base64", commitment: "confirmed" },
   ]) as any;
-  const userDworldAtaExists = !!userAtaInfo?.value;
+  const userATAExists = !!userAtaInfo?.value;
 
-  // ── 6. Compute raw amount from on-chain decimals ──────────────────────────
-  // display = 10,000 DWORLD,  decimals = 6  →  raw = 10,000,000,000
+  // ── 6. Raw amount from on-chain decimals ──────────────────────────────────
+  // 10,000 DWORLD × 10^6 = 10,000,000,000 raw units
   const rawAmount = BigInt(CLAIM_DISPLAY_AMOUNT) * BigInt(Math.pow(10, mintDecimals));
 
   const debug: Record<string, unknown> = {
@@ -188,62 +195,74 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     tokenProgramDetected,
     mintDecimals,
     treasuryPublicKey: treasuryPubStr,
-    treasuryDworldAta: treasuryDworldAta.toBase58(),
+    treasuryDworldAta: treasuryATA.toBase58(),
     treasuryDworldBalance,
-    userDworldAta: userDworldAta.toBase58(),
-    userDworldAtaExists,
+    userDworldAta: userATA.toBase58(),
+    userDworldAtaExists: userATAExists,
     rawAmount: rawAmount.toString(),
   };
 
   console.log("[reward-claim] debug:", JSON.stringify(debug));
 
-  // Check treasury SOL balance for fees
+  // Check treasury SOL for fees
   const solBalResult = await solanaRpc("getBalance", [
     treasuryPubStr,
     { commitment: "confirmed" },
   ]) as any;
   const solBalance = Number(solBalResult ?? 0) / 1e9;
-  console.log(`[reward-claim] treasury SOL balance: ${solBalance}`);
   if (solBalance < MIN_SOL_BALANCE) {
     throw new Error(
-      `INSUFFICIENT_SOL: treasury has ${solBalance.toFixed(6)} SOL, need at least ${MIN_SOL_BALANCE} SOL for fees`,
+      `INSUFFICIENT_SOL: treasury has ${solBalance.toFixed(6)} SOL, ` +
+      `need at least ${MIN_SOL_BALANCE} SOL for fees`,
     );
   }
 
-  // ── 7. Build Token-2022 transaction ──────────────────────────────────────
+  // ── 7. Build transaction with manual Token-2022 instructions ──────────────
   const tx = new Transaction();
 
-  // Create user Token-2022 ATA if it doesn't exist yet
-  if (!userDworldAtaExists) {
-    console.log("[reward-claim] user ATA missing — adding createAssociatedTokenAccount instruction");
-    tx.add(
-      createAssociatedTokenAccountInstruction(
-        treasury.publicKey,  // payer
-        userDworldAta,       // associated token account
-        toPubkey,            // owner
-        mintPubkey,          // mint
-        TOKEN_2022_PROGRAM_ID, // token program (Token-2022)
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      ),
-    );
+  // Create user Token-2022 ATA if missing
+  // Associated Token Account Program: CreateIdempotent (discriminator = 1)
+  // keys: [payer, ata, owner, mint, systemProgram, tokenProgram]
+  if (!userATAExists) {
+    console.log("[reward-claim] user ATA missing — adding createATA instruction");
+    tx.add(new TransactionInstruction({
+      programId: assocTokenProgramId,
+      keys: [
+        { pubkey: treasury.publicKey, isSigner: true,  isWritable: true  }, // payer
+        { pubkey: userATA,            isSigner: false, isWritable: true  }, // ATA
+        { pubkey: toPubkey,           isSigner: false, isWritable: false }, // owner
+        { pubkey: mintPubkey,         isSigner: false, isWritable: false }, // mint
+        { pubkey: systemProgramId,    isSigner: false, isWritable: false }, // system
+        { pubkey: token2022ProgramId, isSigner: false, isWritable: false }, // Token-2022
+      ],
+      // 0x01 = CreateIdempotent (succeeds even if account already exists)
+      data: Buffer.from([1]),
+    }));
   }
 
-  // transferChecked using Token-2022 program
-  tx.add(
-    createTransferCheckedInstruction(
-      treasuryDworldAta,   // source (treasury's Token-2022 ATA)
-      mintPubkey,          // mint
-      userDworldAta,       // destination (user's Token-2022 ATA)
-      treasury.publicKey,  // authority (treasury)
-      rawAmount,           // amount in raw units (10,000 * 10^6)
-      mintDecimals,        // decimals from on-chain mint info
-      [],                  // multisigners (none)
-      TOKEN_2022_PROGRAM_ID, // token program (Token-2022)
-    ),
-  );
+  // Token-2022 transferChecked (instruction discriminator = 12)
+  // Layout: [12 u8][amount u64 LE][decimals u8] = 10 bytes
+  // keys: [source, mint, destination, authority]
+  const transferData = new Uint8Array(10);
+  transferData[0] = 12; // transferChecked
+  new DataView(transferData.buffer).setBigUint64(1, rawAmount, true); // little-endian
+  transferData[9] = mintDecimals;
+
+  tx.add(new TransactionInstruction({
+    programId: token2022ProgramId,
+    keys: [
+      { pubkey: treasuryATA,         isSigner: false, isWritable: true  }, // source
+      { pubkey: mintPubkey,          isSigner: false, isWritable: false }, // mint
+      { pubkey: userATA,             isSigner: false, isWritable: true  }, // destination
+      { pubkey: treasury.publicKey,  isSigner: true,  isWritable: false }, // authority
+    ],
+    data: transferData,
+  }));
 
   // ── 8. Sign and send ──────────────────────────────────────────────────────
-  const bhResult = await solanaRpc("getLatestBlockhash", [{ commitment: "confirmed" }]) as any;
+  const bhResult = await solanaRpc("getLatestBlockhash", [
+    { commitment: "confirmed" },
+  ]) as any;
   const blockhash = bhResult?.value?.blockhash ?? bhResult?.blockhash;
   if (!blockhash) throw new Error("Could not fetch blockhash from RPC");
 
@@ -261,12 +280,14 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     throw new Error("Token-2022 transfer failed: invalid signature returned from RPC");
   }
 
-  console.log(`[reward-claim] tx sent: ${sig}, waiting for confirmation...`);
+  console.log(`[reward-claim] tx sent: ${sig}`);
   await pollConfirmation(sig);
   console.log(`[reward-claim] confirmed: ${sig}`);
 
   return { signature: sig, debug };
 }
+
+// ── HTTP handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -307,7 +328,7 @@ Deno.serve(async (req: Request) => {
 
     const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
-    const { data: rewardAny, error: fetchErr } = await db
+    const { data: reward, error: fetchErr } = await db
       .from("user_rewards")
       .select("*")
       .eq("id", reward_id)
@@ -316,50 +337,51 @@ Deno.serve(async (req: Request) => {
 
     if (fetchErr) throw fetchErr;
 
-    if (!rewardAny) {
+    if (!reward) {
       return new Response(
         JSON.stringify({ success: false, error: "Reward not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    if (rewardAny.status === "sent") {
+    if (reward.status === "sent") {
       return new Response(
         JSON.stringify({
           success: false,
           error: "User already claimed",
-          signature: rewardAny.transaction_signature,
+          signature: reward.transaction_signature,
         }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-
-    if (rewardAny.status === "claiming") {
+    if (reward.status === "claiming") {
       return new Response(
         JSON.stringify({ success: false, error: "Reward claim already in progress, please wait" }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-
-    if (rewardAny.status !== "ready") {
+    if (reward.status !== "ready") {
       return new Response(
-        JSON.stringify({ success: false, error: `Reward cannot be claimed (status: ${rewardAny.status})` }),
+        JSON.stringify({
+          success: false,
+          error: `Reward cannot be claimed (status: ${reward.status})`,
+        }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Use DWC_MINT env as source of truth — never derive from symbol
+    // Mint address comes exclusively from env — never from reward record or symbol
     const mintAddress = DWC_MINT_ENV;
 
     // Early member reward: enforce 100-user cap
-    if (rewardAny.reason === "early_user_first_100") {
-      const { count: sentCount } = await db
+    let totalClaimsUsed = 0;
+    if (reward.reason === "early_user_first_100") {
+      const { count } = await db
         .from("user_rewards")
         .select("id", { count: "exact", head: true })
         .eq("reason", "early_user_first_100")
         .eq("status", "sent");
-
-      const totalClaimsUsed = sentCount ?? 0;
+      totalClaimsUsed = count ?? 0;
       if (totalClaimsUsed >= 100) {
         return new Response(
           JSON.stringify({
@@ -370,7 +392,6 @@ Deno.serve(async (req: Request) => {
           { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      console.log(`[reward-claim] early member slot available: ${totalClaimsUsed + 1}/100`);
     }
 
     // Atomic lock — only succeeds if status is still 'ready'
@@ -389,12 +410,12 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    let sendResult: { signature: string; debug: Record<string, unknown> };
+    let sendResult: SendResult;
     try {
       sendResult = await sendRewardTokens(wallet_address, mintAddress);
     } catch (sendErr: any) {
       const msg = String(sendErr?.message || sendErr);
-      console.error("[reward-claim] Token-2022 send failed:", msg);
+      console.error("[reward-claim] transfer failed:", msg);
 
       // Roll back lock so user can retry
       await db
@@ -422,7 +443,7 @@ Deno.serve(async (req: Request) => {
       }
       if (msg.includes("Token program mismatch")) {
         return new Response(
-          JSON.stringify({ success: false, error: `Token program mismatch: ${msg}` }),
+          JSON.stringify({ success: false, error: `Configuration error: ${msg}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -432,15 +453,15 @@ Deno.serve(async (req: Request) => {
           { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      if (msg.includes("Token-2022 transfer failed") || msg.includes("Transaction simulation failed")) {
+      if (msg.includes("Transaction simulation failed")) {
         return new Response(
-          JSON.stringify({ success: false, error: `Token-2022 transfer failed: ${msg}` }),
+          JSON.stringify({ success: false, error: `Transaction simulation failed: ${msg}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      if (msg.includes("Transaction confirmation failed")) {
+      if (msg.includes("Token-2022 transfer failed") || msg.includes("confirmation failed")) {
         return new Response(
-          JSON.stringify({ success: false, error: `Transaction confirmation failed: ${msg}` }),
+          JSON.stringify({ success: false, error: `Transfer failed: ${msg}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -460,7 +481,7 @@ Deno.serve(async (req: Request) => {
       throw sendErr;
     }
 
-    // ── Only mark as claimed after on-chain confirmation ───────────────────
+    // Mark claimed only after on-chain confirmation
     const now = new Date().toISOString();
     await db.from("user_rewards").update({
       status: "sent",
@@ -476,7 +497,7 @@ Deno.serve(async (req: Request) => {
         signature: sendResult.signature,
         debug: {
           ...sendResult.debug,
-          totalClaimsUsed: undefined, // set per-reward-reason below if needed
+          totalClaimsUsed,
           eligibilityStatus: "claimed",
         },
       }),
