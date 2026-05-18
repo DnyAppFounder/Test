@@ -375,7 +375,14 @@ export function TradingViewChart({
     const priceEventTs = sourceTs ?? Date.now();
     const activeBucket = Math.floor(priceEventTs / bMs) * bMs;
     const hist = candlesRef.current;
-    const lastHistClose = hist.length > 0 ? hist[hist.length - 1].close : price;
+    const lastHist = hist.length > 0 ? hist[hist.length - 1] : null;
+    const lastHistClose = lastHist ? lastHist.close : price;
+    const lastHistBucket = lastHist ? Math.floor(lastHist.timestamp / bMs) * bMs : 0;
+    // Only carry lastHistClose into the new live candle when the previous real candle
+    // is in an adjacent bucket (within 2.5 bucket-widths). If the gap is larger, the
+    // live candle opens at current price so no huge synthetic wicks appear.
+    const isHistAdjacent = lastHist != null && (activeBucket - lastHistBucket) <= bMs * 2.5;
+    const openPrice = isHistAdjacent ? lastHistClose : price;
 
     setActiveLiveCandle(prev => {
       const prevBucket = prev ? Math.floor(prev.timestamp / bMs) * bMs : -1;
@@ -383,9 +390,9 @@ export function TradingViewChart({
         // New bucket — create a fresh synthetic candle; never mutate real history.
         return {
           timestamp: activeBucket,
-          open:   lastHistClose,
-          high:   Math.max(lastHistClose, price),
-          low:    Math.min(lastHistClose, price),
+          open:   openPrice,
+          high:   Math.max(openPrice, price),
+          low:    Math.min(openPrice, price),
           close:  price,
           volume: 0,
         };
@@ -674,9 +681,23 @@ export function TradingViewChart({
 
   // Filter to the visible time window — auto-scroll handles the case where all
   // candles are older than the window by panning back automatically.
-  const filledRaw = mergedCandles.filter(c =>
-    c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
-  );
+  // For live mode (no pan): if the standard window yields too few real candles,
+  // expand backward to include recent historical context so the chart stays readable.
+  const MIN_LIVE_CANDLES = 6;
+  let filledRaw: CandleData[];
+  {
+    const standardRaw = mergedCandles.filter(c =>
+      c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+    );
+    if (panOffsetCandles === 0 && standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
+      // Not enough candles in the live window — include the last visibleBuckets candles
+      // so historical context is preserved. The adaptive x-range will fit them all.
+      const takeCount = Math.min(visibleBuckets, mergedCandles.length);
+      filledRaw = mergedCandles.slice(-takeCount);
+    } else {
+      filledRaw = standardRaw;
+    }
+  }
 
   // Apply MCAP scale for rendering
   const displayCandles = mcapScale !== 1
@@ -695,16 +716,18 @@ export function TradingViewChart({
   // ── Adaptive x-range ─────────────────────────────────────────────────────
   // Keep the time axis anchored to the standard visibleMs window so candle
   // positions are honest (no stretching to fill sparse data).
-  // Only adjust leftward when all data sits in the far-right of the window.
+  // Two adjustment cases:
+  //   1. Data starts in the far-right of the window (slide left).
+  //   2. Data was expanded backward past leftTime (sparse live mode: fit all).
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
   if (displayCandles.length > 0 && panOffsetCandles === 0) {
     const firstDataTs = displayCandles[0].timestamp;
-    // Slide the window left so the first real candle is never hidden off the left
-    // edge, but keep at least bucketMs * 2 of left-padding before it.
-    if (firstDataTs > leftTime + visibleMs * 0.35) {
+    // Case 1: data starts past 35% of the window (normal sparse token)
+    // Case 2: data was expanded back before leftTime (sparse live expansion)
+    if (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime) {
       xLeft      = firstDataTs - bucketMs * 2;
-      xVisibleMs = rightTime - xLeft;
+      xVisibleMs = Math.max(rightTime - xLeft, bucketMs * 4);
     }
   }
   leftTimeRef.current  = xLeft;
@@ -1188,9 +1211,10 @@ export function TradingViewChart({
     }).join(' ')
   ).join(' ');
 
-  // Per-segment area fill paths (each segment closes its own polygon to avoid fill bridging)
+  // Per-segment area fill paths (each segment closes its own polygon to avoid fill bridging).
+  // Single-point segments are skipped — they would produce a vertical wall at the baseline.
   const areaPaths: string[] = gapSegments.map((seg, si) => {
-    if (seg.length === 0) return '';
+    if (seg.length < 2) return '';
     const firstX = xOf(seg[0]).toFixed(1);
     const linePart = seg.map((idx, j) => {
       const x = xOf(idx).toFixed(1);
