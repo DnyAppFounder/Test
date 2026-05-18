@@ -1,6 +1,7 @@
 import { SolanaWalletService } from './solana/walletService';
 import { jupiterTokenListService } from './jupiter/tokenListService';
 import { tokenRegistryService } from './tokenRegistryService';
+import { tokenMetadataService } from './solana/tokenMetadataService';
 
 export interface WalletAsset {
   id: string;
@@ -124,13 +125,25 @@ class WalletAssetLoaderService {
   }
 
   private async resolveLogosInBackground(assets: WalletAsset[]) {
+    const missing = assets.filter(a => !a.logoUrl);
+    if (missing.length === 0) return;
+
+    // Batch-resolve via tokenMetadataService (covers DAS, pump.fun, Jupiter, launchpad)
+    try {
+      const mints = missing.map(a => a.address);
+      const metaMap = await tokenMetadataService.getBatchTokenMetadata(mints);
+      for (const asset of missing) {
+        const meta = metaMap.get(asset.address);
+        if (meta?.logoURI) asset.logoUrl = meta.logoURI;
+      }
+    } catch {}
+
+    // Secondary fallback: Jupiter token list for any still-missing
     for (const asset of assets) {
       if (asset.logoUrl) continue;
       try {
         const jupToken = await jupiterTokenListService.getTokenByAddress(asset.address);
-        if (jupToken?.logoURI) {
-          asset.logoUrl = jupToken.logoURI;
-        }
+        if (jupToken?.logoURI) asset.logoUrl = jupToken.logoURI;
       } catch {}
     }
   }

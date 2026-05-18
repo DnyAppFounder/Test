@@ -2,15 +2,15 @@ import { jupiterTokenListService, JupiterToken } from './jupiter/tokenListServic
 import { dexScreenerService } from './dexscreener/tokenDiscoveryService';
 import { tokenRegistryService } from './tokenRegistryService';
 
-const DTEST_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
+const DWORLD_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 
-const DTEST_TOKEN: JupiterToken = {
-  address: DTEST_MINT,
+const DWORLD_TOKEN: JupiterToken = {
+  address: DWORLD_MINT,
   chainId: 101,
   decimals: 6,
   name: 'DAWORLD Coin',
   symbol: 'DWORLD',
-  logoURI: undefined,
+  logoURI: undefined, // resolved dynamically via DAS/pump.fun
   tags: ['community'],
 };
 
@@ -68,7 +68,7 @@ class MergedTokenListService {
     }
 
     // Always ensure DWORLD is present
-    map.set(DTEST_TOKEN.address, DTEST_TOKEN);
+    map.set(DWORLD_TOKEN.address, DWORLD_TOKEN);
 
     const merged = Array.from(map.values());
     this.cache = merged;
@@ -85,7 +85,7 @@ class MergedTokenListService {
     const q = query.toLowerCase().trim();
 
     // DWORLD shortcut
-    const dtestMatch = 'dworld'.includes(q) || 'daworld coin'.includes(q) || DTEST_TOKEN.address.toLowerCase().includes(q);
+    const dtestMatch = 'dworld'.includes(q) || 'daworld coin'.includes(q) || DWORLD_TOKEN.address.toLowerCase().includes(q);
 
     // Registry search (covers all sources: Jupiter + DexScreener + Birdeye + Raydium + Meteora + on-chain)
     try {
@@ -102,7 +102,7 @@ class MergedTokenListService {
         }));
 
         const resultMap = new Map<string, JupiterToken>();
-        if (dtestMatch) resultMap.set(DTEST_TOKEN.address, DTEST_TOKEN);
+        if (dtestMatch) resultMap.set(DWORLD_TOKEN.address, DWORLD_TOKEN);
         for (const t of asJupiter) resultMap.set(t.address, t);
 
         return Array.from(resultMap.values()).slice(0, 50);
@@ -113,15 +113,15 @@ class MergedTokenListService {
     const allTokens = await this.getAllTokens();
     const matches = allTokens.filter(
       t =>
-        t.address !== DTEST_TOKEN.address &&
+        t.address !== DWORLD_TOKEN.address &&
         (t.name.toLowerCase().includes(q) || t.symbol.toLowerCase().includes(q) || t.address.toLowerCase().includes(q))
     );
-    const result = dtestMatch ? [DTEST_TOKEN, ...matches] : matches;
+    const result = dtestMatch ? [DWORLD_TOKEN, ...matches] : matches;
     return result.slice(0, 50);
   }
 
   async getTokenByAddress(address: string): Promise<JupiterToken | null> {
-    if (address === DTEST_TOKEN.address) return DTEST_TOKEN;
+    if (address === DWORLD_TOKEN.address) return DWORLD_TOKEN;
 
     // Try in-memory first
     const allTokens = await this.getAllTokens();
@@ -151,7 +151,7 @@ class MergedTokenListService {
     const allTokens = await this.getAllTokens();
     return allTokens.filter(
       t =>
-        t.address === DTEST_TOKEN.address ||
+        t.address === DWORLD_TOKEN.address ||
         t.tags?.includes('verified') ||
         t.tags?.includes('community')
     );

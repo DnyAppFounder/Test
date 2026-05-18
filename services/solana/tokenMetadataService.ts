@@ -2,15 +2,23 @@
  * TokenMetadataService
  *
  * Resolution order for every token mint:
- *  1. In-memory cache (instant)
- *  2. Well-known tokens (SOL, USDC, USDT, JUP, BONK, …)
- *  3. Helius DAS getAsset  (primary — richest metadata, covers cNFTs + Token-2022)
- *  4. Jupiter token list   (large curated list, fast lookup)
- *  5. pump.fun API         (pump.fun mints ending in "pump")
- *  6. On-chain mint account for decimals + program type
- *  7. Graceful stub        (never throws — always returns something displayable)
+ *  1. In-memory cache (instant; logo-less entries expire and retry after 5 min)
+ *  2. Well-known tokens with confirmed logos (SOL, USDC, USDT, JUP, BONK, …)
+ *     – tokens in WELL_KNOWN without a logo fall through to full resolution
+ *  3. DAWEN Launchpad DB  (immediate for freshly created DAWEN tokens)
+ *  4. Helius DAS getAsset (primary — richest metadata, covers cNFTs + Token-2022)
+ *     – if DAS finds no logo for a pump.fun mint, also tries pump.fun API
+ *  5. Jupiter token list  (large curated list, fast lookup)
+ *  6. pump.fun API        (pump.fun mints ending in "pump")
+ *  7. On-chain mint account (decimals + program type)
+ *  8. Graceful stub       (never throws — always returns something displayable)
  *
- * Never hides a token because metadata is missing.
+ * Logo resolution rules:
+ *  - Successful logos are cached permanently.
+ *  - Missing logos are retried after LOGO_RETRY_MS (5 min) so fresh tokens
+ *    don't stay blank forever once their metadata propagates.
+ *  - Metadata URI fetches (IPFS / Arweave) also use a 5-min failure TTL.
+ *  - No fake logos are ever generated.
  */
 
 import Constants from 'expo-constants';
@@ -57,7 +65,8 @@ function proxyHeaders(): Record<string, string> {
   };
 }
 
-// ─── Well-known tokens ────────────────────────────────────────────────────────
+// ─── Well-known tokens (fast path for tokens with confirmed logos) ─────────────
+// Entries without a logoURI fall through to full DAS/pump.fun resolution.
 
 const WELL_KNOWN: Record<string, TokenMetadata> = {
   'So11111111111111111111111111111111111111112': {
@@ -114,21 +123,32 @@ const WELL_KNOWN: Record<string, TokenMetadata> = {
     logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png',
     decimals: 8, verified: true, tokenProgram: 'spl',
   },
+  // DWORLD: well-known name/symbol/decimals — logo resolved dynamically via DAS/pump.fun
   'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump': {
     mint: 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump',
     name: 'DAWORLD Coin', symbol: 'DWORLD',
-    logoURI: undefined,
+    logoURI: undefined, // resolved below — not a hard-coded fake
     decimals: 6, verified: true, tokenProgram: 'token2022',
   },
 };
 
-// ─── Metadata URI cache (IPFS / Arweave / HTTPS) ─────────────────────────────
+// ─── Metadata URI cache ────────────────────────────────────────────────────────
+// Successful hits are cached permanently; failures expire after MISS_TTL_MS.
 
-const URI_CACHE = new Map<string, string | null>();
+const URI_HIT  = new Map<string, string>();   // uri → resolved image URL (permanent)
+const URI_MISS = new Map<string, number>();   // uri → timestamp of last failure
+const URI_MISS_TTL_MS = 5 * 60 * 1000;       // 5 min retry window
 
 async function resolveImageFromUri(uri: string): Promise<string | undefined> {
   if (!uri) return undefined;
-  if (URI_CACHE.has(uri)) return URI_CACHE.get(uri) ?? undefined;
+
+  // Permanent hit
+  const hit = URI_HIT.get(uri);
+  if (hit) return hit;
+
+  // Recent failure — skip until TTL expires
+  const missTs = URI_MISS.get(uri);
+  if (missTs && Date.now() - missTs < URI_MISS_TTL_MS) return undefined;
 
   let fetchUri = uri;
   if (uri.startsWith('ipfs://')) {
@@ -142,20 +162,43 @@ async function resolveImageFromUri(uri: string): Promise<string | undefined> {
     const timeout = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(fetchUri, { signal: controller.signal });
     clearTimeout(timeout);
-    if (!res.ok) { URI_CACHE.set(uri, null); return undefined; }
+
+    if (!res.ok) {
+      URI_MISS.set(uri, Date.now());
+      return undefined;
+    }
+
     const json = await res.json();
+    // Support all common metadata image fields
     const image: string | undefined =
-      json?.image || json?.image_url || json?.properties?.files?.[0]?.uri;
-    URI_CACHE.set(uri, image ?? null);
-    return image;
+      json?.image ||
+      json?.image_url ||
+      json?.logoURI ||
+      json?.uri ||
+      json?.properties?.files?.[0]?.cdn_uri ||
+      json?.properties?.files?.[0]?.uri;
+
+    if (image) {
+      URI_HIT.set(uri, image);
+      return image;
+    }
+    URI_MISS.set(uri, Date.now());
+    return undefined;
   } catch {
-    URI_CACHE.set(uri, null);
+    URI_MISS.set(uri, Date.now());
     return undefined;
   }
 }
 
+/** Normalize a raw image URL: convert ipfs:// / ar:// to HTTPS gateway URLs. */
+function normalizeImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('ipfs://')) return `https://cloudflare-ipfs.com/ipfs/${url.slice(7)}`;
+  if (url.startsWith('ar://')) return `https://arweave.net/${url.slice(5)}`;
+  return url;
+}
+
 // ─── DAWEN Launchpad DB resolver ──────────────────────────────────────────────
-// Newly created tokens appear here immediately after launch, before any indexer
 
 async function fetchLaunchpadMetadata(mint: string): Promise<TokenMetadata | null> {
   try {
@@ -170,7 +213,7 @@ async function fetchLaunchpadMetadata(mint: string): Promise<TokenMetadata | nul
       mint,
       name: data.name,
       symbol: data.symbol,
-      logoURI: data.image_url || undefined,
+      logoURI: normalizeImageUrl(data.image_url) || undefined,
       decimals: data.decimals ?? 6,
       verified: false,
       tokenProgram: 'spl',
@@ -195,7 +238,7 @@ async function fetchLaunchpadMetadataBatch(mints: string[]): Promise<Map<string,
         mint: row.mint_address,
         name: row.name,
         symbol: row.symbol,
-        logoURI: row.image_url || undefined,
+        logoURI: normalizeImageUrl(row.image_url) || undefined,
         decimals: row.decimals ?? 6,
         verified: false,
         tokenProgram: 'spl',
@@ -222,11 +265,12 @@ function parseDasAsset(mint: string, asset: any): TokenMetadata | null {
     ? 'token-2022' : 'spl';
 
   const links = asset.content?.links || {};
-  const logoURI: string | undefined =
+  const rawImage: string | undefined =
     links.image ||
     asset.content?.files?.[0]?.cdn_uri ||
     asset.content?.files?.[0]?.uri ||
     undefined;
+  const logoURI = normalizeImageUrl(rawImage);
 
   const metadataUri: string | undefined = asset.content?.json_uri || undefined;
   const verified = !!(asset.authorities?.length > 0 || asset.creators?.some((c: any) => c.verified));
@@ -264,16 +308,15 @@ async function fetchDasMetadata(mint: string): Promise<TokenMetadata | null> {
     const meta = parseDasAsset(mint, json?.result);
     if (!meta) return null;
 
-    // If DAS gave us a metadata URI but no direct image, try to resolve it
+    // If DAS gave us a metadata URI but no direct image, resolve it
     if (!meta.logoURI && meta.metadataUri) {
       meta.logoURI = await resolveImageFromUri(meta.metadataUri);
     }
 
-    console.log(`[TokenMetadata] DAS: ${meta.symbol} decimals=${meta.decimals} program=${meta.tokenProgram} (${mint.slice(0, 8)})`);
     return meta;
   } catch (e: any) {
     const isTimeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-    console.warn(`[TokenMetadata] DAS ${isTimeout ? 'timeout (8s)' : 'error'} @ ${Date.now()}:`, mint.slice(0, 8), e?.message?.slice(0, 60));
+    console.warn(`[TokenMetadata] DAS ${isTimeout ? 'timeout (8s)' : 'error'}:`, mint.slice(0, 8), e?.message?.slice(0, 60));
     return null;
   }
 }
@@ -310,10 +353,9 @@ async function fetchDasMetadataBatch(mints: string[]): Promise<Map<string, Token
         const meta = parseDasAsset(asset.id, asset);
         if (meta) result.set(asset.id, meta);
       }
-      console.log(`[TokenMetadata] DAS batch: ${result.size}/${batch.length} resolved`);
     } catch (e: any) {
       const isTimeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-      console.warn(`[TokenMetadata] DAS batch ${isTimeout ? 'timeout (10s)' : 'error'} @ ${Date.now()}:`, e?.message?.slice(0, 60));
+      console.warn(`[TokenMetadata] DAS batch ${isTimeout ? 'timeout (10s)' : 'error'}:`, e?.message?.slice(0, 60));
     }
   }));
 
@@ -326,7 +368,7 @@ async function fetchPumpFunMetadata(mint: string): Promise<TokenMetadata | null>
   if (!mint.endsWith('pump')) return null;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`https://frontend-api.pump.fun/coins/${mint}`, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -336,7 +378,7 @@ async function fetchPumpFunMetadata(mint: string): Promise<TokenMetadata | null>
     const data = await res.json();
     if (!data?.symbol) return null;
 
-    let logoURI: string | undefined = data.image_uri || undefined;
+    let logoURI: string | undefined = normalizeImageUrl(data.image_uri) || undefined;
     if (!logoURI && data.metadata_uri) {
       logoURI = await resolveImageFromUri(data.metadata_uri);
     }
@@ -378,79 +420,132 @@ async function fetchOnChainMintInfo(
   }
 }
 
+// ─── Merge helper ─────────────────────────────────────────────────────────────
+// Prefer well-known base for name/symbol/decimals/program; prefer resolved for logo.
+
+function mergeWithWellKnown(base: TokenMetadata, resolved: TokenMetadata): TokenMetadata {
+  return {
+    ...resolved,
+    name:         base.name        || resolved.name,
+    symbol:       base.symbol      || resolved.symbol,
+    decimals:     base.decimals    ?? resolved.decimals,
+    tokenProgram: base.tokenProgram || resolved.tokenProgram,
+    verified:     base.verified    || resolved.verified,
+    logoURI:      resolved.logoURI || base.logoURI,
+  };
+}
+
 // ─── TokenMetadataService ─────────────────────────────────────────────────────
+
+// Retry logo resolution for cached no-logo entries after this interval.
+const LOGO_RETRY_MS = 5 * 60 * 1000;
 
 export class TokenMetadataService {
   private connectionService: SolanaConnectionService;
   private cache = new Map<string, TokenMetadata>();
+  // Tracks when we last tried (and failed) to find a logo for a mint.
+  // When the TTL expires, the cache entry is evicted and resolution retries.
+  private logoPendingAt = new Map<string, number>();
 
   constructor() {
     this.connectionService = SolanaConnectionService.getInstance();
   }
 
   async getTokenMetadata(mint: string): Promise<TokenMetadata> {
-    // 1. Cache
-    if (this.cache.has(mint)) return this.cache.get(mint)!;
-
-    // 2. Well-known
-    if (WELL_KNOWN[mint]) {
-      this.cache.set(mint, WELL_KNOWN[mint]);
-      return WELL_KNOWN[mint];
+    // 1. Cache — evict no-logo entries after LOGO_RETRY_MS so metadata
+    //    propagation is picked up without requiring an app restart.
+    const cached = this.cache.get(mint);
+    if (cached) {
+      if (cached.logoURI) return cached; // logo present → permanent cache hit
+      const pendingAt = this.logoPendingAt.get(mint);
+      if (pendingAt && Date.now() - pendingAt < LOGO_RETRY_MS) return cached;
+      // TTL expired — evict and re-resolve
+      this.cache.delete(mint);
+      this.logoPendingAt.delete(mint);
     }
 
-    // 3. DAWEN launchpad DB — immediate fallback for newly created tokens
+    // 2. Well-known tokens with confirmed logos (instant, no network)
+    const wellKnown = WELL_KNOWN[mint];
+    if (wellKnown?.logoURI) {
+      this.cache.set(mint, wellKnown);
+      return wellKnown;
+    }
+    // If well-known entry exists but has no logo, we use it as the base
+    // and fall through to dynamic resolution to find the real image.
+
+    // 3. DAWEN launchpad DB — immediate for newly created tokens
     const launchpadMeta = await fetchLaunchpadMetadata(mint);
     if (launchpadMeta) {
-      this.cache.set(mint, launchpadMeta);
-      return launchpadMeta;
+      const result = wellKnown ? mergeWithWellKnown(wellKnown, launchpadMeta) : launchpadMeta;
+      this.cache.set(mint, result);
+      if (!result.logoURI) this.logoPendingAt.set(mint, Date.now());
+      return result;
     }
 
     // 4. Helius DAS (primary for external tokens)
     const dasMeta = await fetchDasMetadata(mint);
     if (dasMeta) {
-      this.cache.set(mint, dasMeta);
-      return dasMeta;
+      // For pump.fun mints where DAS found metadata but no logo, also try pump.fun API
+      if (!dasMeta.logoURI && mint.endsWith('pump')) {
+        const pumpMeta = await fetchPumpFunMetadata(mint);
+        if (pumpMeta?.logoURI) dasMeta.logoURI = pumpMeta.logoURI;
+      }
+      const result = wellKnown ? mergeWithWellKnown(wellKnown, dasMeta) : dasMeta;
+      this.cache.set(mint, result);
+      if (!result.logoURI) this.logoPendingAt.set(mint, Date.now());
+      return result;
     }
 
-    // 5. Jupiter token list (large curated list)
+    // 5. Jupiter token list
     try {
       const jupToken = await jupiterTokenListService.getTokenByAddress(mint);
       if (jupToken) {
         const meta: TokenMetadata = {
           mint,
-          name: jupToken.name,
-          symbol: jupToken.symbol,
-          logoURI: jupToken.logoURI,
-          decimals: jupToken.decimals,
-          verified: !!(jupToken.tags?.includes('verified') || jupToken.tags?.includes('strict')),
-          tokenProgram: 'spl',
+          name:         wellKnown?.name        || jupToken.name,
+          symbol:       wellKnown?.symbol      || jupToken.symbol,
+          logoURI:      normalizeImageUrl(jupToken.logoURI) || wellKnown?.logoURI,
+          decimals:     wellKnown?.decimals    ?? jupToken.decimals,
+          verified:     !!(jupToken.tags?.includes('verified') || jupToken.tags?.includes('strict')),
+          tokenProgram: wellKnown?.tokenProgram || 'spl',
         };
-        console.log(`[TokenMetadata] Jupiter: ${meta.symbol} (${mint.slice(0, 8)})`);
         this.cache.set(mint, meta);
+        if (!meta.logoURI) this.logoPendingAt.set(mint, Date.now());
         return meta;
       }
     } catch {}
 
-    // 6. pump.fun
+    // 6. pump.fun (for any pump.fun mint not yet indexed by DAS)
     const pumpMeta = await fetchPumpFunMetadata(mint);
     if (pumpMeta) {
-      this.cache.set(mint, pumpMeta);
-      return pumpMeta;
+      const result = wellKnown ? mergeWithWellKnown(wellKnown, pumpMeta) : pumpMeta;
+      this.cache.set(mint, result);
+      if (!result.logoURI) this.logoPendingAt.set(mint, Date.now());
+      return result;
     }
 
-    // 7. On-chain mint account (for decimals + program type)
+    // 7. On-chain mint account (decimals + program type, last resort)
     const onChain = await fetchOnChainMintInfo(mint, this.connectionService);
 
-    // 8. Graceful stub — never hide the token. Do NOT cache: a new DAWEN token may
-    // be indexed by Helius or the launchpad DB shortly after launch, so subsequent
-    // calls should retry all resolution steps rather than returning a stale stub.
+    // If we have a well-known base, return it merged with on-chain data.
+    // Do NOT cache — logo may appear once DAS/pump.fun index the token.
+    if (wellKnown) {
+      return {
+        ...wellKnown,
+        decimals:     onChain?.decimals     ?? wellKnown.decimals,
+        tokenProgram: onChain?.tokenProgram ?? wellKnown.tokenProgram,
+      };
+    }
+
+    // 8. Graceful stub — never hides a token.
+    // Do NOT cache so subsequent calls retry all resolution steps.
     return {
       mint,
-      name: mint.slice(0, 8) + '...',
-      symbol: mint.slice(0, 4).toUpperCase(),
-      logoURI: undefined,
-      decimals: onChain?.decimals ?? 6,
-      verified: false,
+      name:         mint.slice(0, 8) + '...',
+      symbol:       mint.slice(0, 4).toUpperCase(),
+      logoURI:      undefined,
+      decimals:     onChain?.decimals     ?? 6,
+      verified:     false,
       tokenProgram: onChain?.tokenProgram ?? 'spl',
     };
   }
@@ -458,12 +553,13 @@ export class TokenMetadataService {
   async getBatchTokenMetadata(mints: string[]): Promise<Map<string, TokenMetadata>> {
     const results = new Map<string, TokenMetadata>();
 
-    // Split into already-resolved vs needs-fetch
+    // Split into already-resolved (with logo) vs needs-fetch
     const needsFetch: string[] = [];
     for (const mint of mints) {
-      if (this.cache.has(mint)) {
-        results.set(mint, this.cache.get(mint)!);
-      } else if (WELL_KNOWN[mint]) {
+      const cached = this.cache.get(mint);
+      if (cached?.logoURI) {
+        results.set(mint, cached);
+      } else if (WELL_KNOWN[mint]?.logoURI) {
         this.cache.set(mint, WELL_KNOWN[mint]);
         results.set(mint, WELL_KNOWN[mint]);
       } else {
@@ -473,19 +569,25 @@ export class TokenMetadataService {
 
     if (needsFetch.length === 0) return results;
 
-    // Launchpad DB batch — immediately resolves newly created DAWEN tokens
+    // Launchpad DB batch
     const launchpadResults = await fetchLaunchpadMetadataBatch(needsFetch);
     for (const [mint, meta] of launchpadResults) {
-      this.cache.set(mint, meta);
-      results.set(mint, meta);
+      const wellKnown = WELL_KNOWN[mint];
+      const result = wellKnown ? mergeWithWellKnown(wellKnown, meta) : meta;
+      this.cache.set(mint, result);
+      if (!result.logoURI) this.logoPendingAt.set(mint, Date.now());
+      results.set(mint, result);
     }
 
     // DAS batch for mints not found in launchpad
     const needsDas = needsFetch.filter(m => !results.has(m));
     const dasResults = await fetchDasMetadataBatch(needsDas);
     for (const [mint, meta] of dasResults) {
-      this.cache.set(mint, meta);
-      results.set(mint, meta);
+      const wellKnown = WELL_KNOWN[mint];
+      const result = wellKnown ? mergeWithWellKnown(wellKnown, meta) : meta;
+      this.cache.set(mint, result);
+      if (!result.logoURI) this.logoPendingAt.set(mint, Date.now());
+      results.set(mint, result);
     }
 
     // Individual fallback for any still missing
@@ -502,5 +604,9 @@ export class TokenMetadataService {
 
   clearCache() {
     this.cache.clear();
+    this.logoPendingAt.clear();
   }
 }
+
+/** Shared singleton — use this instead of constructing new instances. */
+export const tokenMetadataService = new TokenMetadataService();

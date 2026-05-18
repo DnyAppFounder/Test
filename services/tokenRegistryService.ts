@@ -682,8 +682,10 @@ class TokenRegistryService {
       symbol:        token.symbol || '',
       name:          token.name || '',
       decimals:      token.decimals,
-      logo_uri:      token.logoUri ?? null,
-      metadata_uri:  token.metadataUri ?? null,
+      // Use undefined (not null) when logo is missing so Supabase upsert
+      // omits the field from the UPDATE clause, preserving any existing valid logo.
+      logo_uri:      token.logoUri || undefined,
+      metadata_uri:  token.metadataUri || undefined,
       token_program: token.tokenProgram || 'spl',
       is_verified:   token.isVerified,
       sources:       [...new Set(token.sources)],
