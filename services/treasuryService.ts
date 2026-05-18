@@ -12,11 +12,17 @@ import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
 import { ExternalWalletAdapter } from '@/lib/wallet/ExternalWalletAdapter';
 
 export const TREASURY_WALLET = 'FvzoyNk8MSwMgWbiGRbhLASyJSusoVpVtaE2w11WFg2X';
-export const DTEST_MINT = '43m6D8gCagyJ4K6NjETr3wjSUUSAAwaFznKbCUECpump';
+export const DWORLD_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
+export const DTEST_MINT = DWORLD_MINT; // alias kept for backward compatibility
 
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8');
-const SYSTEM_PROGRAM_ID = new PublicKey('11111111111111111111111111111111');
+const TOKEN_PROGRAM_ID        = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID   = new PublicKey('TokenzQdBNbEquxqMsNaHqQiPFULmGE3kfFU53DnFmwR');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const SYSTEM_PROGRAM_ID       = new PublicKey('11111111111111111111111111111111');
+
+function tokenProgramForMint(mintStr: string): PublicKey {
+  return mintStr === DWORLD_MINT ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+}
 
 export type PayStatus =
   | 'idle'
@@ -42,9 +48,9 @@ export interface TreasuryPayResult {
   error?: string;
 }
 
-async function deriveATA(ownerPubkey: PublicKey, mintPubkey: PublicKey): Promise<PublicKey> {
+function deriveATA(ownerPubkey: PublicKey, mintPubkey: PublicKey, tokenProgram: PublicKey): PublicKey {
   const [ata] = PublicKey.findProgramAddressSync(
-    [ownerPubkey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
+    [ownerPubkey.toBuffer(), tokenProgram.toBuffer(), mintPubkey.toBuffer()],
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
   return ata;
@@ -55,9 +61,10 @@ async function ensureATA(
   payerPubkey: PublicKey,
   ownerPubkey: PublicKey,
   mintPubkey: PublicKey,
-  tx: Transaction
+  tx: Transaction,
+  tokenProgram: PublicKey
 ): Promise<PublicKey> {
-  const ata = await deriveATA(ownerPubkey, mintPubkey);
+  const ata = deriveATA(ownerPubkey, mintPubkey, tokenProgram);
   const info = await rpc.rpcCall('getAccountInfo', [ata.toBase58(), { commitment: 'confirmed' }]);
   if (!info?.value) {
     tx.add(new TransactionInstruction({
@@ -68,7 +75,7 @@ async function ensureATA(
         { pubkey: ownerPubkey, isSigner: false, isWritable: false },
         { pubkey: mintPubkey, isSigner: false, isWritable: false },
         { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: tokenProgram, isSigner: false, isWritable: false },
       ],
       data: Buffer.alloc(0),
     }));
@@ -141,24 +148,44 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
 
     if (tokenMint && amountToken && amountToken > 0) {
       const mintPubkey = new PublicKey(tokenMint);
-      const decimals = tokenMint === DTEST_MINT ? 6 : 6;
+      const decimals = 6;
       const rawAmount = BigInt(Math.floor(amountToken * Math.pow(10, decimals)));
+      const tokenProgram = tokenProgramForMint(tokenMint);
 
-      const fromATA = await ensureATA(rpc, fromPubkey, fromPubkey, mintPubkey, tx);
-      const toATA = await ensureATA(rpc, fromPubkey, treasuryPubkey, mintPubkey, tx);
+      const fromATA = await ensureATA(rpc, fromPubkey, fromPubkey, mintPubkey, tx, tokenProgram);
+      const toATA = await ensureATA(rpc, fromPubkey, treasuryPubkey, mintPubkey, tx, tokenProgram);
 
-      const data = Buffer.alloc(9);
-      data.writeUInt8(3, 0); // transfer instruction
-      data.writeBigUInt64LE(rawAmount, 1);
-      tx.add(new TransactionInstruction({
-        programId: TOKEN_PROGRAM_ID,
-        keys: [
-          { pubkey: fromATA, isSigner: false, isWritable: true },
-          { pubkey: toATA, isSigner: false, isWritable: true },
-          { pubkey: fromPubkey, isSigner: true, isWritable: false },
-        ],
-        data,
-      }));
+      if (tokenMint === DWORLD_MINT) {
+        // Token-2022: TransferChecked (opcode 12), includes mint + decimals
+        const data = Buffer.alloc(10);
+        data.writeUInt8(12, 0);
+        data.writeBigUInt64LE(rawAmount, 1);
+        data.writeUInt8(decimals, 9);
+        tx.add(new TransactionInstruction({
+          programId: TOKEN_2022_PROGRAM_ID,
+          keys: [
+            { pubkey: fromATA, isSigner: false, isWritable: true },
+            { pubkey: mintPubkey, isSigner: false, isWritable: false },
+            { pubkey: toATA, isSigner: false, isWritable: true },
+            { pubkey: fromPubkey, isSigner: true, isWritable: false },
+          ],
+          data,
+        }));
+      } else {
+        // Standard SPL: Transfer (opcode 3)
+        const data = Buffer.alloc(9);
+        data.writeUInt8(3, 0);
+        data.writeBigUInt64LE(rawAmount, 1);
+        tx.add(new TransactionInstruction({
+          programId: TOKEN_PROGRAM_ID,
+          keys: [
+            { pubkey: fromATA, isSigner: false, isWritable: true },
+            { pubkey: toATA, isSigner: false, isWritable: true },
+            { pubkey: fromPubkey, isSigner: true, isWritable: false },
+          ],
+          data,
+        }));
+      }
     } else if (amountSol && amountSol > 0) {
       const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
       if (lamports < 1) throw new Error('SOL amount too small');
@@ -230,17 +257,15 @@ export async function burnSplToken(params: {
     const mintPubkey = new PublicKey(tokenMint);
     const rawAmount = BigInt(Math.floor(amount * Math.pow(10, decimals)));
 
-    const [fromATA] = PublicKey.findProgramAddressSync(
-      [fromPubkey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
+    const tokenProgram = tokenProgramForMint(tokenMint);
+    const fromATA = deriveATA(fromPubkey, mintPubkey, tokenProgram);
 
     const data = Buffer.alloc(9);
     data.writeUInt8(8, 0); // burn instruction
     data.writeBigUInt64LE(rawAmount, 1);
 
     const tx = new Transaction().add(new TransactionInstruction({
-      programId: TOKEN_PROGRAM_ID,
+      programId: tokenProgram,
       keys: [
         { pubkey: fromATA, isSigner: false, isWritable: true },
         { pubkey: mintPubkey, isSigner: false, isWritable: true },

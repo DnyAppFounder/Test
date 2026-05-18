@@ -23,7 +23,13 @@ import { useWallet } from '@/contexts/WalletContext';
 import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SocialService, Post, PostComment, PROMOTE_TIERS, Notification, Conversation, UserProfile } from '@/services/socialService';
 import { getSolPrice } from '@/services/solana/priceService';
-import { payToTreasury, TREASURY_WALLET, DTEST_MINT as DTEST_MINT_ADDR, PayStatus } from '@/services/treasuryService';
+import { payToTreasury, TREASURY_WALLET, DWORLD_MINT, PayStatus } from '@/services/treasuryService';
+
+const DWORLD_PROMOTE_AMOUNTS: Record<string, number> = {
+  '1h':  500,
+  '3h':  800,
+  '24h': 1200,
+};
 import { useProfile } from '@/contexts/ProfileContext';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import * as ImagePicker from 'expo-image-picker';
@@ -53,10 +59,9 @@ export default function CommunityScreen() {
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [promoteStep, setPromoteStep] = useState<PromoteStep>('select');
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>('1h');
-  const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  const [promotePayWith, setPromotePayWith] = useState<'SOL' | 'DWORLD'>('SOL');
   const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
   const [promoteConfirmVisible, setPromoteConfirmVisible] = useState(false);
-  const DTEST_MINT = DTEST_MINT_ADDR;
 
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -683,8 +688,8 @@ export default function CommunityScreen() {
     const result = await payToTreasury({
       fromAddress: activeAddress,
       amountSol: promotePayWith === 'SOL' ? (solAmount ?? 0.001) : undefined,
-      amountToken: promotePayWith === 'DTEST' ? usdPrice : undefined,
-      tokenMint: promotePayWith === 'DTEST' ? DTEST_MINT : undefined,
+      amountToken: promotePayWith === 'DWORLD' ? (DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? usdPrice) : undefined,
+      tokenMint: promotePayWith === 'DWORLD' ? DWORLD_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
       internalAccountIndex: selectedAccount?.accountIndex ?? 0,
       onStatus: setPromotePayStatus,
@@ -1997,7 +2002,7 @@ export default function CommunityScreen() {
               const solAmt = usdToSol(usdPrice);
               const displayAmt = promotePayWith === 'SOL'
                 ? (solAmt !== null ? `${solAmt.toFixed(3)} SOL` : 'Loading price...')
-                : `${usdPrice} DTEST`;
+                : `${(DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? usdPrice).toLocaleString()} DWORLD`;
               return (
                 <>
                   {/* Header */}
@@ -2008,7 +2013,7 @@ export default function CommunityScreen() {
                       </View>
                       <View>
                         <Text style={styles.pmTitle}>Promote Post</Text>
-                        <Text style={styles.pmSubtitle}>Boost your post to reach more users.{'\n'}Payment in SOL or DTEST.</Text>
+                        <Text style={styles.pmSubtitle}>Boost your post to reach more users.{'\n'}Payment in SOL or DWORLD.</Text>
                       </View>
                     </View>
                     <TouchableOpacity style={styles.pmCloseBtn} onPress={closePromoteModal}>
@@ -2030,14 +2035,14 @@ export default function CommunityScreen() {
                       <Text style={[styles.pmToggleBtnText, promotePayWith === 'SOL' && styles.pmToggleBtnTextActive]}>SOL</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.pmToggleBtn, promotePayWith === 'DTEST' && styles.pmToggleBtnActive]}
-                      onPress={() => setPromotePayWith('DTEST')}
+                      style={[styles.pmToggleBtn, promotePayWith === 'DWORLD' && styles.pmToggleBtnActive]}
+                      onPress={() => setPromotePayWith('DWORLD')}
                       activeOpacity={0.8}
                     >
                       <View style={[styles.pmToggleIcon, { backgroundColor: 'rgba(139,92,246,0.3)' }]}>
                         <Text style={styles.pmToggleIconText}>D</Text>
                       </View>
-                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'DTEST' && styles.pmToggleBtnTextActive]}>DTEST</Text>
+                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'DWORLD' && styles.pmToggleBtnTextActive]}>DWORLD</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -2049,7 +2054,7 @@ export default function CommunityScreen() {
                       const tSolAmt = usdToSol(tUsd);
                       const tAmt = promotePayWith === 'SOL'
                         ? (tSolAmt !== null ? `≈ ${tSolAmt.toFixed(3)} SOL` : 'Loading...')
-                        : `≈ ${tUsd} DTEST`;
+                        : `≈ ${(DWORLD_PROMOTE_AMOUNTS[tier.key] ?? tUsd).toLocaleString()} DWORLD`;
                       const isQuick = tier.key === '1h';
                       return (
                         <TouchableOpacity

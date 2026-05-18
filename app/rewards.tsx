@@ -164,7 +164,7 @@ export default function RewardsScreen() {
     if (result.success) {
       const sig = (result as any).signature as string | undefined;
       setClaimSignature(sig ?? null);
-      setClaimMessage({ type: 'success', text: `Claim successful — ${formatTokenAmount(reward.reward_amount)} DWC sent to your wallet.` });
+      setClaimMessage({ type: 'success', text: `Claim successful — ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} DWC sent to your wallet.` });
       // Refresh DWC balance after confirmed transfer
       refreshPortfolio().catch(() => {});
     } else {
@@ -502,7 +502,7 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
       <View style={styles.rewardInfo}>
         <Text style={styles.rewardType}>{formatRewardReason(reward.reason)}</Text>
         <Text style={styles.rewardAmount}>
-          {formatTokenAmount(reward.reward_amount)} DWC
+          {Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} DWC
         </Text>
         {reward.status === 'sent' && reward.transaction_signature && (
           <TouchableOpacity

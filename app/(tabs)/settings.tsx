@@ -29,9 +29,16 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
-import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { payToTreasury, DWORLD_MINT, PayStatus } from '@/services/treasuryService';
 import { getSolPrice } from '@/services/solana/priceService';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
+
+const DWORLD_PREMIUM_AMOUNTS: Record<PremiumTierKey, number> = {
+  '1m':  1500,
+  '3m':  4500,
+  '6m':  10000,
+  '1y':  18000,
+};
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { hashPin } from '@/lib/crypto/pinHash';
 
@@ -73,7 +80,7 @@ export default function SettingsScreen() {
 
   // Premium certification (paid)
   const [premiumTierKey, setPremiumTierKey] = useState<PremiumTierKey>('1m');
-  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DWORLD'>('SOL');
   const [premiumPayStatus, setPremiumPayStatus] = useState<PayStatus>('idle');
   const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
   const [premiumDone, setPremiumDone] = useState(false);
@@ -144,8 +151,8 @@ export default function SettingsScreen() {
     const result = await payToTreasury({
       fromAddress: activeAddress,
       amountSol: premiumPayWith === 'SOL' ? (solAmt ?? 0.001) : undefined,
-      amountToken: premiumPayWith === 'DTEST' ? tier.usd : undefined,
-      tokenMint: premiumPayWith === 'DTEST' ? DTEST_MINT : undefined,
+      amountToken: premiumPayWith === 'DWORLD' ? DWORLD_PREMIUM_AMOUNTS[premiumTierKey] : undefined,
+      tokenMint: premiumPayWith === 'DWORLD' ? DWORLD_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
       internalAccountIndex: selectedAccount?.accountIndex ?? 0,
       onStatus: setPremiumPayStatus,
@@ -399,7 +406,7 @@ export default function SettingsScreen() {
         {
           icon: <Shield size={20} color="#f59e0b" />,
           label: 'Premium Certification',
-          value: VerificationService.isPremiumActive(profile as any) ? 'Active' : undefined,
+          value: profile && VerificationService.isPremiumActive(profile as any) ? 'Active' : undefined,
           onPress: () => { setPremiumDone(false); setPremiumPayStatus('idle'); setPremiumTxSig(null); setActiveModal('premium'); },
         },
       ],
@@ -1195,7 +1202,7 @@ export default function SettingsScreen() {
                   const solAmt = usdToSol(tier.usd);
                   const dispAmt = premiumPayWith === 'SOL'
                     ? (solAmt !== null ? `≈ ${solAmt.toFixed(3)} SOL` : 'Loading price...')
-                    : `≈ ${tier.usd} DTEST`;
+                    : `≈ ${DWORLD_PREMIUM_AMOUNTS[tier.key as PremiumTierKey].toLocaleString()} DWORLD`;
                   return (
                     <TouchableOpacity
                       key={tier.key}
@@ -1220,7 +1227,7 @@ export default function SettingsScreen() {
 
                 <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 10, marginTop: 6 }}>PAY WITH</Text>
                 <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
-                  {(['SOL', 'DTEST'] as const).map(method => (
+                  {(['SOL', 'DWORLD'] as const).map(method => (
                     <TouchableOpacity
                       key={method}
                       style={{ flex: 1, backgroundColor: premiumPayWith === method ? 'rgba(59,130,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: premiumPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
@@ -1236,7 +1243,7 @@ export default function SettingsScreen() {
                 {(() => {
                   const tier = PREMIUM_TIERS.find(t => t.key === premiumTierKey)!;
                   const solAmt = usdToSol(tier.usd);
-                  const dispAmt = premiumPayWith === 'SOL' ? (solAmt !== null ? `${solAmt.toFixed(4)} SOL` : 'Loading price...') : `${tier.usd} DTEST`;
+                  const dispAmt = premiumPayWith === 'SOL' ? (solAmt !== null ? `${solAmt.toFixed(4)} SOL` : 'Loading price...') : `${DWORLD_PREMIUM_AMOUNTS[tier.key as PremiumTierKey].toLocaleString()} DWORLD`;
                   return (
                     <View style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: colors.surfaceBorder, gap: 10 }}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
