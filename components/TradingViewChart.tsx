@@ -257,6 +257,9 @@ export function TradingViewChart({
   const hasAutoScrolledRef = useRef(false);
   const timeframeRef   = useRef<TimeFrame | 'ALL'>('1H');
   const prevExternalPriceRef = useRef<number>(0);
+  // True only when the user explicitly drags the chart; reset on token/timeframe change.
+  // Prevents "Return to Live" from appearing after auto-scroll adjustments.
+  const userPannedRef = useRef(false);
 
   // Centralized price pipeline: track timestamp of latest accepted price to prevent
   // stale API responses from overwriting fresher live prices.
@@ -483,6 +486,7 @@ export function TradingViewChart({
     panOffsetRef.current = 0;
     priceScaleKeyRef.current = '';
     hasAutoScrolledRef.current = false;
+    userPannedRef.current = false;
     // Reset active live candle on timeframe change so it matches the new bucket size.
     setActiveLiveCandle(null);
     loadData(timeframe, false);
@@ -793,12 +797,12 @@ export function TradingViewChart({
   }
   const { maxP, minP, priceRange, maxVol } = priceScaleRef.current;
   const pixelPerBucket = n > 0 ? (bucketMs / xVisibleMs) * plotW : plotW / visibleBuckets;
-  // Hard caps prevent a single candle from becoming visually overwhelming on
-  // sparse or short timeframes where pixelPerBucket would otherwise be huge.
-  const MAX_CANDLE_W = isMobile ? 28 : 20;
-  const MAX_BAR_W    = isMobile ? 14 : 10;
-  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 3   : 1.5, pixelPerBucket * 0.55));
-  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 6   : 2,   pixelPerBucket * (isMobile ? 0.72 : 0.6)));
+  // Hard caps: keep candles and bars proportional at all densities.
+  // Lower caps prevent fat slabs on sparse / higher timeframes.
+  const MAX_CANDLE_W = isMobile ? 14 : 10;
+  const MAX_BAR_W    = isMobile ?  6 :  5; // bar tick half-width (open left / close right)
+  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2   : 1.5, pixelPerBucket * 0.38));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 3   : 2,   pixelPerBucket * (isMobile ? 0.60 : 0.55)));
 
   function xOf(i: number): number {
     const c = displayCandles[i];
@@ -897,6 +901,7 @@ export function TradingViewChart({
         }
 
         if (gestureModeRef.current === 'pan') {
+          userPannedRef.current = true;
           const pw   = plotWRef.current;
           const visibleBucketCount = Math.max(1, visibleMsRef.current / (bucketMsRef.current || 1));
           const candlePx = pw / visibleBucketCount;
@@ -1159,9 +1164,6 @@ export function TradingViewChart({
   }
 
   // ── Build paths ───────────────────────────────────────────────────────────
-  const linePts = displayCandles
-    .map((c, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(c.close).toFixed(1)}`)
-    .join(' ');
   const bottomY    = (PAD.top + plotH).toFixed(1);
   const plotRightX = PAD.left + plotW;
   const safeRightX = plotRightX - 4;
@@ -1171,7 +1173,6 @@ export function TradingViewChart({
   const lastY = lastCandleY;
 
   // Continuation: capped at 1.5 buckets to prevent a fake long flat extension.
-  // Must be computed before areaPath so fill uses the same right-edge limit.
   const maxContExtension = bucketMs * 1.5;
   const lastCandleTs     = displayCandles[n - 1].timestamp;
   const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
@@ -1179,17 +1180,86 @@ export function TradingViewChart({
   const contY            = lastY;
   const showContinuation = panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
 
-  // Area fill stops at the same point as the continuation line — never extends to safeRightX.
-  const areaFillRightX = showContinuation ? contRightX : lastCandleX;
-  const areaPath = `${linePts} L${areaFillRightX.toFixed(1)},${lastCandleY.toFixed(1)} L${areaFillRightX.toFixed(1)},${bottomY} L${xOf(0).toFixed(1)},${bottomY} Z`;
+  // Gap-aware segment builder: break paths when two candles are > 3 buckets apart.
+  // Prevents fake flat bridges on sparse / low-liquidity tokens.
+  const GAP_THRESHOLD_MS = bucketMs * 3;
+  const gapSegments: number[][] = [];
+  {
+    let seg: number[] = [];
+    for (let i = 0; i < displayCandles.length; i++) {
+      if (i > 0 && (displayCandles[i].timestamp - displayCandles[i - 1].timestamp) > GAP_THRESHOLD_MS) {
+        if (seg.length > 0) gapSegments.push(seg);
+        seg = [i];
+      } else {
+        seg.push(i);
+      }
+    }
+    if (seg.length > 0) gapSegments.push(seg);
+  }
 
-  // Grid
-  const gridLevels = 5;
-  const priceGridLines = Array.from({ length: gridLevels }, (_, i) => {
-    const frac  = i / (gridLevels - 1);
-    const price = minP + priceRange * frac;
-    return { price, y: yOf(price) };
+  // Gap-aware stroke path (M at each segment start, L within segments)
+  const linePts = gapSegments.map(seg =>
+    seg.map((idx, j) => {
+      const x = xOf(idx).toFixed(1);
+      const y = yOf(displayCandles[idx].close).toFixed(1);
+      return `${j === 0 ? 'M' : 'L'}${x},${y}`;
+    }).join(' ')
+  ).join(' ');
+
+  // Per-segment area fill paths (each segment closes its own polygon to avoid fill bridging)
+  const areaPaths: string[] = gapSegments.map((seg, si) => {
+    if (seg.length === 0) return '';
+    const firstX = xOf(seg[0]).toFixed(1);
+    const linePart = seg.map((idx, j) => {
+      const x = xOf(idx).toFixed(1);
+      const y = yOf(displayCandles[idx].close).toFixed(1);
+      return `${j === 0 ? 'M' : 'L'}${x},${y}`;
+    }).join(' ');
+    const lastIdx = seg[seg.length - 1];
+    const lastYStr = yOf(displayCandles[lastIdx].close).toFixed(1);
+    const isLastSeg = si === gapSegments.length - 1;
+    const segRightX = (isLastSeg && showContinuation ? contRightX : xOf(lastIdx)).toFixed(1);
+    return `${linePart} L${segRightX},${lastYStr} L${segRightX},${bottomY} L${firstX},${bottomY} Z`;
   });
+  // Convenience for single-path gradient fills (join all segments)
+  const areaPath = areaPaths.join(' ');
+
+  // ── Smart grid: use "nice" steps to avoid duplicate rounded labels ─────────
+  // Computes up to `gridCount` evenly-spaced price levels using a "round number" step
+  // (nearest 1/2/5 × 10^n), then formats with enough decimal places so no two labels
+  // show the same rounded string.
+  function buildGridLines(lo: number, hi: number, gridCount: number) {
+    const range = hi - lo;
+    if (range <= 0 || !isFinite(range)) return [];
+    const rawStep = range / (gridCount - 1);
+    const exp     = Math.floor(Math.log10(rawStep));
+    const m       = rawStep / Math.pow(10, exp);
+    const niceM   = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
+    const step    = niceM * Math.pow(10, exp);
+    const start   = Math.ceil(lo / step) * step;
+    const levels: { price: number; y: number; label: string }[] = [];
+    const seen    = new Set<string>();
+
+    const fmt = (v: number): string => {
+      if (valueMode !== 'mcap') return `$${fmtPrice(v)}`;
+      // Choose precision so labels are distinct even when range is small
+      const relRange = range / Math.max(Math.abs(v), 1);
+      if (v >= 1e9) return `$${(v / 1e9).toFixed(relRange < 0.05 ? 3 : 2)}B`;
+      if (v >= 1e6) return `$${(v / 1e6).toFixed(relRange < 0.05 ? 3 : 2)}M`;
+      if (v >= 1e3) return `$${(v / 1e3).toFixed(relRange < 0.1  ? 2 : 1)}K`;
+      return `$${v.toFixed(0)}`;
+    };
+
+    for (let p = start; p <= hi + step * 0.01 && levels.length < gridCount + 2; p += step) {
+      if (p < lo - step * 0.01) continue;
+      const label = fmt(p);
+      if (seen.has(label)) continue;
+      seen.add(label);
+      levels.push({ price: p, y: yOf(p), label });
+    }
+    return levels;
+  }
+  const priceGridLines = buildGridLines(minP, maxP, 5);
 
   // Time labels
   const timeLabelStepMs = bucketMs * Math.max(1, Math.ceil(visibleBuckets / 6));
@@ -1235,10 +1305,15 @@ export function TradingViewChart({
         </View>
       )}
 
-      {panOffsetCandles > 0 && (
+      {panOffsetCandles > 0 && userPannedRef.current && (
         <TouchableOpacity
           style={styles.returnLiveBtn}
-          onPress={() => { panOffsetRef.current = 0; setPanOffsetCandles(0); setCrosshair(null); }}
+          onPress={() => {
+            panOffsetRef.current = 0;
+            setPanOffsetCandles(0);
+            setCrosshair(null);
+            userPannedRef.current = false;
+          }}
           activeOpacity={0.8}>
           <Text style={styles.returnLiveText}>▶ Return to Live</Text>
         </TouchableOpacity>
@@ -1304,7 +1379,7 @@ export function TradingViewChart({
             <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} fill="rgba(255,255,255,0.01)" />
 
             {/* Horizontal grid + price labels */}
-            {priceGridLines.map(({ price, y }, i) => (
+            {priceGridLines.map(({ y, label }, i) => (
               <G key={`g${i}`}>
                 {showGrid && (
                   <Line x1={PAD.left} y1={y} x2={chartWidth - PAD.right} y2={y}
@@ -1316,7 +1391,7 @@ export function TradingViewChart({
                   fill={isMobile ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)'}
                   fontWeight={isMobile ? '600' : '400'}
                   textAnchor="start">
-                  {fmtValue(price, valueMode)}
+                  {label}
                 </SvgText>
               </G>
             ))}
@@ -1331,7 +1406,7 @@ export function TradingViewChart({
 
               {mode === 'area' && (
                 <>
-                  <Path d={areaPath} fill="url(#areaGrad)" />
+                  {areaPaths.map((p, i) => p ? <Path key={`af${i}`} d={p} fill="url(#areaGrad)" /> : null)}
                   <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </>
@@ -1348,8 +1423,7 @@ export function TradingViewChart({
 
               {mode === 'mountain' && (
                 <>
-                  {/* Use same areaPath fill (already limited to contRightX) with mountain gradient */}
-                  <Path d={areaPath} fill="url(#mountainGrad)" />
+                  {areaPaths.map((p, i) => p ? <Path key={`mf${i}`} d={p} fill="url(#mountainGrad)" /> : null)}
                   <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#8B5CF6" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Circle cx={lastX} cy={lastY} r={3} fill="#A78BFA" />
@@ -1358,7 +1432,7 @@ export function TradingViewChart({
 
               {mode === 'bonding' && (
                 <>
-                  <Path d={areaPath} fill="url(#bondingGrad)" />
+                  {areaPaths.map((p, i) => p ? <Path key={`bf${i}`} d={p} fill="url(#bondingGrad)" /> : null)}
                   <Path d={linePts} stroke="rgba(167,139,250,0.18)" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Path d={linePts} stroke="#A78BFA" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   <Circle cx={lastX} cy={lastY} r={6} fill="#A78BFA" opacity={0.18} />
@@ -1368,40 +1442,55 @@ export function TradingViewChart({
 
               {mode === 'bar' && displayCandles.map((c, i) => {
                 const up  = c.close >= c.open;
-                const col = up ? '#8B5CF6' : '#EC4899';
-                const bw  = Math.max(isMobile ? 5 : 3, pixelPerBucket * 0.5);
-                const sw  = isMobile ? 1.5 : 1;
-                // Clamp center so the close tick (cx + bw) never exceeds safeRightX
-                const cx  = Math.min(xOf(i), safeRightX - bw);
+                const col = up ? '#10B981' : '#EC4899';
+                // barW is already capped by MAX_BAR_W — use it directly for tick length
+                const cx  = Math.min(xOf(i), safeRightX - barW);
+                const yH  = yOf(c.high);
+                const yL  = yOf(c.low);
+                const yO  = yOf(c.open);
+                const yC  = yOf(c.close);
                 return (
                   <G key={`bar${c.timestamp}`}>
-                    <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={sw} />
-                    <Line x1={cx - bw} y1={yOf(c.open)}  x2={cx} y2={yOf(c.open)}  stroke={col} strokeWidth={sw} />
-                    <Line x1={cx} y1={yOf(c.close)} x2={cx + bw} y2={yOf(c.close)} stroke={col} strokeWidth={sw} />
+                    {/* Thin vertical high-low spine */}
+                    <Line x1={cx} y1={yH} x2={cx} y2={yL} stroke={col} strokeWidth={1} />
+                    {/* Open tick — left side, pointing left */}
+                    <Line x1={cx - barW} y1={yO} x2={cx} y2={yO} stroke={col} strokeWidth={1} />
+                    {/* Close tick — right side, pointing right */}
+                    <Line x1={cx} y1={yC} x2={cx + barW} y2={yC} stroke={col} strokeWidth={1} />
                   </G>
                 );
               })}
 
               {mode === 'candlestick' && displayCandles.map((c, i) => {
                 const up      = c.close >= c.open;
-                const col     = up ? '#8B5CF6' : '#EC4899';
-                const wickW   = isMobile ? 1.5 : 1;
-                // Clamp center so the body right edge (cx + candleW/2) never exceeds safeRightX
+                const col     = up ? '#10B981' : '#EC4899';
+                const fillCol = up ? '#10B981' : '#EC4899';
+                // Wick is always 1px — never thicker than the candle body
+                const wickW   = 1;
+                // Clamp center so body right edge never exceeds safeRightX
                 const cx      = Math.min(xOf(i), safeRightX - candleW / 2);
                 const bodyTop = yOf(Math.max(c.open, c.close));
                 const bodyBot = yOf(Math.min(c.open, c.close));
                 const rawH    = bodyBot - bodyTop;
-                // Doji: open ≈ close — render as a clean horizontal tick spanning the body width
-                const isDoji  = rawH < 1;
+                // Doji: render as a thin horizontal line, not a thick slab
+                const isDoji  = rawH < 0.8;
                 return (
                   <G key={`cs${c.timestamp}`}>
-                    {/* Wick centered on cx — always within clamped bounds */}
+                    {/* Thin wick — always 1px, centered */}
                     <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
                     {isDoji ? (
+                      // Doji: single horizontal tick at close level
                       <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
-                        stroke={col} strokeWidth={isMobile ? 2 : 1.5} />
+                        stroke={col} strokeWidth={1.5} />
                     ) : (
-                      <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)} fill={col} />
+                      // Normal body: up = hollow outline, down = filled (TradingView convention)
+                      up ? (
+                        <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)}
+                          fill="none" stroke={fillCol} strokeWidth={1} />
+                      ) : (
+                        <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)}
+                          fill={fillCol} />
+                      )
                     )}
                   </G>
                 );
