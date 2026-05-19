@@ -329,8 +329,6 @@ export function TradingViewChart({
   // All ranked DexScreener pair addresses for the current token.
   // Stored so we can fall back to the next pair if the primary WS fails repeatedly.
   const rankedPairsRef = useRef<string[]>([]);
-  // true once the current pair's WS has delivered at least one valid price — gate for caching.
-  const wsPriceCachedRef = useRef(false);
 
   // Stable price scale — recomputed only when visible candle set changes, not on clock tick.
   const priceScaleRef    = useRef({ maxP: 0, minP: 0, priceRange: 1, maxVol: 1 });
@@ -420,9 +418,8 @@ export function TradingViewChart({
         const allAddrs = ranked.map((p: any) => p.pairAddress).filter(Boolean) as string[];
         const addr = allAddrs[0];
         if (!cancelled && addr) {
-          // Store all ranked pairs for WS fallback; do not cache until WS validates.
+          // Store all ranked pairs for WS fallback; do not cache until OHLCV validates.
           rankedPairsRef.current = allAddrs;
-          wsPriceCachedRef.current = false;
           setResolvedPairAddr(addr);
           pairAddrRef.current = addr;
         }
@@ -639,11 +636,6 @@ export function TradingViewChart({
             const price = livePriceRef.current ?? np;
             // DexScreener WS provides price quotes, not real timestamped trades.
             applyLivePrice(price, Date.now(), false);
-            // Cache the pair once it delivers a valid price — validates it has live data.
-            if (!wsPriceCachedRef.current && tokenMint && pairAddrRef.current) {
-              wsPriceCachedRef.current = true;
-              resolvedPairCache.set(tokenMint, pairAddrRef.current);
-            }
           }, 400);
           livePriceRef.current = np;
         } catch {}
@@ -661,8 +653,8 @@ export function TradingViewChart({
             : undefined;
           if (nextAddr) {
             pairAddrRef.current = nextAddr;
+            setResolvedPairAddr(nextAddr);
             wsRetryCountRef.current = 0;
-            wsPriceCachedRef.current = false;
             if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
             wsReconnectTimerRef.current = setTimeout(() => {
               wsReconnectTimerRef.current = null;
@@ -708,7 +700,6 @@ export function TradingViewChart({
     setAllEffectiveTf('1D');
     // Reset pair fallback state for the new token.
     rankedPairsRef.current = [];
-    wsPriceCachedRef.current = false;
   }, [tokenMint]);
 
   // Auto-select chart mode based on token trading density.
@@ -777,14 +768,31 @@ export function TradingViewChart({
         if (cleaned.length > 0) {
           setCandles(cleaned);
           setHasData(true);
+          // Cache the resolved pair only after ≥2 usable OHLCV candles are confirmed.
+          // This prevents caching a pair that only has a live WS price but no chart history.
+          if (cleaned.length >= 2 && pairAddrRef.current && tokenMint && !resolvedPairCache.has(tokenMint)) {
+            resolvedPairCache.set(tokenMint, pairAddrRef.current);
+          }
         } else {
+          // All candles invalid — evict bad cached pair so next load retries DexScreener.
+          if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
+            resolvedPairCache.delete(tokenMint);
+          }
           if (!silent) { setHasData(false); setCandles([]); }
         }
       } else {
+        // No data returned — evict if this pair was cached to force re-resolution.
+        if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
+          resolvedPairCache.delete(tokenMint);
+        }
         if (!silent) { setHasData(false); setCandles([]); }
       }
     } catch {
       if (myId !== reqIdRef.current) return;
+      // Evict bad cached pair on exception so the next visit re-resolves from DexScreener.
+      if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
+        resolvedPairCache.delete(tokenMint);
+      }
       if (!silent) setHasData(false);
     } finally {
       if (myId === reqIdRef.current && !silent) setLoading(false);
