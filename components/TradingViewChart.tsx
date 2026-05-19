@@ -1280,7 +1280,13 @@ export function TradingViewChart({
     const raw = PAD.top + plotH - ((price - minP) / priceRange) * plotH;
     return Math.max(PAD.top, Math.min(PAD.top + plotH, raw));
   }
-  function volBarH(vol: number) { return Math.max(isMobile ? 4 : 2, (vol / maxVol) * (VOL_H - 6)); }
+  function volBarH(vol: number): number {
+    if (vol <= 0 || !isFinite(vol) || maxVol <= 0) return 0;
+    const h = (vol / maxVol) * (VOL_H - 6);
+    // No hard minimum — micro-volume proportionally tiny (< 0.3px) renders as nothing.
+    // Only apply 1px floor once the bar is visually meaningful (≥0.3px proportional height).
+    return h < 0.3 ? 0 : Math.max(1, h);
+  }
 
   const totalH = CHART_H + VOL_H + TIME_H;
 
@@ -1644,6 +1650,17 @@ export function TradingViewChart({
     );
   }
 
+  // ── Sparse detection (render-level) ──────────────────────────────────────
+  // Computed before segment-building and continuation check so both can use it.
+  const _renderSortedGaps = displayCandles
+    .slice(1).map((c, i) => c.timestamp - displayCandles[i].timestamp)
+    .sort((a, b) => a - b);
+  const renderMedianGapMs = _renderSortedGaps.length > 0
+    ? _renderSortedGaps[Math.floor(_renderSortedGaps.length / 2)]
+    : bucketMs;
+  // Sparse when few candles are visible OR typical spacing greatly exceeds the bucket.
+  const isSparseChart = displayCandles.length < 30 || renderMedianGapMs > bucketMs * 2;
+
   // ── Build paths ───────────────────────────────────────────────────────────
   const bottomY    = (PAD.top + plotH).toFixed(1);
   const plotRightX = PAD.left + plotW;
@@ -1663,12 +1680,18 @@ export function TradingViewChart({
   const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
   const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
   const contY            = lastY;
+  // Extra guards: last candle must have real volume (not synthetic/zero-volume);
+  // sparse tokens show no continuation to avoid fake flat bridges.
+  const lastCandleVolume = n > 0 ? displayCandles[n - 1].volume : 0;
   const showContinuation = timeframe !== 'ALL' && panOffsetCandles === 0 &&
-    n > 0 && isHotToken && contRightX > lastX + 2;
+    n > 0 && isHotToken && !isSparseChart &&
+    lastCandleVolume > 0 && contRightX > lastX + 2;
 
-  // Gap-aware segment builder: break paths when two candles are > 2.5 buckets apart.
-  // Prevents fake flat bridges on sparse / low-liquidity tokens.
-  const GAP_THRESHOLD_MS = bucketMs * 2.5;
+  // Gap-aware segment builder.
+  // Sparse tokens: break on any gap > 1.2 buckets to prevent fake flat bridges.
+  // Dense tokens: allow gaps up to 2.5 buckets (covers weekends, missing data).
+  // isSparseChart is computed above in the "Sparse detection" section.
+  const GAP_THRESHOLD_MS = isSparseChart ? bucketMs * 1.2 : bucketMs * 2.5;
   const gapSegments: number[][] = [];
   {
     let seg: number[] = [];
@@ -1698,8 +1721,10 @@ export function TradingViewChart({
   // line is drawn separately and must NOT extend the fill (would create a fake "wall").
   const areaPaths: string[] = gapSegments.map((seg) => {
     if (seg.length < 2) return '';
-    // Suppress fill for segments that span a large portion of the chart but have
-    // too few points — these produce giant filled rectangles on sparse tokens.
+    // Sparse tokens: never fill segments with fewer than 6 candles — they produce
+    // tiny coloured blocks or stretched rectangles that look fake.
+    if (isSparseChart && seg.length < 6) return '';
+    // Dense tokens: also suppress wide segments with too few points (same old rule).
     const segW = xOf(seg[seg.length - 1]) - xOf(seg[0]);
     if (segW / plotW > 0.25 && seg.length < 6) return '';
     const firstX = xOf(seg[0]).toFixed(1);
@@ -2087,8 +2112,8 @@ export function TradingViewChart({
 
             {/* Volume bars — zero/null/negative volume produces no bar (includes live synthetic candles) */}
             {showVolume && displayCandles.map((c, i) => {
-              if (!c.volume || c.volume <= 0) return null;
               const h    = volBarH(c.volume);
+              if (h <= 0) return null;
               const w    = Math.max(barW, 1.5);
               // Clamp so right edge (vx + w/2) never exceeds safeRightX
               const vx   = Math.min(xOf(i), safeRightX - w / 2);
