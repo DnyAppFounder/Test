@@ -44,6 +44,34 @@ import { supabase } from '@/lib/supabase';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
+// How long a live candle stays "active" before its pulse fades out.
+// After this window with no new real trade the dot stops pulsing.
+const LIVE_CANDLE_STALE_MS = 5 * 60_000; // 5 minutes
+
+/**
+ * Extends CandleData with origin metadata so rendering can verify
+ * the candle came from a confirmed real on-chain trade rather than
+ * a quote-only price source (DexScreener WS, Jupiter REST, etc.).
+ *
+ * sourceType === 'realTrade' is the canonical gate:
+ *   - set only when Supabase realtime fires on token_candles with is_live=true
+ *   - never set by DexScreener WS, Jupiter quote, REST poll, or liveTokenStore
+ */
+interface LiveCandleData extends CandleData {
+  /** Always 'realTrade' — only real on-chain events create this object. */
+  sourceType: 'realTrade';
+  /** Where the trade signal came from, e.g. 'supabase-token-candles'. */
+  source: string;
+  /** Unix-ms timestamp of the triggering trade event (not the candle open time). */
+  tradeTimestamp: number;
+  /** On-chain tx signature if the source provides it. */
+  signature?: string;
+  /** Trade direction if available. */
+  side?: 'buy' | 'sell';
+  /** Raw trade volume in quote currency (0 when unavailable — never invented). */
+  tradeVolume: number;
+}
+
 export type ChartMode = 'line' | 'area' | 'candlestick' | 'bonding' | 'bar' | 'mountain';
 type ValueMode = 'mcap' | 'price';
 
@@ -252,8 +280,9 @@ export function TradingViewChart({
   // Historical OHLCV from API — never modified by live price updates.
   const [candles, setCandles] = useState<CandleData[]>([]);
   // Active live candle for the current bucket — tracked separately so real history stays immutable.
-  const [activeLiveCandle, setActiveLiveCandle] = useState<CandleData | null>(null);
-  const activeLiveCandleRef = useRef<CandleData | null>(null);
+  // Only set by confirmed real on-chain trade events (is_live=true from Supabase realtime).
+  const [activeLiveCandle, setActiveLiveCandle] = useState<LiveCandleData | null>(null);
+  const activeLiveCandleRef = useRef<LiveCandleData | null>(null);
 
   const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
   // Tracks which resolution was actually used when timeframe === 'ALL'.
@@ -412,9 +441,16 @@ export function TradingViewChart({
     return () => loop.stop();
   }, []);
 
-  // Chart endpoint pulse — only when a real live candle is active
+  // Chart endpoint pulse — only when a confirmed real-trade live candle is active and fresh.
+  // Quote-only updates (DexScreener WS, Jupiter REST, liveTokenStore) never set activeLiveCandle,
+  // so this guard is mainly a safety check against stale candles from earlier sessions.
   useEffect(() => {
-    if (!activeLiveCandle) {
+    if (!activeLiveCandle || activeLiveCandle.sourceType !== 'realTrade') {
+      chartPulseAnim.setValue(0);
+      return;
+    }
+    const isStale = Date.now() - activeLiveCandle.tradeTimestamp > LIVE_CANDLE_STALE_MS;
+    if (isStale) {
       chartPulseAnim.setValue(0);
       return;
     }
@@ -489,7 +525,19 @@ export function TradingViewChart({
   // isRealTrade = true  → a timestamped on-chain trade; may create/update activeLiveCandle.
   // isRealTrade = false → REST/WS quote, DexScreener, Jupiter; updates display only.
   // The active live candle (current bucket only) is updated separately from history.
-  const applyLivePrice = useCallback((price: number, sourceTs?: number, isRealTrade = false) => {
+  const applyLivePrice = useCallback((
+    price: number,
+    sourceTs?: number,
+    isRealTrade = false,
+    tradeMeta?: {
+      /** Canonical source identifier, e.g. 'supabase-token-candles'. */
+      source: string;
+      signature?: string;
+      side?: 'buy' | 'sell';
+      /** Raw trade volume in quote currency; 0 when unavailable, never invented. */
+      tradeVolume?: number;
+    },
+  ) => {
     if (!price || price <= 0) return;
     const ts = sourceTs ?? Date.now();
     // Reject if this update is more than 1s older than the last accepted price.
@@ -501,8 +549,8 @@ export function TradingViewChart({
     // Don't push back to store when the update itself came from the store — prevents loop.
     if (tokenMint && !fromStoreRef.current) liveTokenStore.pushPrice(tokenMint, price);
 
-    // REST/WS quote sources only update the header price display — they must NOT
-    // create or mutate activeLiveCandle because they carry no real trade timestamp.
+    // Quote-only sources (DexScreener WS, Jupiter REST, liveTokenStore, external snapshot)
+    // must NOT create or mutate activeLiveCandle — they carry no confirmed trade event.
     if (!isRealTrade) return;
 
     const bMs = BUCKET_MS[timeframeRef.current] ?? 3_600_000;
@@ -525,22 +573,43 @@ export function TradingViewChart({
     const isHistAdjacent = lastHist != null && (activeBucket - lastHistBucket) <= bMs * 2.5;
     const openPrice = isHistAdjacent ? lastHistClose : price;
 
-    setActiveLiveCandle(prev => {
+    // Metadata embedded in every real-trade candle so rendering can verify origin.
+    const safeTradeVolume = tradeMeta?.tradeVolume != null &&
+      isFinite(tradeMeta.tradeVolume) && tradeMeta.tradeVolume >= 0
+        ? tradeMeta.tradeVolume
+        : 0;
+
+    setActiveLiveCandle((prev: LiveCandleData | null) => {
       const prevBucket = prev ? Math.floor(prev.timestamp / bMs) * bMs : -1;
       if (prevBucket !== activeBucket) {
-        // New bucket — create a fresh synthetic candle; never mutate real history.
-        return {
-          timestamp: activeBucket,
-          open:   openPrice,
-          high:   Math.max(openPrice, price),
-          low:    Math.min(openPrice, price),
-          close:  price,
-          volume: 0,
+        // New bucket — create a fresh live candle with full origin metadata.
+        const fresh: LiveCandleData = {
+          timestamp:      activeBucket,
+          open:           openPrice,
+          high:           Math.max(openPrice, price),
+          low:            Math.min(openPrice, price),
+          close:          price,
+          volume:         safeTradeVolume,
+          sourceType:     'realTrade',
+          source:         tradeMeta?.source ?? 'supabase-token-candles',
+          tradeTimestamp: priceEventTs,
+          tradeVolume:    safeTradeVolume,
+          ...(tradeMeta?.signature ? { signature: tradeMeta.signature } : {}),
+          ...(tradeMeta?.side      ? { side:      tradeMeta.side }      : {}),
         };
+        return fresh;
       }
-      // Same bucket — update in place.
+      // Same bucket — update OHLC in place, refresh trade timestamp.
       if (prev!.close === price && prev!.high >= price && prev!.low <= price) return prev;
-      return { ...prev!, close: price, high: Math.max(prev!.high, price), low: Math.min(prev!.low, price) };
+      return {
+        ...prev!,
+        close:          price,
+        high:           Math.max(prev!.high, price),
+        low:            Math.min(prev!.low,  price),
+        tradeTimestamp: priceEventTs,
+        ...(tradeMeta?.signature ? { signature: tradeMeta.signature } : {}),
+        ...(tradeMeta?.side      ? { side:      tradeMeta.side }      : {}),
+      };
     });
   }, [tokenMint]);
 
@@ -832,10 +901,18 @@ export function TradingViewChart({
     return unsub;
   }, [tokenMint, applyLivePrice]);
 
-  // Supabase realtime subscription for real on-chain trade events.
-  // Helius WS writes candles to token_candles; when a row changes we know a real trade occurred.
-  // Only 1m candles used here for maximum timestamp precision.
-  // isRealTrade=true tells applyLivePrice to create/update activeLiveCandle.
+  // Supabase realtime subscription for confirmed on-chain trade candles.
+  //
+  // Source integrity rules enforced here:
+  //  1. Only token_candles rows with is_live=true are treated as real trades.
+  //     Historical/seeded candles (is_live=false) are silently discarded so they
+  //     never create an activeLiveCandle or trigger the pulse animation.
+  //  2. Only 1-minute timeframe rows are accepted — finest granularity, written by
+  //     Helius WS ingestion; other timeframes are aggregated and not real-time signals.
+  //  3. close must be > 0; token_mint is already scoped by the channel filter.
+  //  4. Timestamp must fall in a sane range (post-2020, not >24 h in the future).
+  //  5. volume is forwarded as-is (may be 0 for dust trades); never invented.
+  //  6. signature / side / is_buy are forwarded when the row carries them.
   useEffect(() => {
     if (!tokenMint) return;
     const channel = supabase
@@ -851,16 +928,37 @@ export function TradingViewChart({
         (payload: any) => {
           const row = payload.new;
           if (!row || !row.close || !row.open_time) return;
+
+          // ── Source integrity gate ─────────────────────────────────────────
+          // is_live=true is written exclusively by the Helius WS ingestion pipeline.
+          // Seeded/historical candles always have is_live=false; reject them here so
+          // an INSERT/UPDATE of old data never creates a fake activeLiveCandle.
+          if (row.is_live !== true) return;
+
+          // Only 1-minute rows carry trade-level precision.
           if (row.timeframe !== '1m') return;
+
           const price = parseFloat(row.close);
           if (!(price > 0)) return;
+
           // Normalize: Helius may write open_time as Unix seconds (10 digits) or ms (13 digits).
           const rawTs = Number(row.open_time);
           const normTs = rawTs < 10_000_000_000 ? rawTs * 1000 : rawTs;
           // Reject timestamps that are clearly wrong: too old (before 2020) or in the future.
           const now = Date.now();
           if (!isFinite(normTs) || normTs < 1_577_836_800_000 || normTs > now + 86_400_000) return;
-          applyLivePrice(price, normTs, true);
+
+          // Volume: accept real value or 0 — never invent a non-zero volume.
+          const rawVol = row.volume != null ? parseFloat(row.volume) : 0;
+          const tradeVolume = isFinite(rawVol) && rawVol >= 0 ? rawVol : 0;
+
+          applyLivePrice(price, normTs, true, {
+            source:      'supabase-token-candles',
+            tradeVolume,
+            // Forward signature / side when present in the row.
+            ...(row.signature ? { signature: String(row.signature) } : {}),
+            ...(row.is_buy != null ? { side: row.is_buy ? 'buy' : 'sell' } : {}),
+          });
         }
       )
       .subscribe();
@@ -1651,10 +1749,11 @@ export function TradingViewChart({
   // Guide line: anchored to real candle data so it never contradicts candle closes.
   // Quote-only sources (DexScreener WS, Jupiter REST) update the header freely but must
   // not move the guide line — that would create a detached Y position with no matching candle.
-  // Rule: guide uses activeLiveCandle (real trade) if present, else last real candle close.
-  const realChartClose = activeLiveCandle
-    ? activeLiveCandle.close
-    : (mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : 0);
+  // Rule: guide uses activeLiveCandle only when it carries sourceType='realTrade' (confirmed trade).
+  const realChartClose =
+    activeLiveCandle?.sourceType === 'realTrade'
+      ? activeLiveCandle.close
+      : (mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : 0);
   const scaledGuidePrice = realChartClose > 0 ? realChartClose * mcapScale : 0;
   const scaledLivePrice  = liveScaledValue; // header/display only — can include quote prices
   const clampedGuide = scaledGuidePrice > maxP ? maxP : scaledGuidePrice < minP ? minP : scaledGuidePrice;
@@ -1922,10 +2021,16 @@ export function TradingViewChart({
               </>
             )}
 
-            {/* Endpoint marker — single authoritative dot + optional animated ring when live */}
+            {/* Endpoint marker — static dot always visible; animated ring only for confirmed real trades.
+                Pulse conditions (ALL must be true):
+                  1. activeLiveCandle.sourceType === 'realTrade'  — came from is_live=true DB row
+                  2. tradeTimestamp < LIVE_CANDLE_STALE_MS ago    — trade was recent
+                Quote-only updates (DexScreener WS, Jupiter REST, liveTokenStore) never set
+                activeLiveCandle so the ring is naturally absent for those sources. */}
             {!crosshair && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding') && (
               <G>
-                {activeLiveCandle && (
+                {activeLiveCandle?.sourceType === 'realTrade' &&
+                 (Date.now() - activeLiveCandle.tradeTimestamp) < LIVE_CANDLE_STALE_MS && (
                   <AnimatedCircle
                     cx={lastX} cy={lastY} r={10}
                     fill="none"
