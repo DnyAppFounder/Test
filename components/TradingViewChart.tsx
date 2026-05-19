@@ -203,6 +203,16 @@ function fmtTime(ts: number, tf: TimeFrame | 'ALL'): string {
   }
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+function fmtTimeByStep(ts: number, stepMs: number): string {
+  const d = new Date(ts);
+  if (stepMs >= 86_400_000) {
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  if (stepMs >= 3_600_000 * 6 && d.getHours() === 0 && d.getMinutes() === 0) {
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+}
 function fmtDateTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
@@ -843,9 +853,14 @@ export function TradingViewChart({
           if (!row || !row.close || !row.open_time) return;
           if (row.timeframe !== '1m') return;
           const price = parseFloat(row.close);
-          if (price > 0) {
-            applyLivePrice(price, Number(row.open_time), true);
-          }
+          if (!(price > 0)) return;
+          // Normalize: Helius may write open_time as Unix seconds (10 digits) or ms (13 digits).
+          const rawTs = Number(row.open_time);
+          const normTs = rawTs < 10_000_000_000 ? rawTs * 1000 : rawTs;
+          // Reject timestamps that are clearly wrong: too old (before 2020) or in the future.
+          const now = Date.now();
+          if (!isFinite(normTs) || normTs < 1_577_836_800_000 || normTs > now + 86_400_000) return;
+          applyLivePrice(price, normTs, true);
         }
       )
       .subscribe();
@@ -933,7 +948,12 @@ export function TradingViewChart({
   plotHRef.current = plotH;
 
   // ── Live time geometry ────────────────────────────────────────────────────
-  const bucketMs       = BUCKET_MS[timeframe] ?? 3_600_000;
+  // ALL mode: use the resolution that was actually fetched (allEffectiveTf),
+  // not the hardcoded BUCKET_MS['ALL'] = 1D. Without this fix, 1H candles
+  // all collapse to the same x-position (12h offset each), creating vertical walls.
+  const bucketMs       = timeframe === 'ALL'
+    ? (BUCKET_MS[allEffectiveTf] ?? 3_600_000)
+    : (BUCKET_MS[timeframe] ?? 3_600_000);
   const visibleBuckets = VISIBLE_BUCKETS[timeframe] ?? 48;
   const scrollOffsetMs = panOffsetCandles * bucketMs;
   const rightTime      = rightTimeRef.current - scrollOffsetMs;
@@ -1002,31 +1022,37 @@ export function TradingViewChart({
   const n = displayCandles.length;
 
   // ── Adaptive x-range ─────────────────────────────────────────────────────
-  // Keep the time axis anchored to the standard visibleMs window so candle
-  // positions are honest (no stretching to fill sparse data).
-  // Two adjustment cases:
-  //   1. Data starts in the far-right of the window (slide left).
-  //   2. Data was expanded backward past leftTime (sparse live mode: fit all).
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
   if (displayCandles.length > 0) {
     const firstDataTs = displayCandles[0].timestamp;
-    // ALL always fits full data range; other timeframes adapt only when data is outside
-    // the standard window or when sparse data was expanded beyond leftTime.
-    const shouldAdapt = timeframe === 'ALL' ||
-      (panOffsetCandles === 0 &&
-        (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime));
-    if (shouldAdapt) {
-      xLeft = firstDataTs - bucketMs * 2;
-      // Cap right edge: prevents blank dead space for tokens with old/infrequent trades.
-      // For ALL mode, allow the right edge to reach current time naturally.
+    const lastDataTs  = displayCandles[displayCandles.length - 1].timestamp;
+
+    if (timeframe === 'ALL') {
+      // ALL mode: fit the x-axis to the actual data span.
+      // Never extend to current time — that creates huge blank right space.
+      const dataSpan = Math.max(lastDataTs - firstDataTs, bucketMs);
+      const leftPad  = bucketMs * 1.5;
+      const rightPad = Math.max(bucketMs * 1.5, dataSpan * 0.04);
+      xLeft      = firstDataTs - leftPad;
+      xVisibleMs = Math.max(dataSpan + leftPad + rightPad, bucketMs * 8);
+    } else {
+      // Non-ALL: standard window with smart capping of empty right-side dead space.
+      // A "future context" of 1-2 buckets is shown to the right of the last real candle.
       const futureCtx = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
-      const lastDataTs = displayCandles[displayCandles.length - 1].timestamp;
-      const gapToNow = rightTime - lastDataTs;
-      const cappedRight = (gapToNow > futureCtx && !activeLiveCandle && timeframe !== 'ALL')
-        ? lastDataTs + futureCtx
-        : rightTime;
-      xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
+      const gapToNow  = rightTime - lastDataTs;
+      const shouldAdapt = panOffsetCandles === 0 &&
+        (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime ||
+          gapToNow > futureCtx * 4);
+      if (shouldAdapt) {
+        xLeft = firstDataTs - bucketMs * 2;
+        // Cap right side: no more than futureCtx past last real candle when there's no live trade.
+        // This eliminates the wide blank right side for 1M/1W/1D tokens with no recent trades.
+        const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
+          ? lastDataTs + Math.min(futureCtx, gapToNow * 0.25)
+          : rightTime;
+        xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
+      }
     }
   }
   leftTimeRef.current  = xLeft;
@@ -1074,10 +1100,16 @@ export function TradingViewChart({
       const sortedVols = [...realVols].sort((a, b) => a - b);
       const p90idx     = Math.min(Math.floor(sortedVols.length * 0.9), sortedVols.length - 1);
       const cappedVol  = sortedVols.length > 0 ? Math.max(sortedVols[p90idx] * 1.5, 1) : 1;
+      // Use a tight scale: start just below the lowest visible candle.
+      // Only force minP=0 when data goes near 0 (bottom < 10% of top),
+      // preventing the "scaled from $0 to huge value" axis artifact.
+      const tightMin     = safeMin - pad;
+      const includeZero  = tightMin < 0 || safeMin < safeMax * 0.08;
+      const safeMinP     = includeZero ? Math.max(0, tightMin) : tightMin;
       priceScaleRef.current = {
         maxP:       safeMax + pad,
-        minP:       Math.max(0, safeMin - pad),
-        priceRange: (safeMax + pad) - Math.max(0, safeMin - pad) || 1,
+        minP:       safeMinP,
+        priceRange: (safeMax + pad) - safeMinP || 1,
         maxVol:     cappedVol,
       };
     }
@@ -1267,10 +1299,14 @@ export function TradingViewChart({
   // Axis labels use mcapScale for consistency.
   const mcapVal = resolvedInfo?.marketCap ?? null;
   // 24h change: prefer live value from store (refreshed every 30s); fall back to snapshot.
-  // Show "—" when neither source has a real non-zero value — avoids showing "0.00%" for new tokens.
+  // Validate: reject values outside ±999% as they indicate stale/bad data from the source.
+  // Show "—" when neither source has a real non-zero validated value.
   const raw24h  = resolvedInfo?.priceChange24h;
-  const change24h = live24hChange ?? raw24h ?? 0;
-  const has24h    = live24hChange !== null || (raw24h !== undefined && raw24h !== 0);
+  const is24hValid = (v: number | null | undefined): v is number =>
+    v !== null && v !== undefined && isFinite(v) && Math.abs(v) <= 999;
+  const change24h = is24hValid(live24hChange) ? live24hChange
+    : is24hValid(raw24h) ? raw24h : 0;
+  const has24h = is24hValid(live24hChange) || (is24hValid(raw24h) && raw24h !== 0);
   const isUp       = change24h >= 0;
   const changeColor = isUp ? '#10B981' : '#EC4899';
   // Use the same live-scaled formula as the chart axis and live pill so all four displays agree.
@@ -1485,13 +1521,18 @@ export function TradingViewChart({
   const lastX = Math.min(lastCandleX, safeRightX);
   const lastY = lastCandleY;
 
-  // Continuation: capped at 1.5 buckets to prevent a fake long flat extension.
+  // Continuation: short dashed segment from last close → now, max 1.5 buckets.
+  // Disabled for: ALL mode, cold/sparse tokens (last trade > 3 buckets old), panned view.
+  // Never creates a fake flat bridge or a vertical wall at the right edge.
   const maxContExtension = bucketMs * 1.5;
   const lastCandleTs     = displayCandles[n - 1].timestamp;
+  const lastCandleAgeMs  = rightTime - lastCandleTs;
+  const isHotToken       = lastCandleAgeMs <= bucketMs * 3; // "cold" token = no recent trades
   const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
   const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
   const contY            = lastY;
-  const showContinuation = timeframe !== 'ALL' && panOffsetCandles === 0 && n > 0 && contRightX > lastX + 2;
+  const showContinuation = timeframe !== 'ALL' && panOffsetCandles === 0 &&
+    n > 0 && isHotToken && contRightX > lastX + 2;
 
   // Gap-aware segment builder: break paths when two candles are > 2.5 buckets apart.
   // Prevents fake flat bridges on sparse / low-liquidity tokens.
@@ -1926,7 +1967,7 @@ export function TradingViewChart({
             {timeLabels.map(({ ts, x }) => (
               <SvgText key={`tl${ts}`} x={x} y={CHART_H + VOL_H + TIME_H - 3}
                 fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
-                {fmtTime(ts, timeframe === 'ALL' ? allEffectiveTf : timeframe)}
+                {fmtTimeByStep(ts, timeLabelStepMs)}
               </SvgText>
             ))}
 
