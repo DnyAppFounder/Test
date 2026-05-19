@@ -4,7 +4,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Target } from 'lucide-react-native';
+import { Target, X as XIcon } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import type { UnifiedGameResult } from '@/services/game/gameTypes';
 import type { GameMode } from './GameModeSelector';
@@ -20,13 +20,15 @@ function makeRng(seed: string) {
   };
 }
 
-const GAME_DURATION_MS = 30_000;
+const GAME_DURATION_MS = 60_000;  // 1 minute
 const TARGET_VISIBLE_MS = 1400;
 const TARGET_R = 30;
 const HIT_SCORE = 100;
 const COMBO_BONUS = 30;
 const MISS_PENALTY = 50;
 const MAX_SIMULTANEOUS_TARGETS = 3;
+const TRAP_CHANCE = 0.13;          // ~13% of spawns are red traps
+const TRAP_PENALTY_PTS = 150;      // points deducted when trap is tapped
 
 interface AimTarget {
   id: number;
@@ -38,6 +40,7 @@ interface AimTarget {
   scale: Animated.Value;
   opacity: Animated.Value;
   ripple: Animated.Value;
+  isTrap: boolean;                 // red trap target
 }
 
 interface Props {
@@ -62,6 +65,7 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
   const [hits, setHits] = useState(0);
   const [misses, setMisses] = useState(0);
   const [targets, setTargets] = useState<AimTarget[]>([]);
+  const [trapFeedback, setTrapFeedback] = useState<{ id: number; x: number; y: number } | null>(null);
 
   const rngRef = useRef(makeRng(seed));
   const targetIdRef = useRef(0);
@@ -87,6 +91,7 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
     const x = pad + r() * (arenaW - pad * 2);
     const y = pad + r() * (arenaH - pad * 2);
     const id = targetIdRef.current++;
+    const isTrap = r() < TRAP_CHANCE;
     const t: AimTarget = {
       id, x, y,
       spawnAt: Date.now(),
@@ -95,6 +100,7 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
       scale: new Animated.Value(0),
       opacity: new Animated.Value(1),
       ripple: new Animated.Value(0),
+      isTrap,
     };
     Animated.spring(t.scale, { toValue: 1, useNativeDriver: true, speed: 22, bounciness: 8 }).start();
     return t;
@@ -195,20 +201,29 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
     if (target.hitAt !== null || target.missedAt !== null) return;
     target.hitAt = Date.now();
 
-    // Combo + score
-    const newCombo = comboRef.current + 1;
-    comboRef.current = newCombo;
-    setCombo(newCombo);
-    if (newCombo > maxComboRef.current) { maxComboRef.current = newCombo; setMaxCombo(newCombo); }
+    if (target.isTrap) {
+      // Red trap: subtract points, break combo, show feedback
+      scoreRef.current = Math.max(0, scoreRef.current - TRAP_PENALTY_PTS);
+      setScore(scoreRef.current);
+      comboRef.current = 0;
+      setCombo(0);
+      setTrapFeedback({ id: target.id, x: target.x, y: target.y });
+      setTimeout(() => setTrapFeedback(null), 700);
+    } else {
+      // Normal yellow target: combo + score
+      const newCombo = comboRef.current + 1;
+      comboRef.current = newCombo;
+      setCombo(newCombo);
+      if (newCombo > maxComboRef.current) { maxComboRef.current = newCombo; setMaxCombo(newCombo); }
+      const bonus = newCombo >= 3 ? Math.floor((newCombo - 2) * COMBO_BONUS) : 0;
+      const gained = HIT_SCORE + bonus;
+      scoreRef.current += gained;
+      setScore(s => s + gained);
+      hitsRef.current++;
+      setHits(h => h + 1);
+    }
 
-    const bonus = newCombo >= 3 ? Math.floor((newCombo - 2) * COMBO_BONUS) : 0;
-    const gained = HIT_SCORE + bonus;
-    scoreRef.current += gained;
-    setScore(s => s + gained);
-    hitsRef.current++;
-    setHits(h => h + 1);
-
-    // Ripple + fade
+    // Ripple + fade (same for both)
     Animated.parallel([
       Animated.timing(target.ripple, { toValue: 1, duration: 300, useNativeDriver: true }),
       Animated.timing(target.opacity, { toValue: 0, duration: 250, useNativeDriver: true }),
@@ -296,20 +311,33 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
                 style={[styles.ripple, { transform: [{ scale: rippleScale }], opacity: t.ripple.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] }) }]}
               />
               <TouchableOpacity
-                style={styles.target}
+                style={[styles.target, t.isTrap && styles.targetTrap]}
                 onPress={e => { e.stopPropagation?.(); handleTargetPress(t); }}
                 activeOpacity={0.7}
               >
                 <LinearGradient
-                  colors={['#FCD34D', '#F59E0B', '#D97706']}
-                  style={styles.targetGrad}
+                  colors={t.isTrap
+                    ? ['#FCA5A5', '#EF4444', '#B91C1C']
+                    : ['#FCD34D', '#F59E0B', '#D97706']}
+                  style={[styles.targetGrad, t.isTrap && styles.targetGradTrap]}
                 >
-                  <Target size={16} color="#78350F" strokeWidth={2.5} />
+                  {t.isTrap
+                    ? <XIcon size={18} color="#fff" strokeWidth={3} />
+                    : <Target size={16} color="#78350F" strokeWidth={2.5} />}
                 </LinearGradient>
               </TouchableOpacity>
             </Animated.View>
           );
         })}
+        {/* Trap feedback: floats briefly where the trap was tapped */}
+        {trapFeedback && (
+          <View
+            pointerEvents="none"
+            style={[styles.trapFeedback, { left: trapFeedback.x - 44, top: trapFeedback.y - 32 }]}
+          >
+            <Text style={styles.trapFeedbackText}>Trap! -{TRAP_PENALTY_PTS}</Text>
+          </View>
+        )}
       </TouchableOpacity>
 
       {/* Result summary (phase = ended) shown in parent via onGameEnd */}
@@ -400,4 +428,24 @@ const styles = StyleSheet.create({
   },
   endText: { fontSize: fontSize.xxl, fontWeight: '900', color: '#FCD34D' },
   endSub: { fontSize: fontSize.md, color: colors.textMuted, fontWeight: '600' },
+  targetTrap: {
+    shadowColor: '#EF4444',
+  },
+  targetGradTrap: {
+    borderColor: '#FCA5A5',
+  },
+  trapFeedback: {
+    position: 'absolute',
+    width: 88,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  trapFeedbackText: {
+    fontSize: fontSize.sm,
+    fontWeight: '900',
+    color: '#EF4444',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
 });

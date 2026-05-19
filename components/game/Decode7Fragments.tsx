@@ -14,7 +14,7 @@ const ROWS = 18;
 const COLS = 18;
 
 // ─── Timer ───────────────────────────────────────────────────────────────────
-const GAME_DURATION_MS = 180_000; // 3 minutes
+const GAME_DURATION_MS = 300_000; // 5 minutes
 
 // ─── Anti-cheat ──────────────────────────────────────────────────────────────
 // Finding all 7 words in under 15 seconds is not humanly possible — flag as suspicious.

@@ -20,18 +20,18 @@ function makeRng(seed: string) {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TICK_MS = 33;
-const GRAVITY = 1.8;
-const JUMP_VEL = -20;
+const GRAVITY = 1.4;     // lower gravity = more air time, easier to clear obstacles
+const JUMP_VEL = -24;    // stronger initial jump velocity
 const GROUND_Y_FRAC = 0.75; // fraction of arena height
 const CHAR_X_FRAC = 0.18;
 const CHAR_W = 28;
-const CHAR_H = 52;
+const CHAR_H = 46;       // slightly shorter hitbox so collisions feel fair
 const COIN_R = 10;
 const COIN_SCORE = 50;
 const DIST_SCORE_PER_UNIT = 0.4;
 const INITIAL_SPEED = 4.5;
 const SPEED_INC_PER_SEC = 0.06;
-const OBSTACLE_SPAWN_BASE = 1800; // ms
+const OBSTACLE_SPAWN_BASE = 2200; // ms — extra lead time before first obstacle
 const COIN_SPAWN_BASE = 1200;     // ms
 
 interface Obstacle { id: number; x: number; w: number; h: number }
@@ -239,8 +239,9 @@ export function DawenRunner({ seed, onGameEnd }: Props) {
       if (now - gs.lastObstacleSpawn > spawnInterval) {
         gs.lastObstacleSpawn = now;
         const r = rngRef.current;
-        const h = 30 + r() * 40;
-        gs.obstacles.push({ id: obstacleIdRef.current++, x: arenaW + 20, w: 20 + r() * 20, h });
+        // Max height capped at 42px so the jump always has enough clearance.
+        const h = 18 + r() * 24;
+        gs.obstacles.push({ id: obstacleIdRef.current++, x: arenaW + 20, w: 16 + r() * 16, h });
       }
 
       // Spawn coins
@@ -265,7 +266,7 @@ export function DawenRunner({ seed, onGameEnd }: Props) {
         const obsTop = groundY - ob.h;
         const obsLeft = ob.x;
         const obsRight = ob.x + ob.w;
-        if (charRight - 4 > obsLeft && charLeft + 4 < obsRight && charBottom > obsTop + 4) {
+        if (charRight - 6 > obsLeft && charLeft + 6 < obsRight && charBottom > obsTop + 6) {
           gs.mistakes++;
           endGame();
           return;

@@ -9,7 +9,7 @@ export const GAME_PLATFORM_FEE_BPS = 500;
 export const ENTRY_AMOUNTS_SOL = [0.01, 0.05, 0.1] as const;
 export type EntrySol = (typeof ENTRY_AMOUNTS_SOL)[number];
 
-export const GAME_DURATION_MS = 45_000;
+export const GAME_DURATION_MS = 60_000; // 1 minute (Dawen Rush)
 export const MAX_SCORE = 10_000;
 export const PLAYER_LIVES = 3;
 

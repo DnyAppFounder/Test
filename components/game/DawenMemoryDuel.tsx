@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Animated,
-  useWindowDimensions,
+  useWindowDimensions, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -11,7 +11,7 @@ import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import type { UnifiedGameResult } from '@/services/game/gameTypes';
 import type { GameMode } from './GameModeSelector';
 
-const GAME_DURATION_MS = 180_000; // 3 minutes
+const GAME_DURATION_MS = 120_000; // 2 minutes
 const GRID_SIZE = 4; // 4×4
 const TOTAL_PAIRS = 8;
 const FLIP_BACK_DELAY = 900; // ms before mismatched cards flip back
@@ -298,7 +298,11 @@ export function DawenMemoryDuel({ seed, mode, onGameEnd }: Props) {
                   </>
                 ) : (
                   <View style={styles.cardBack}>
-                    <Text style={styles.cardBackText}>D</Text>
+                    <Image
+                      source={require('../../dawenlogo.jpeg')}
+                      style={styles.cardBackLogo}
+                      resizeMode="cover"
+                    />
                   </View>
                 )}
                 {card.isMatched && (
@@ -377,11 +381,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(59,130,246,0.08)',
   },
-  cardBackText: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: 'rgba(96,165,250,0.4)',
-    letterSpacing: -1,
+  cardBackLogo: {
+    width: '65%',
+    height: '65%',
+    borderRadius: 8,
+    opacity: 0.55,
   },
   cardLabel: {
     fontSize: 8,
