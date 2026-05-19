@@ -233,10 +233,20 @@ function fmtTime(ts: number, tf: TimeFrame | 'ALL'): string {
 }
 function fmtTimeByStep(ts: number, stepMs: number): string {
   const d = new Date(ts);
+  // Monthly or longer: show "Mon YYYY"
+  if (stepMs >= 30 * 86_400_000) {
+    return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  }
+  // Weekly: show "Mon D"
+  if (stepMs >= 7 * 86_400_000) {
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  // Daily: show "Mon D"
   if (stepMs >= 86_400_000) {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
-  if (stepMs >= 3_600_000 * 6 && d.getHours() === 0 && d.getMinutes() === 0) {
+  // Sub-daily: show date at midnight, otherwise time
+  if (d.getHours() === 0 && d.getMinutes() === 0) {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -732,9 +742,13 @@ export function TradingViewChart({
     if (!silent) setLoading(true);
     try {
       if (tf === 'ALL') {
-        // ALL mode: choose the finest resolution that yields >= 7 candles,
-        // trying coarse→fine so older tokens use 1D while new tokens degrade to 1H/5m.
-        const allCandidates: TimeFrame[] = ['1D', '1H', '5m'];
+        // ALL mode: pick the COARSEST resolution that gives a readable chart (≥20 candles).
+        // Ladder runs coarsest→finest so old tokens use 1D, medium tokens use 1H/4H,
+        // and fresh tokens fall through to 15m/5m/1m.
+        // A resolution with <5 candles is never accepted — it creates visual walls.
+        const allCandidates: TimeFrame[] = ['1D', '4H', '1H', '15m', '5m', '1m'];
+        const MIN_READABLE = 20;
+        const MIN_ACCEPT   = 5;
         let bestCleaned: CandleData[] = [];
         let bestTf: TimeFrame = '1D';
         for (const candidateTf of allCandidates) {
@@ -742,12 +756,16 @@ export function TradingViewChart({
           const raw = await chartDataService.getOHLCVData(tokenMint!, candidateTf, undefined);
           if (myId !== reqIdRef.current) return;
           const cleaned = sanitizeRawCandles(raw ?? []);
+          // Always track the candidate with the most candles as fallback.
           if (cleaned.length > bestCleaned.length) {
             bestCleaned = cleaned;
             bestTf = candidateTf;
           }
-          if (bestCleaned.length >= 7) break; // enough data at this resolution
+          // Accept this (coarsest viable) resolution once it crosses MIN_READABLE.
+          if (bestCleaned.length >= MIN_READABLE) break;
         }
+        // If the best we found is <MIN_ACCEPT it's still a "wall" — use it but accept
+        // the chart will be sparse (no better data exists for this token).
         if (bestCleaned.length > 0) {
           setCandles(bestCleaned);
           setAllEffectiveTf(bestTf);
@@ -1147,15 +1165,23 @@ export function TradingViewChart({
       // A "future context" of 1-2 buckets is shown to the right of the last real candle.
       const futureCtx = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
       const gapToNow  = rightTime - lastDataTs;
+      // Always adapt when data is sparse (<15 candles) to prevent a single candle
+      // being stretched across the entire wide default window.
+      const isSparse = displayCandles.length < 15;
       const shouldAdapt = panOffsetCandles === 0 &&
-        (firstDataTs > leftTime + visibleMs * 0.35 || firstDataTs < leftTime ||
+        (isSparse ||
+          firstDataTs > leftTime + visibleMs * 0.35 ||
+          firstDataTs < leftTime ||
           gapToNow > futureCtx * 4);
       if (shouldAdapt) {
         xLeft = firstDataTs - bucketMs * 2;
-        // Cap right side: no more than futureCtx past last real candle when there's no live trade.
-        // This eliminates the wide blank right side for 1M/1W/1D tokens with no recent trades.
+        // Cap right side: no more than a small padding past last real candle when no live trade.
+        // For sparse tokens use a tight 2-bucket padding to avoid dead right space.
+        // This eliminates the wide blank right side for 1M/1W/1D tokens with few candles.
         const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
-          ? lastDataTs + Math.min(futureCtx, gapToNow * 0.25)
+          ? lastDataTs + (isSparse
+              ? bucketMs * 2
+              : Math.min(futureCtx, gapToNow * 0.25))
           : rightTime;
         xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
       }
@@ -1745,12 +1771,17 @@ export function TradingViewChart({
   }
   const timeLabelStepMs = niceTimeStepMs(xVisibleMs / 5);
   const firstLabelTs    = Math.ceil(xLeft / timeLabelStepMs) * timeLabelStepMs;
-  const timeLabels: { ts: number; x: number }[] = [];
+  const timeLabels: { ts: number; x: number; label: string }[] = [];
   const timeLabelRight  = xLeft + xVisibleMs + timeLabelStepMs * 0.01;
+  const seenTimeLabels  = new Set<string>();
   for (let ts = firstLabelTs; ts <= timeLabelRight; ts += timeLabelStepMs) {
     const x = tsToX(ts);
     if (x >= PAD.left + 10 && x <= chartWidth - PAD.right - 8) {
-      timeLabels.push({ ts, x });
+      const label = fmtTimeByStep(ts, timeLabelStepMs);
+      if (!seenTimeLabels.has(label)) {
+        seenTimeLabels.add(label);
+        timeLabels.push({ ts, x, label });
+      }
     }
   }
 
@@ -2077,10 +2108,10 @@ export function TradingViewChart({
             <Line x1={PAD.left} y1={CHART_H} x2={chartWidth - PAD.right} y2={CHART_H}
               stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
 
-            {timeLabels.map(({ ts, x }) => (
+            {timeLabels.map(({ ts, x, label }) => (
               <SvgText key={`tl${ts}`} x={x} y={CHART_H + VOL_H + TIME_H - 3}
                 fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
-                {fmtTimeByStep(ts, timeLabelStepMs)}
+                {label}
               </SvgText>
             ))}
 
