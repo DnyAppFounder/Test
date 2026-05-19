@@ -212,83 +212,6 @@ function dedupByBucket(cs: CandleData[], bucketMs: number): CandleData[] {
   return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
 }
 
-
-
-const TIMEFRAME_ORDER: TimeFrame[] = ['1m', '5m', '15m', '1H', '4H', '1D', '1W', '1M'];
-
-function timeframeRank(tf: TimeFrame): number {
-  const idx = TIMEFRAME_ORDER.indexOf(tf);
-  return idx >= 0 ? idx : 0;
-}
-
-function getLowerOrEqualTimeframes(tf: TimeFrame): TimeFrame[] {
-  const rank = timeframeRank(tf);
-  // Start with the selected timeframe, then try finer real sources that can be
-  // aggregated upward without inventing smaller candles.
-  const frames = [tf, ...TIMEFRAME_ORDER.slice(0, rank).reverse()];
-  return Array.from(new Set(frames));
-}
-
-function aggregateCandlesToTimeframe(cs: CandleData[], targetTf: TimeFrame): CandleData[] {
-  const bucketMs = BUCKET_MS[targetTf] ?? 60_000;
-  const input = sanitizeRawCandles(cs).sort((a, b) => a.timestamp - b.timestamp);
-  const buckets = new Map<number, CandleData>();
-
-  for (const c of input) {
-    const bucket = Math.floor(c.timestamp / bucketMs) * bucketMs;
-    const existing = buckets.get(bucket);
-    if (!existing) {
-      buckets.set(bucket, {
-        timestamp: bucket,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume > 0 ? c.volume : 0,
-      });
-    } else {
-      existing.high = Math.max(existing.high, c.high);
-      existing.low = Math.min(existing.low, c.low);
-      existing.close = c.close;
-      existing.volume += c.volume > 0 ? c.volume : 0;
-    }
-  }
-
-  return Array.from(buckets.values()).sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function scoreCandleSet(cs: CandleData[], targetTf: TimeFrame): number {
-  const cleaned = sanitizeRawCandles(cs);
-  if (cleaned.length === 0) return 0;
-  const bucketMs = BUCKET_MS[targetTf] ?? 60_000;
-  const sorted = cleaned.sort((a, b) => a.timestamp - b.timestamp);
-  const span = Math.max(sorted[sorted.length - 1].timestamp - sorted[0].timestamp, bucketMs);
-  const countScore = Math.min(sorted.length, 120) * 10;
-  const spanScore = Math.min(span / bucketMs, 120);
-  const withVol = sorted.filter(c => c.volume > 0).length;
-  const volumeScore = withVol * 2;
-  let maxGap = 0;
-  for (let i = 1; i < sorted.length; i++) maxGap = Math.max(maxGap, sorted[i].timestamp - sorted[i - 1].timestamp);
-  const gapPenalty = sorted.length > 1 ? Math.min(maxGap / bucketMs, 80) : 30;
-  const flatCount = sorted.filter(c => Math.abs(c.high - c.low) < Math.max(c.close, 1e-12) * 1e-6).length;
-  const flatPenalty = (flatCount / sorted.length) * 40;
-  return countScore + spanScore + volumeScore - gapPenalty - flatPenalty;
-}
-
-function chooseBestCandleSet(candidates: CandleData[][], targetTf: TimeFrame): CandleData[] {
-  let best: CandleData[] = [];
-  let bestScore = -Infinity;
-  for (const candidate of candidates) {
-    const cleaned = sanitizeRawCandles(candidate);
-    const score = scoreCandleSet(cleaned, targetTf);
-    if (score > bestScore) {
-      bestScore = score;
-      best = cleaned;
-    }
-  }
-  return best;
-}
-
 function fmtPrice(p: number): string {
   if (!p || p === 0) return '0';
   if (p >= 10000) return p.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -819,92 +742,79 @@ export function TradingViewChart({
     if (!tokenMint) { if (!silent) setLoading(false); return; }
     const myId = ++reqIdRef.current;
     if (!silent) setLoading(true);
-
-    const loadFrame = async (frame: TimeFrame): Promise<CandleData[]> => {
-      const raw = await chartDataService.getOHLCVData(tokenMint!, frame, undefined);
-      if (myId !== reqIdRef.current) return [];
-      return sanitizeRawCandles(raw ?? []);
-    };
-
     try {
       if (tf === 'ALL') {
-        // ALL must choose the cleanest real historical resolution, not just the first
-        // response with a couple of candles. No fake candles are created here.
-        const candidates: { tf: TimeFrame; candles: CandleData[] }[] = [];
-        for (const candidateTf of ['1D', '4H', '1H', '15m', '5m', '1m'] as TimeFrame[]) {
-          const cleaned = await loadFrame(candidateTf);
-          if (myId !== reqIdRef.current) return;
-          if (cleaned.length > 0) candidates.push({ tf: candidateTf, candles: cleaned });
-        }
-
+        // ALL mode: pick the COARSEST resolution that gives a readable chart (≥20 candles).
+        // Ladder runs coarsest→finest so old tokens use 1D, medium tokens use 1H/4H,
+        // and fresh tokens fall through to 15m/5m/1m.
+        // A resolution with <5 candles is never accepted — it creates visual walls.
+        const allCandidates: TimeFrame[] = ['1D', '4H', '1H', '15m', '5m', '1m'];
+        const MIN_READABLE = 20;
+        const MIN_ACCEPT   = 5;
+        let bestCleaned: CandleData[] = [];
         let bestTf: TimeFrame = '1D';
-        let bestCandles: CandleData[] = [];
-        let bestScore = -Infinity;
-        for (const candidate of candidates) {
-          const score = scoreCandleSet(candidate.candles, candidate.tf);
-          // Prefer readable spans and real density; avoid one-dot / two-point ALL charts.
-          const countBonus = candidate.candles.length >= 20 ? 80 : candidate.candles.length >= 8 ? 35 : 0;
-          const totalScore = score + countBonus;
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            bestTf = candidate.tf;
-            bestCandles = candidate.candles;
+        for (const candidateTf of allCandidates) {
+          if (myId !== reqIdRef.current) return;
+          const raw = await chartDataService.getOHLCVData(tokenMint!, candidateTf, undefined);
+          if (myId !== reqIdRef.current) return;
+          const cleaned = sanitizeRawCandles(raw ?? []);
+          // Always track the candidate with the most candles as the backup candidate.
+          if (cleaned.length > bestCleaned.length) {
+            bestCleaned = cleaned;
+            bestTf = candidateTf;
           }
+          // Accept this (coarsest viable) resolution once it crosses MIN_READABLE.
+          if (bestCleaned.length >= MIN_READABLE) break;
         }
-
-        if (bestCandles.length > 0) {
-          setCandles(bestCandles);
+        // If the best we found is <MIN_ACCEPT it's still a "wall" — use it but accept
+        // the chart will be sparse (no better data exists for this token).
+        if (bestCleaned.length > 0) {
+          setCandles(bestCleaned);
           setAllEffectiveTf(bestTf);
           setHasData(true);
         } else {
-          // Keep the chart renderer alive when a quote/header price exists.
-          setCandles([]);
-          setHasData(false);
-          if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
-            resolvedPairCache.delete(tokenMint);
-          }
+          if (!silent) { setHasData(false); setCandles([]); }
         }
         return;
       }
 
-      // Selected timeframe: start with its own real OHLCV, then use finer real
-      // candles aggregated upward when the selected timeframe is weak/empty.
-      // This never aggregates downward and never fills no-trade buckets.
-      const candidateSets: CandleData[][] = [];
-      const framesToTry = getLowerOrEqualTimeframes(tf);
-      for (const frame of framesToTry) {
-        const cleaned = await loadFrame(frame);
-        if (myId !== reqIdRef.current) return;
-        if (cleaned.length === 0) continue;
-        const normalized = frame === tf ? cleaned : aggregateCandlesToTimeframe(cleaned, tf);
-        if (normalized.length > 0) candidateSets.push(normalized);
-      }
-
-      const best = chooseBestCandleSet(candidateSets, tf);
-      if (best.length > 0) {
-        setCandles(best);
-        setHasData(true);
-        const minCacheCandles = (tf === '1m' || tf === '5m' || tf === '15m') ? 5 : 3;
-        const score = scoreCandleSet(best, tf);
-        if (best.length >= minCacheCandles && score > 0 && pairAddrRef.current && tokenMint && !resolvedPairCache.has(tokenMint)) {
-          resolvedPairCache.set(tokenMint, pairAddrRef.current);
+      const data = await chartDataService.getOHLCVData(tokenMint!, tf, undefined);
+      if (myId !== reqIdRef.current) return;
+      if (data && data.length > 0) {
+        // Sanitize and repair raw candles before trusting hasData.
+        // Fresh tokens can return incomplete OHLC; sanitizeRawCandles repairs them.
+        // Only set hasData=true when at least one valid candle survives validation.
+        const cleaned = sanitizeRawCandles(data);
+        if (cleaned.length > 0) {
+          setCandles(cleaned);
+          setHasData(true);
+          // Cache the resolved pair only after enough usable OHLCV candles are confirmed.
+          // A pair with only 1–2 candles can still render as an empty/broken chart.
+          const minCacheCandles = (tf === '1m' || tf === '5m' || tf === '15m') ? 5 : 3;
+          if (cleaned.length >= minCacheCandles && pairAddrRef.current && tokenMint && !resolvedPairCache.has(tokenMint)) {
+            resolvedPairCache.set(tokenMint, pairAddrRef.current);
+          }
+        } else {
+          // All candles invalid — evict bad cached pair so next load retries DexScreener.
+          if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
+            resolvedPairCache.delete(tokenMint);
+          }
+          if (!silent) { setHasData(false); setCandles([]); }
         }
       } else {
-        // No real candles found for this timeframe or finer source. Do not invent
-        // history. The renderer will keep a clean last-price guide if price exists.
-        setCandles([]);
-        setHasData(false);
+        // Empty response returned — evict if this pair was cached to force re-resolution.
         if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
           resolvedPairCache.delete(tokenMint);
         }
+        if (!silent) { setHasData(false); setCandles([]); }
       }
     } catch {
       if (myId !== reqIdRef.current) return;
+      // Evict bad cached pair on exception so the next visit re-resolves from DexScreener.
       if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
         resolvedPairCache.delete(tokenMint);
       }
-      setCandles([]);
-      setHasData(false);
+      if (!silent) setHasData(false);
     } finally {
       if (myId === reqIdRef.current && !silent) setLoading(false);
     }
@@ -1316,31 +1226,22 @@ export function TradingViewChart({
       // Always adapt when data is sparse (<15 candles) to prevent a single candle
       // being stretched across the entire wide default window.
       const isSparse = displayCandles.length < 15;
-      const isUltraSparseReal = !isVisualGuideOnly && displayCandles.length <= 2;
       const shouldAdapt = panOffsetCandles === 0 &&
         (isSparse ||
           firstDataTs > leftTime + visibleMs * 0.35 ||
           firstDataTs < leftTime ||
           gapToNow > futureCtx * 4);
       if (shouldAdapt) {
-        if (isUltraSparseReal) {
-          // 1-2 real candles: keep a stable readable full-width window around the candle(s).
-          // No fake candles are added; this only controls display spacing.
-          const centerTs = displayCandles.length === 1 ? firstDataTs : (firstDataTs + lastDataTs) / 2;
-          xVisibleMs = Math.max(visibleMs, bucketMs * Math.max(visibleBuckets, 24));
-          xLeft = centerTs - xVisibleMs * 0.55;
-        } else {
-          xLeft = firstDataTs - bucketMs * 2;
-          // Cap right side: no more than a small padding past last real candle when no live trade.
-          // For sparse tokens use a tight 2-bucket padding to avoid dead right space.
-          // This eliminates the wide blank right side for 1M/1W/1D tokens with few candles.
-          const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
-            ? lastDataTs + (isSparse
-                ? bucketMs * 2
-                : Math.min(futureCtx, gapToNow * 0.25))
-            : rightTime;
-          xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
-        }
+        xLeft = firstDataTs - bucketMs * 2;
+        // Cap right side: no more than a small padding past last real candle when no live trade.
+        // For sparse tokens use a tight 2-bucket padding to avoid dead right space.
+        // This eliminates the wide blank right side for 1M/1W/1D tokens with few candles.
+        const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
+          ? lastDataTs + (isSparse
+              ? bucketMs * 2
+              : Math.min(futureCtx, gapToNow * 0.25))
+          : rightTime;
+        xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
       }
     }
   }
@@ -1499,8 +1400,13 @@ export function TradingViewChart({
     PanResponder.create({
       // Only claim the responder once we detect clear horizontal intent.
       // Vertical drags pass through to the page scroll — never block them.
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_e, gs) => {
+        const adx = Math.abs(gs.dx);
+        const ady = Math.abs(gs.dy);
+        // Capture only clear horizontal drags; let vertical drags scroll the page
+        return adx > 10 && adx > ady * 2;
+      },
 
       onPanResponderGrant: (e) => {
         panStartOffsetRef.current = panOffsetRef.current;
@@ -1508,8 +1414,6 @@ export function TradingViewChart({
         touchStartXRef.current    = e.nativeEvent.pageX;
         touchStartYRef.current    = e.nativeEvent.pageY;
         touchStartTimeRef.current = Date.now();
-        // Show crosshair immediately on touch so the user can inspect any point on the chart.
-        applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
       },
 
       onPanResponderMove: (e, gestureState) => {
@@ -1518,10 +1422,10 @@ export function TradingViewChart({
         const elapsed = Date.now() - touchStartTimeRef.current;
 
         if (gestureModeRef.current === 'idle') {
-          if (adx > 14 && adx > ady * 1.6) {
+          if (adx > 12 && adx > ady * 1.8) {
             gestureModeRef.current = 'pan';
             setCrosshair(null);
-          } else {
+          } else if (elapsed > 200 && adx < 8 && ady < 8) {
             gestureModeRef.current = 'crosshair';
             applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
           }
@@ -1775,7 +1679,7 @@ export function TradingViewChart({
   );
 
   const autoScrollPending = !hasAutoScrolledRef.current && candles.length > 0 && displayCandles.length === 0;
-  const isFirstLoad = ((loading && candles.length === 0 && displayPriceVal <= 0) || autoScrollPending);
+  const isFirstLoad = (loading && candles.length === 0) || autoScrollPending;
 
   if (isFirstLoad) {
     return (
@@ -2043,12 +1947,10 @@ export function TradingViewChart({
         <TouchableOpacity
           style={styles.returnLiveBtn}
           onPress={() => {
-            rightTimeRef.current = Date.now();
             panOffsetRef.current = 0;
             setPanOffsetCandles(0);
             setCrosshair(null);
             userPannedRef.current = false;
-            priceScaleKeyRef.current = '';
           }}
           activeOpacity={0.8}>
           <Text style={styles.returnLiveText}>▶ Return to Live</Text>
@@ -2071,7 +1973,7 @@ export function TradingViewChart({
               WebkitUserSelect: 'none',
               MozUserSelect: 'none',
               // Use pan-y so vertical scrolling still works; horizontal pan is captured by PanResponder
-              touchAction: 'none',
+              touchAction: 'pan-y',
             } as any),
           ]}
           {...panResponder.panHandlers}
