@@ -82,6 +82,8 @@ export interface TokenInfo {
   price: number;
   priceChange24h: number;
   marketCap?: number;
+  /** Real circulating/total supply from on-chain or API metadata (tokens, not lamports). */
+  totalSupply?: number;
   pairAddress?: string;
   address?: string;
 }
@@ -1046,19 +1048,24 @@ export function TradingViewChart({
   }, [candles, timeframe]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
-  // MCAP scale: derive token supply from snapshot once and freeze it.
-  // stableSupplyRef is set on first valid snapshot and reset on token change.
-  // This prevents MCAP from drifting as livePrice changes — all display surfaces
-  // (header, axis, live pill, crosshair) use the same frozen supply so they always agree.
+  // MCAP scale: token supply frozen once per token so MCAP never drifts with quote prices.
+  // Priority: 1) real totalSupply from caller  2) derived snapshot  3) live-price derivation.
+  // All display surfaces (header, axis, live pill, crosshair) multiply by the same supply.
   {
-    const sp = resolvedInfo?.price;
-    const sm = resolvedInfo?.marketCap;
-    if (stableSupplyRef.current === null && sp && sp > 0 && sm && sm > 0) {
-      stableSupplyRef.current = sm / sp;
-    }
-    // Second chance: if snapshot price was zero initially but livePrice is now available
-    if (stableSupplyRef.current === null && livePrice && livePrice > 0 && sm && sm > 0) {
-      stableSupplyRef.current = sm / livePrice;
+    if (stableSupplyRef.current === null) {
+      const ts = resolvedInfo?.totalSupply;
+      const sp = resolvedInfo?.price;
+      const sm = resolvedInfo?.marketCap;
+      if (ts && ts > 0) {
+        // Prefer real supply provided by caller — no division, no drift.
+        stableSupplyRef.current = ts;
+      } else if (sp && sp > 0 && sm && sm > 0) {
+        // Derive supply from snapshot marketCap / snapshot price (consistent snapshot).
+        stableSupplyRef.current = sm / sp;
+      } else if (livePrice && livePrice > 0 && sm && sm > 0) {
+        // Last resort: use live quote price — only when snapshot price unavailable.
+        stableSupplyRef.current = sm / livePrice;
+      }
     }
   }
   const mcapScale = valueMode === 'mcap' && stableSupplyRef.current != null
@@ -1088,8 +1095,11 @@ export function TradingViewChart({
   // Merge real historical candles + active live candle at render time.
   // Real candles are immutable; only the active live candle updates on price change.
   const mergedCandles = useMemo(() => {
-    const valid = filterValidCandles(candles);
-    const deduped = dedupByBucket(valid, bucketMs);
+    // `candles` state is always produced by sanitizeRawCandles inside loadData —
+    // applying filterValidCandles a second time would create two competing validation
+    // systems and could silently reject valid flat-doji candles (open=high=low=close).
+    // Single validation pass: use candles directly.
+    const deduped = dedupByBucket(candles, bucketMs);
     if (!activeLiveCandle) return deduped;
     const liveB = Math.floor(activeLiveCandle.timestamp / bucketMs) * bucketMs;
     // Remove any historical candle in the same bucket (live price owns that bucket)
@@ -1447,9 +1457,17 @@ export function TradingViewChart({
   const has24h = is24hValid(live24hChange) || (is24hValid(raw24h) && raw24h !== 0);
   const isUp       = change24h >= 0;
   const changeColor = isUp ? '#10B981' : '#EC4899';
-  // Use the same live-scaled formula as the chart axis and live pill so all four displays agree.
-  // When mcapScale=1 (no MCAP data), falls back to static mcapVal then price.
-  const liveScaledValue = displayPriceVal * mcapScale;
+  // Guide-anchored price: same source as the chart guide line.
+  // In MCAP mode the header uses this so header and guide never contradict each other.
+  // In price mode the header uses the live quote price (quote display is acceptable).
+  const realAnchoredPrice = activeLiveCandle?.sourceType === 'realTrade'
+    ? activeLiveCandle.close
+    : latestClose > 0 ? latestClose : displayPriceVal;
+  // MCAP mode: multiply real candle price by stable supply (same as guide + axis).
+  // Price mode: show live quote price directly.
+  const liveScaledValue = valueMode === 'mcap'
+    ? realAnchoredPrice * mcapScale
+    : displayPriceVal;
   const headerValue = valueMode === 'mcap'
     ? fmtMcap(liveScaledValue > 0 ? liveScaledValue : (mcapVal ?? 0))
     : `$${fmtPrice(displayPriceVal)}`;
@@ -1658,8 +1676,16 @@ export function TradingViewChart({
   const renderMedianGapMs = _renderSortedGaps.length > 0
     ? _renderSortedGaps[Math.floor(_renderSortedGaps.length / 2)]
     : bucketMs;
-  // Sparse when few candles are visible OR typical spacing greatly exceeds the bucket.
-  const isSparseChart = displayCandles.length < 30 || renderMedianGapMs > bucketMs * 2;
+  // Flat-doji ratio: repaired candles often have open=high=low=close.
+  // A high ratio means most data was synthetic/repaired — treat as sparse.
+  const _flatCount = displayCandles.filter(c =>
+    Math.abs(c.high - c.low) < Math.max(c.close, 1e-12) * 1e-6
+  ).length;
+  const _flatRatio = displayCandles.length > 0 ? _flatCount / displayCandles.length : 0;
+  // Sparse when: few candles, wide gaps, OR >50% flat dojis (repaired data).
+  const isSparseChart = displayCandles.length < 30 ||
+    renderMedianGapMs > bucketMs * 2 ||
+    _flatRatio > 0.5;
 
   // ── Build paths ───────────────────────────────────────────────────────────
   const bottomY    = (PAD.top + plotH).toFixed(1);
