@@ -1236,7 +1236,11 @@ export function TradingViewChart({
       const safeMax  = isFinite(visMaxHigh) && visMaxHigh > 0 ? visMaxHigh : 1;
       const safeMin  = isFinite(visMinLow)  && visMinLow  >= 0 ? visMinLow : 0;
       const range    = (safeMax - safeMin) || safeMax * 0.02 || 0.001;
-      const pad      = range * 0.15;
+      // Very sparse tokens (<5 visible candles) need a minimum 4% padding so the
+      // Y-axis never collapses to an unreadable ultra-tight band (e.g. $5.370K–$5.390K).
+      // This places the candle(s) at the vertical center with meaningful axis labels.
+      const minPadFraction = scaleSource.length < 5 ? 0.04 : 0;
+      const pad = Math.max(range * 0.15, safeMax * minPadFraction);
       // Volume scale from visible real candles only; synthetic vol=0 ignored
       const realVols   = scaleBase.filter(c => c.volume > 0).map(c => c.volume);
       const sortedVols = [...realVols].sort((a, b) => a - b);
@@ -1278,8 +1282,10 @@ export function TradingViewChart({
   const MAX_CANDLE_W = isMobile ? 14 : 10;
   const MAX_BAR_W    = isMobile ?  6 :  5;
   // Body/tick widths derived from slotW so they never widen due to sparse data
-  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2 : 1.5, slotW * 0.38));
-  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? 3 : 2,   slotW * (isMobile ? 0.60 : 0.55)));
+  // Very sparse tokens (1-4 candles): use wider bodies so isolated candles are readable.
+  const _vSparse = n > 0 && n < 5;
+  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2 : 1.5, slotW * (_vSparse ? 0.55 : 0.38)));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? (_vSparse ? 6 : 3) : (_vSparse ? 5 : 2), slotW * (isMobile ? (_vSparse ? 0.80 : 0.60) : (_vSparse ? 0.70 : 0.55))));
 
   function xOf(i: number): number {
     const c = displayCandles[i];
@@ -1662,7 +1668,14 @@ export function TradingViewChart({
       <View style={styles.container}>
         {header}
         <View style={[styles.unavailableWrap, { height: CHART_H }]}>
-          <Text style={styles.unavailableText}>No chart data available for this timeframe</Text>
+          {displayPriceVal > 0 ? (
+            <>
+              <Text style={styles.priceFallback}>{fmtValue(displayPriceVal * mcapScale, valueMode)}</Text>
+              <Text style={styles.unavailableText}>Waiting for chart data…</Text>
+            </>
+          ) : (
+            <ActivityIndicator size="small" color={colors.primary} />
+          )}
         </View>
       </View>
     );
@@ -1686,6 +1699,8 @@ export function TradingViewChart({
   const isSparseChart = displayCandles.length < 30 ||
     renderMedianGapMs > bucketMs * 2 ||
     _flatRatio > 0.5;
+  // Extremely sparse: 1-4 visible candles — enables extra-visible rendering paths.
+  const isVerySparse = n < 5;
 
   // ── Build paths ───────────────────────────────────────────────────────────
   const bottomY    = (PAD.top + plotH).toFixed(1);
@@ -1976,23 +1991,23 @@ export function TradingViewChart({
               {mode === 'area' && (
                 <>
                   {areaPaths.map((p, i) => p ? <Path key={`af${i}`} d={p} fill="url(#areaGrad)" /> : null)}
-                  <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="rgba(139,92,246,0.25)" strokeWidth={isSparseChart ? 7 : 5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#A78BFA" strokeWidth={isSparseChart ? 2.5 : 2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </>
               )}
 
               {mode === 'line' && (
                 <>
-                  <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d={linePts} stroke="#A78BFA" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="rgba(139,92,246,0.18)" strokeWidth={isSparseChart ? 7 : 5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#A78BFA" strokeWidth={isSparseChart ? 2.5 : 2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </>
               )}
 
               {mode === 'mountain' && (
                 <>
                   {areaPaths.map((p, i) => p ? <Path key={`mf${i}`} d={p} fill="url(#mountainGrad)" /> : null)}
-                  <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d={linePts} stroke="#8B5CF6" strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="rgba(139,92,246,0.2)" strokeWidth={isSparseChart ? 7 : 5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <Path d={linePts} stroke="#8B5CF6" strokeWidth={isSparseChart ? 3 : 2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </>
               )}
 
@@ -2014,10 +2029,19 @@ export function TradingViewChart({
                     const c = displayCandles[idx];
                     const cx = xOf(idx);
                     const cy = yOf(c.close);
+                    // Very sparse (1-4 candles): use a larger, more prominent marker
+                    // so a single data point never looks like an invisible tiny dot.
+                    const outerR = isVerySparse ? 12 : 5;
+                    const innerR = isVerySparse ? 5  : 3;
+                    const outerOpacity = isVerySparse ? 0.14 : 0.18;
                     return (
                       <G key={`isol${c.timestamp}`}>
-                        <Circle cx={cx} cy={cy} r={5} fill="#8B5CF6" opacity={0.18} />
-                        <Circle cx={cx} cy={cy} r={3} fill="#A78BFA" />
+                        {/* Outer glow ring */}
+                        <Circle cx={cx} cy={cy} r={outerR} fill="#8B5CF6" opacity={outerOpacity} />
+                        {/* Middle halo */}
+                        {isVerySparse && <Circle cx={cx} cy={cy} r={8} fill="#8B5CF6" opacity={0.09} />}
+                        {/* Solid inner dot */}
+                        <Circle cx={cx} cy={cy} r={innerR} fill="#A78BFA" />
                       </G>
                     );
                   })
@@ -2122,7 +2146,7 @@ export function TradingViewChart({
                 {activeLiveCandle?.sourceType === 'realTrade' &&
                  (Date.now() - activeLiveCandle.tradeTimestamp) < LIVE_CANDLE_STALE_MS && (
                   <AnimatedCircle
-                    cx={lastX} cy={lastY} r={10}
+                    cx={lastX} cy={lastY} r={isVerySparse ? 14 : 10}
                     fill="none"
                     stroke={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
                     strokeWidth={1.5}
@@ -2130,7 +2154,7 @@ export function TradingViewChart({
                   />
                 )}
                 <Circle
-                  cx={lastX} cy={lastY} r={3.5}
+                  cx={lastX} cy={lastY} r={isVerySparse ? 5 : 3.5}
                   fill={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
                 />
               </G>
