@@ -1,6 +1,7 @@
 import { dexScreenerService, DexPair } from './dexscreener/tokenDiscoveryService';
 import { jupiterTokenListService, JupiterToken } from './jupiter/tokenListService';
 import { tokenRegistryService } from './tokenRegistryService';
+import { tokenMetadataService } from './solana/tokenMetadataService';
 
 export interface LiveToken {
   id: string;
@@ -167,8 +168,10 @@ class LiveMarketService {
     try {
       const registryResults = await tokenRegistryService.search(query);
 
+      let results: LiveToken[];
+
       if (registryResults.length > 0) {
-        const mapped: LiveToken[] = registryResults.map(rt => ({
+        results = dedupTokens(registryResults.map(rt => ({
           id: rt.mint,
           address: rt.mint,
           name: rt.name,
@@ -181,12 +184,25 @@ class LiveMarketService {
           marketCap: rt.marketCap,
           pairAddress: rt.pairAddress,
           chainId: 'solana',
-        }));
-        return dedupTokens(mapped);
+        })));
+      } else {
+        const dexPairs = await dexScreenerService.searchTokens(query);
+        results = dedupTokens(dexPairs.map(pair => this.convertDexPairToLiveToken(pair))).slice(0, 50);
       }
 
-      const dexPairs = await dexScreenerService.searchTokens(query);
-      return dedupTokens(dexPairs.map(pair => this.convertDexPairToLiveToken(pair))).slice(0, 50);
+      // Batch-resolve logos for results missing them (hits cache instantly for previously seen tokens)
+      const noLogo = results.filter(t => !t.image);
+      if (noLogo.length > 0) {
+        try {
+          const metaMap = await tokenMetadataService.getBatchTokenMetadata(noLogo.map(t => t.address));
+          for (const t of noLogo) {
+            const meta = metaMap.get(t.address);
+            if (meta?.logoURI) t.image = meta.logoURI;
+          }
+        } catch {}
+      }
+
+      return results;
     } catch (error) {
       console.error('Error searching tokens:', error);
       return [];
@@ -199,7 +215,17 @@ class LiveMarketService {
       if (pairs.length === 0) return null;
 
       const primaryPair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-      return this.convertDexPairToLiveToken(primaryPair);
+      const token = this.convertDexPairToLiveToken(primaryPair);
+
+      // DexScreener often lacks logos for pump.fun tokens — resolve via tokenMetadataService
+      if (!token.image) {
+        try {
+          const meta = await tokenMetadataService.getTokenMetadata(addressOrId);
+          if (meta?.logoURI) token.image = meta.logoURI;
+        } catch {}
+      }
+
+      return token;
     } catch (error) {
       console.error('Error getting token detail:', error);
       return null;
