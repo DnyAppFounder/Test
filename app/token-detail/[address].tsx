@@ -38,6 +38,7 @@ import { AlertsService, PriceAlert } from '@/services/alertsService';
 import * as Clipboard from 'expo-clipboard';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
+import { tokenMetadataService } from '@/services/solana/tokenMetadataService';
 import { useLiveToken } from '@/hooks/useLiveToken';
 import { SolanaConnectionService } from '@/services/solana/connectionService';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
@@ -193,6 +194,15 @@ export default function TokenDetailScreen() {
             chainId: 'solana',
           };
         }
+      }
+
+      // If logo still missing (registry had no logo_uri), resolve via metadata service.
+      // tokenMetadataService hits its own cache first (fast path for wallet-loaded tokens).
+      if (data && !data.image) {
+        try {
+          const meta = await tokenMetadataService.getTokenMetadata(addr);
+          if (meta?.logoURI) data = { ...data, image: meta.logoURI };
+        } catch {}
       }
 
       // On refresh, only update if we got valid data — don't clear existing token on failure.
