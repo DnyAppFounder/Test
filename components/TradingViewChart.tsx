@@ -475,6 +475,11 @@ export function TradingViewChart({
   // stale API responses from overwriting fresher live prices.
   const latestPriceTsRef = useRef<number>(0);
 
+  // True while the user is actively dragging the chart horizontally.
+  // Used by the live RAF to avoid updating rightTimeRef (which would cause the viewport
+  // to drift forward while the user tries to explore historical candles).
+  const isPanningRef = useRef(false);
+
   // true = chart SVG is intersecting the viewport; RAF skips setClockTick when false.
   const chartVisibleRef = useRef(true);
   // Set to true while applying a liveTokenStore-sourced update to prevent push-back.
@@ -582,7 +587,10 @@ export function TradingViewChart({
   useEffect(() => {
     let rafId = 0;
     let lastRender = 0;
-    const RENDER_INTERVAL = 200; // 5fps — balance smooth movement vs CPU cost
+    // 10fps on mobile (100ms), 16fps on desktop (60ms) — smooth enough for a live clock
+    // without causing mobile overheating. The RAF itself runs at display frequency;
+    // only actual React state updates are throttled.
+    const RENDER_INTERVAL = typeof navigator !== 'undefined' && /Mobi/i.test(navigator.userAgent) ? 100 : 60;
     let tabHidden = false;
 
     const onVisChange = () => {
@@ -598,7 +606,12 @@ export function TradingViewChart({
       // Prevents the right-edge clock from jumping forward after long pauses and
       // avoids unnecessary re-renders when the chart is not visible.
       if (!tabHidden && chartVisibleRef.current) {
-        rightTimeRef.current = Date.now();
+        // Don't advance rightTime while the user is dragging — it would shift the
+        // viewport under their finger and create a "fighting" sensation.
+        // isPanningRef is set in onPanResponderGrant / onMouseDown and cleared on release.
+        if (!isPanningRef.current) {
+          rightTimeRef.current = Date.now();
+        }
         if (now - lastRender >= RENDER_INTERVAL) {
           lastRender = now;
           setClockTick(t => t + 1);
@@ -1535,6 +1548,7 @@ export function TradingViewChart({
       onPanResponderGrant: (e) => {
         panStartOffsetRef.current = panOffsetRef.current;
         gestureModeRef.current    = 'pan';
+        isPanningRef.current      = true;
         touchStartXRef.current    = e.nativeEvent.pageX;
         touchStartYRef.current    = e.nativeEvent.pageY;
         touchStartTimeRef.current = Date.now();
@@ -1551,7 +1565,7 @@ export function TradingViewChart({
         const candlePx = pw / visibleBucketCount;
         // Dragging right (positive dx) means going back in time → positive offset.
         // Dragging left (negative dx) means moving toward live → smaller offset.
-        const deltaCandles = -(gestureState.dx / candlePx);
+        const deltaCandles = gestureState.dx / candlePx;
         const allCandles   = candlesRef.current;
         const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
         const msToOldest   = Math.max(0, Date.now() - oldestTs);
@@ -1564,6 +1578,7 @@ export function TradingViewChart({
       },
 
       onPanResponderRelease: (e) => {
+        isPanningRef.current = false;
         const totalMovement = Math.hypot(
           e.nativeEvent.pageX - touchStartXRef.current,
           e.nativeEvent.pageY - touchStartYRef.current,
@@ -1577,6 +1592,7 @@ export function TradingViewChart({
       },
 
       onPanResponderTerminate: () => {
+        isPanningRef.current = false;
         gestureModeRef.current = 'idle';
       },
     })
@@ -1593,7 +1609,7 @@ export function TradingViewChart({
         const visibleBucketCount = Math.max(1, visibleMsRef.current / bMs);
         const candlePx = plotWRef.current / visibleBucketCount;
         const dx = e.clientX - mouseDragStartXRef.current;
-        const deltaCandles = -(dx / candlePx);
+        const deltaCandles = dx / candlePx;
         const allCandles   = candlesRef.current;
         const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
         const msToOldest   = Math.max(0, Date.now() - oldestTs);
@@ -1612,15 +1628,18 @@ export function TradingViewChart({
     },
     onMouseDown: (e: any) => {
       mouseDragRef.current       = true;
+      isPanningRef.current       = true;
       mouseDragStartXRef.current = e.clientX;
       mousePanStartRef.current   = panOffsetRef.current;
       e.preventDefault();
     },
     onMouseUp: (_e: any) => {
       mouseDragRef.current = false;
+      isPanningRef.current = false;
     },
     onMouseLeave: (_e: any) => {
       mouseDragRef.current = false;
+      isPanningRef.current = false;
     },
     onContextMenu: (e: any) => e.preventDefault(),
   } : {};
@@ -1901,22 +1920,20 @@ export function TradingViewChart({
   const lastX = Math.min(lastCandleX, safeRightX);
   const lastY = lastCandleY;
 
-  // Continuation: short dashed segment from last close → now, max 1.5 buckets.
-  // Disabled for: ALL mode, cold/sparse tokens (last trade > 3 buckets old), panned view.
-  // Never creates a fake flat bridge or a vertical wall at the right edge.
-  const maxContExtension = bucketMs * 1.5;
-  const lastCandleTs     = displayCandles[n - 1].timestamp;
-  const lastCandleAgeMs  = rightTime - lastCandleTs;
-  const isHotToken       = lastCandleAgeMs <= bucketMs * 3; // "cold" token = no recent trades
-  const contEndTs        = Math.min(rightTime, lastCandleTs + maxContExtension);
-  const contRightX       = Math.min(tsToX(contEndTs), safeRightX);
-  const contY            = lastY;
-  // Extra guards: last candle must have real volume;
-  // sparse tokens show no continuation to avoid fake flat bridges.
-  const lastCandleVolume = n > 0 ? displayCandles[n - 1].volume : 0;
+  // Continuation: flat dashed segment from last close → current time.
+  // In live mode (panOffset=0) it always extends, creating the Pump.fun feel of time
+  // passing even when no trade happens. The line stays flat (no Y movement) — it never
+  // invents price movement, it only moves horizontally with the clock.
+  // Disabled for: ALL mode, panned view. No volume gate — cold tokens also need time to move.
+  const lastCandleTs    = displayCandles[n - 1].timestamp;
+  const lastCandleAgeMs = rightTime - lastCandleTs;
+  // Only show continuation when last candle is within 6 buckets of now (avoids huge blank gaps)
+  const isRecentEnough  = lastCandleAgeMs <= bucketMs * 6;
+  const contEndTs       = rightTime; // always extend to current time
+  const contRightX      = Math.min(tsToX(contEndTs), safeRightX);
+  const contY           = lastY;
   const showContinuation = timeframe !== 'ALL' && panOffsetCandles === 0 &&
-    n > 0 && isHotToken && !isSparseChart &&
-    lastCandleVolume > 0 && contRightX > lastX + 2;
+    n > 0 && isRecentEnough && !isVisualGuideOnly && contRightX > lastX + 2;
 
   // Visual path builder for line-style modes.
   // Important: this is rendering only. It does not create candles, trades, volume, or timestamps.
@@ -2059,6 +2076,7 @@ export function TradingViewChart({
           onPress={() => {
             rightTimeRef.current = Date.now();
             panOffsetRef.current = 0;
+            isPanningRef.current = false;
             setPanOffsetCandles(0);
             setCrosshair(null);
             userPannedRef.current = false;
