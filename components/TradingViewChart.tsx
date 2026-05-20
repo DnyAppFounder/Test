@@ -1213,32 +1213,41 @@ export function TradingViewChart({
     return [...withoutSameBucket, activeLiveCandle].sort((a, b) => a.timestamp - b.timestamp);
   }, [candles, activeLiveCandle, bucketMs]);
 
-  // Filter to the visible time window — auto-scroll handles the case where all
-  // candles are older than the window by panning back automatically.
-  // For live mode (no pan): if the standard window yields too few real candles,
-  // expand backward to include recent historical context so the chart stays readable.
+  // Filter to the visible time window.
+  // Use a 1-bucket margin on both sides so candles at the edge of the window
+  // are visible even when their centre is near the boundary.
   const MIN_LIVE_CANDLES = 6;
   let filledRaw: CandleData[];
   {
     if (timeframe === 'ALL') {
-      // ALL mode: show every candle in history — the adaptive x-range below will
-      // fit the full span without constraining to the standard visibleMs window.
+      // ALL mode: show every candle — adaptive x-range fits the full span.
       filledRaw = mergedCandles;
     } else {
       const standardRaw = mergedCandles.filter(c =>
         c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
       );
-      if (panOffsetCandles === 0 && standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
-        // Few candles in the live window — include recent historical context.
-        // When the last merged candle is old (> 3 buckets ago), cap the takeCount to
-        // avoid pulling in too much history and creating a huge leftward expansion.
-        const lastMergedTs = mergedCandles[mergedCandles.length - 1].timestamp;
-        const isOldData = (rightTime - lastMergedTs) > bucketMs * 3;
-        const maxTake = isOldData
-          ? Math.min(Math.max(MIN_LIVE_CANDLES * 2, Math.floor(visibleBuckets * 0.4)), mergedCandles.length)
-          : Math.min(visibleBuckets, mergedCandles.length);
-        const takeCount = Math.min(maxTake, mergedCandles.length);
-        filledRaw = mergedCandles.slice(-takeCount);
+
+      if (standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
+        // No/few candles in the scrolled window.
+        // When panning (offset > 0): find candles closest to the current window centre
+        // so panning into older history always shows something real.
+        if (panOffsetCandles > 0) {
+          const windowCentre = (leftTime + rightTime) / 2;
+          // Sort by distance to window centre and take up to one visible window's worth.
+          const sorted = [...mergedCandles].sort(
+            (a, b) => Math.abs(a.timestamp - windowCentre) - Math.abs(b.timestamp - windowCentre)
+          );
+          const takeCount = Math.min(visibleBuckets, mergedCandles.length);
+          filledRaw = sorted.slice(0, takeCount).sort((a, b) => a.timestamp - b.timestamp);
+        } else {
+          // Live mode: include recent historical context.
+          const lastMergedTs = mergedCandles[mergedCandles.length - 1].timestamp;
+          const isOldData = (rightTime - lastMergedTs) > bucketMs * 3;
+          const maxTake = isOldData
+            ? Math.min(Math.max(MIN_LIVE_CANDLES * 2, Math.floor(visibleBuckets * 0.4)), mergedCandles.length)
+            : Math.min(visibleBuckets, mergedCandles.length);
+          filledRaw = mergedCandles.slice(-Math.min(maxTake, mergedCandles.length));
+        }
       } else {
         filledRaw = standardRaw;
       }
@@ -1322,38 +1331,36 @@ export function TradingViewChart({
       xLeft      = firstDataTs - leftPad;
       xVisibleMs = Math.max(dataSpan + leftPad + rightPad, bucketMs * 8);
     } else {
-      // Non-ALL: standard window with smart capping of empty right-side dead space.
-      // A "future context" of 1-2 buckets is shown to the right of the last real candle.
-      const futureCtx = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
-      const gapToNow  = rightTime - lastDataTs;
-      // Always adapt when data is sparse (<15 candles) to prevent a single candle
-      // being stretched across the entire wide default window.
-      const isSparse = displayCandles.length < 15;
-      const isUltraSparseReal = !isVisualGuideOnly && displayCandles.length <= 2;
-      const shouldAdapt = panOffsetCandles === 0 &&
-        (isSparse ||
-          firstDataTs > leftTime + visibleMs * 0.35 ||
-          firstDataTs < leftTime ||
-          gapToNow > futureCtx * 4);
-      if (shouldAdapt) {
-        if (isUltraSparseReal) {
-          // 1-2 real candles: keep a stable readable full-width window around the candle(s).
-          // No fake candles are added; this only controls display spacing.
-          const centerTs = displayCandles.length === 1 ? firstDataTs : (firstDataTs + lastDataTs) / 2;
-          xVisibleMs = Math.max(visibleMs, bucketMs * Math.max(visibleBuckets, 24));
-          xLeft = centerTs - xVisibleMs * 0.55;
-        } else {
+      // Non-ALL: anchor viewport to the real candle data.
+      // Always respect the current pan offset; never force the window back to live.
+      const isSparse       = !isVisualGuideOnly && displayCandles.length < 15;
+      const isUltraSparse  = !isVisualGuideOnly && displayCandles.length <= 2;
+      const futureCtx      = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
+      const gapToNow       = rightTime - lastDataTs;
+
+      if (isUltraSparse) {
+        // 1-2 real candles: centre the candle(s) in a stable readable window.
+        const centerTs = displayCandles.length === 1
+          ? firstDataTs
+          : (firstDataTs + lastDataTs) / 2;
+        xVisibleMs = Math.max(visibleMs, bucketMs * Math.max(visibleBuckets, 24));
+        xLeft = centerTs - xVisibleMs * 0.55;
+      } else if (isSparse) {
+        // Sparse: anchor left just before first real candle, cap right just after last.
+        xLeft = firstDataTs - bucketMs * 2;
+        const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
+          ? lastDataTs + bucketMs * 2
+          : rightTime;
+        xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
+      } else {
+        // Dense: use normal scrolled window. Only cap the dead right-side space when
+        // the user is at live edge (no pan) and last candle is old.
+        if (panOffsetCandles === 0 && gapToNow > futureCtx * 4 && !activeLiveCandle) {
           xLeft = firstDataTs - bucketMs * 2;
-          // Cap right side: no more than a small padding past last real candle when no live trade.
-          // For sparse tokens use a tight 2-bucket padding to avoid dead right space.
-          // This eliminates the wide blank right side for 1M/1W/1D tokens with few candles.
-          const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
-            ? lastDataTs + (isSparse
-                ? bucketMs * 2
-                : Math.min(futureCtx, gapToNow * 0.25))
-            : rightTime;
+          const cappedRight = lastDataTs + Math.min(futureCtx, gapToNow * 0.25);
           xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
         }
+        // Otherwise let the scrolled window stand as-is.
       }
     }
   }
@@ -1508,70 +1515,68 @@ export function TradingViewChart({
     }
   };
 
+  // ── Web mouse drag state ─────────────────────────────────────────────────
+  const mouseDragRef         = useRef(false);
+  const mouseDragStartXRef   = useRef(0);
+  const mousePanStartRef     = useRef(0);
+
   const panResponder = useRef(
     PanResponder.create({
-      // Only claim the responder once we detect clear horizontal intent.
-      // Vertical drags pass through to the page scroll — never block them.
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      // Do NOT grab on start — let the move threshold decide.
+      // This ensures vertical swipes pass through to page scroll unobstructed.
+      onStartShouldSetPanResponder: () => false,
+      // Grab only when the gesture is clearly horizontal.
+      onMoveShouldSetPanResponder: (_e, gs) => {
+        const adx = Math.abs(gs.dx);
+        const ady = Math.abs(gs.dy);
+        return adx > 8 && adx > ady * 1.8;
+      },
 
       onPanResponderGrant: (e) => {
         panStartOffsetRef.current = panOffsetRef.current;
-        gestureModeRef.current    = 'idle';
+        gestureModeRef.current    = 'pan';
         touchStartXRef.current    = e.nativeEvent.pageX;
         touchStartYRef.current    = e.nativeEvent.pageY;
         touchStartTimeRef.current = Date.now();
-        // Show crosshair immediately on touch so the user can inspect any point on the chart.
-        applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
+        setCrosshair(null);
       },
 
-      onPanResponderMove: (e, gestureState) => {
-        const adx     = Math.abs(gestureState.dx);
-        const ady     = Math.abs(gestureState.dy);
-        const elapsed = Date.now() - touchStartTimeRef.current;
-
-        if (gestureModeRef.current === 'idle') {
-          if (adx > 14 && adx > ady * 1.6) {
-            gestureModeRef.current = 'pan';
-            setCrosshair(null);
-          } else {
-            gestureModeRef.current = 'crosshair';
-            applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
-          }
-          return;
-        }
-
-        if (gestureModeRef.current === 'crosshair') {
-          applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
-          return;
-        }
-
-        if (gestureModeRef.current === 'pan') {
-          userPannedRef.current = true;
-          const pw   = plotWRef.current;
-          const visibleBucketCount = Math.max(1, visibleMsRef.current / (bucketMsRef.current || 1));
-          const candlePx = pw / visibleBucketCount;
-          const deltaCandles = Math.round(gestureState.dx / candlePx);
-          const oldestTs   = candlesRef.current.length > 0 ? candlesRef.current[0].timestamp : Date.now();
-          const msToOldest = Math.max(0, Date.now() - oldestTs);
-          const bMs        = bucketMsRef.current || 1;
-          const visB       = Math.max(1, Math.round(visibleMsRef.current / bMs));
-          const maxBack    = Math.max(0, Math.floor(msToOldest / bMs) - visB + 2);
-          const newOffset  = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
-          panOffsetRef.current = newOffset;
-          setPanOffsetCandles(newOffset);
-        }
+      onPanResponderMove: (_e, gestureState) => {
+        if (gestureModeRef.current !== 'pan') return;
+        userPannedRef.current = true;
+        const pw  = plotWRef.current;
+        const bMs = bucketMsRef.current || 1;
+        // px-per-bucket based on the rendered visible window, not the nominal bucket count.
+        const visibleBucketCount = Math.max(1, visibleMsRef.current / bMs);
+        const candlePx = pw / visibleBucketCount;
+        // Dragging right (positive dx) means going back in time → positive offset.
+        // Dragging left (negative dx) means moving toward live → smaller offset.
+        const deltaCandles = -(gestureState.dx / candlePx);
+        const allCandles   = candlesRef.current;
+        const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
+        const msToOldest   = Math.max(0, Date.now() - oldestTs);
+        const visB         = Math.max(1, Math.round(visibleMsRef.current / bMs));
+        // maxBack: can pan until the earliest loaded candle reaches the right edge.
+        const maxBack      = Math.max(0, Math.floor(msToOldest / bMs) - Math.floor(visB * 0.1));
+        const newOffset    = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
+        panOffsetRef.current = newOffset;
+        setPanOffsetCandles(newOffset);
       },
 
       onPanResponderRelease: (e) => {
         const totalMovement = Math.hypot(
           e.nativeEvent.pageX - touchStartXRef.current,
-          e.nativeEvent.pageY - touchStartYRef.current
+          e.nativeEvent.pageY - touchStartYRef.current,
         );
         const elapsed = Date.now() - touchStartTimeRef.current;
-        if (gestureModeRef.current === 'idle' && totalMovement < 10 && elapsed < 600) {
+        // A short tap (< 300ms, < 10px movement) with no committed pan = show crosshair.
+        if (gestureModeRef.current !== 'pan' || (totalMovement < 10 && elapsed < 300)) {
           applyTouchToCrosshair(e.nativeEvent.pageX, e.nativeEvent.pageY);
         }
+        gestureModeRef.current = 'idle';
+      },
+
+      onPanResponderTerminate: () => {
         gestureModeRef.current = 'idle';
       },
     })
@@ -1579,16 +1584,44 @@ export function TradingViewChart({
 
   const webMouseHandlers = Platform.OS === 'web' ? {
     onMouseMove: (e: any) => {
-      const rect = e.currentTarget?.getBoundingClientRect?.();
-      if (!rect) return;
-      updateCrosshairAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (mouseDragRef.current) {
+        // Horizontal drag → pan
+        const rect = e.currentTarget?.getBoundingClientRect?.();
+        if (!rect) return;
+        userPannedRef.current = true;
+        const bMs = bucketMsRef.current || 1;
+        const visibleBucketCount = Math.max(1, visibleMsRef.current / bMs);
+        const candlePx = plotWRef.current / visibleBucketCount;
+        const dx = e.clientX - mouseDragStartXRef.current;
+        const deltaCandles = -(dx / candlePx);
+        const allCandles   = candlesRef.current;
+        const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
+        const msToOldest   = Math.max(0, Date.now() - oldestTs);
+        const visB         = Math.max(1, Math.round(visibleMsRef.current / bMs));
+        const maxBack      = Math.max(0, Math.floor(msToOldest / bMs) - Math.floor(visB * 0.1));
+        const newOffset    = Math.max(0, Math.min(maxBack, mousePanStartRef.current + deltaCandles));
+        panOffsetRef.current = newOffset;
+        setPanOffsetCandles(newOffset);
+        setCrosshair(null);
+      } else {
+        // No drag — show crosshair at cursor
+        const rect = e.currentTarget?.getBoundingClientRect?.();
+        if (!rect) return;
+        updateCrosshairAt(e.clientX - rect.left, e.clientY - rect.top);
+      }
     },
     onMouseDown: (e: any) => {
-      const rect = e.currentTarget?.getBoundingClientRect?.();
-      if (!rect) return;
-      updateCrosshairAt(e.clientX - rect.left, e.clientY - rect.top);
+      mouseDragRef.current       = true;
+      mouseDragStartXRef.current = e.clientX;
+      mousePanStartRef.current   = panOffsetRef.current;
+      e.preventDefault();
     },
-    onMouseLeave: () => {},
+    onMouseUp: (_e: any) => {
+      mouseDragRef.current = false;
+    },
+    onMouseLeave: (_e: any) => {
+      mouseDragRef.current = false;
+    },
     onContextMenu: (e: any) => e.preventDefault(),
   } : {};
 
@@ -2020,7 +2053,7 @@ export function TradingViewChart({
         </View>
       )}
 
-      {panOffsetCandles > 0 && userPannedRef.current && (
+      {panOffsetCandles > 0 && (
         <TouchableOpacity
           style={styles.returnLiveBtn}
           onPress={() => {
