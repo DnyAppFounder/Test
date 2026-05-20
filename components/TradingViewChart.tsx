@@ -38,7 +38,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
-import { chartDataService, CandleData, TimeFrame } from '@/services/chartDataService';
+import { chartDataService, CandleData, TimeFrame, ChartTimeFrame } from '@/services/chartDataService';
 import { liveTokenStore } from '@/services/liveTokenStore';
 import { supabase } from '@/lib/supabase';
 
@@ -100,7 +100,7 @@ interface TradingViewChartProps {
   onValueModeChange?: (v: ValueMode) => void;
 }
 
-const ALL_TIMEFRAMES: { key: TimeFrame | 'ALL'; label: string }[] = [
+const ALL_TIMEFRAMES: { key: ChartTimeFrame; label: string }[] = [
   { key: '1m',  label: '1m' },
   { key: '5m',  label: '5m' },
   { key: '15m', label: '15m' },
@@ -275,6 +275,34 @@ function scoreCandleSet(cs: CandleData[], targetTf: TimeFrame): number {
   return countScore + spanScore + volumeScore - gapPenalty - flatPenalty;
 }
 
+// Infer the median candle-to-candle gap in ms from a sorted candle array.
+function inferBucketMs(cs: CandleData[]): number {
+  if (cs.length < 2) return BUCKET_MS['1D'];
+  const gaps = cs.slice(1).map((c, i) => c.timestamp - cs[i].timestamp).sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
+}
+
+// Map a bucket duration in ms to the closest base TimeFrame.
+function msToBestTimeFrame(ms: number): TimeFrame {
+  const candidates: [number, TimeFrame][] = [
+    [BUCKET_MS['1m'],  '1m'],
+    [BUCKET_MS['5m'],  '5m'],
+    [BUCKET_MS['15m'], '15m'],
+    [BUCKET_MS['1H'],  '1H'],
+    [BUCKET_MS['4H'],  '4H'],
+    [BUCKET_MS['1D'],  '1D'],
+    [BUCKET_MS['1W'],  '1W'],
+    [BUCKET_MS['1M'],  '1M'],
+  ];
+  let best: TimeFrame = '1D';
+  let bestDiff = Infinity;
+  for (const [bMs, tf] of candidates) {
+    const diff = Math.abs(ms - bMs);
+    if (diff < bestDiff) { bestDiff = diff; best = tf; }
+  }
+  return best;
+}
+
 function chooseBestCandleSet(candidates: CandleData[][], targetTf: TimeFrame): CandleData[] {
   let best: CandleData[] = [];
   let bestScore = -Infinity;
@@ -303,7 +331,7 @@ function fmtMcap(v: number): string {
   if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
   return `$${v.toFixed(0)}`;
 }
-function fmtTime(ts: number, tf: TimeFrame | 'ALL'): string {
+function fmtTime(ts: number, tf: ChartTimeFrame): string {
   const d = new Date(ts);
   if (tf === '1D' || tf === '1W' || tf === '1M' || tf === 'ALL') {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -373,7 +401,7 @@ export function TradingViewChart({
   const [activeLiveCandle, setActiveLiveCandle] = useState<LiveCandleData | null>(null);
   const activeLiveCandleRef = useRef<LiveCandleData | null>(null);
 
-  const [timeframe, setTimeframe] = useState<TimeFrame | 'ALL'>('1H');
+  const [timeframe, setTimeframe] = useState<ChartTimeFrame>('1H');
   // Tracks which resolution was actually used when timeframe === 'ALL'.
   // Starts at 1D; auto-degrades to 1H or 5m for newer/sparser tokens.
   const [allEffectiveTf, setAllEffectiveTf] = useState<TimeFrame>('1D');
@@ -437,7 +465,7 @@ export function TradingViewChart({
   const reqIdRef       = useRef(0);
   const prevMintRef    = useRef<string | undefined>(undefined);
   const hasAutoScrolledRef = useRef(false);
-  const timeframeRef   = useRef<TimeFrame | 'ALL'>('1H');
+  const timeframeRef   = useRef<ChartTimeFrame>('1H');
   const prevExternalPriceRef = useRef<number>(0);
   // True only when the user explicitly drags the chart; reset on token/timeframe change.
   // Prevents "Return to Live" from appearing after auto-scroll adjustments.
@@ -815,7 +843,7 @@ export function TradingViewChart({
     setMode(isSparse ? 'candlestick' : 'area');
   }, [hasData, tokenMint]);
 
-  const loadData = useCallback(async (tf: TimeFrame | 'ALL', silent = false) => {
+  const loadData = useCallback(async (tf: ChartTimeFrame, silent = false) => {
     if (!tokenMint) { if (!silent) setLoading(false); return; }
     const myId = ++reqIdRef.current;
     if (!silent) setLoading(true);
@@ -828,36 +856,21 @@ export function TradingViewChart({
 
     try {
       if (tf === 'ALL') {
-        // ALL must choose the cleanest real historical resolution, not just the first
-        // response with a couple of candles. No fake candles are created here.
-        const candidates: { tf: TimeFrame; candles: CandleData[] }[] = [];
-        for (const candidateTf of ['1D', '4H', '1H', '15m', '5m', '1m'] as TimeFrame[]) {
-          const cleaned = await loadFrame(candidateTf);
-          if (myId !== reqIdRef.current) return;
-          if (cleaned.length > 0) candidates.push({ tf: candidateTf, candles: cleaned });
-        }
-
-        let bestTf: TimeFrame = '1D';
-        let bestCandles: CandleData[] = [];
-        let bestScore = -Infinity;
-        for (const candidate of candidates) {
-          const score = scoreCandleSet(candidate.candles, candidate.tf);
-          // Prefer readable spans and real density; avoid one-dot / two-point ALL charts.
-          const countBonus = candidate.candles.length >= 20 ? 80 : candidate.candles.length >= 8 ? 35 : 0;
-          const totalScore = score + countBonus;
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            bestTf = candidate.tf;
-            bestCandles = candidate.candles;
-          }
-        }
+        // Delegate to service: getAllTimeHistory runs all resolutions in parallel,
+        // scores each dataset, and returns the best real historical candle set.
+        // No fake candles are created here or in the service.
+        const raw = await chartDataService.getOHLCVData(tokenMint!, 'ALL', undefined);
+        if (myId !== reqIdRef.current) return;
+        const bestCandles = sanitizeRawCandles(raw ?? []);
 
         if (bestCandles.length > 0) {
           setCandles(bestCandles);
-          setAllEffectiveTf(bestTf);
+          // Infer the effective timeframe from the median candle spacing.
+          const medianGap = inferBucketMs(bestCandles);
+          const effectiveTf = msToBestTimeFrame(medianGap);
+          setAllEffectiveTf(effectiveTf);
           setHasData(true);
         } else {
-          // Keep the chart renderer alive when a quote/header price exists.
           setCandles([]);
           setHasData(false);
           if (tokenMint && resolvedPairCache.get(tokenMint) === pairAddrRef.current) {
