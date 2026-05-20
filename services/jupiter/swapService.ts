@@ -284,7 +284,7 @@ class JupiterSwapService {
     if (!proxy) return 0;
     try {
       const url = `${proxy}?action=price&ids=${tokenMint}`;
-      const response = await fetch(url, { headers: proxyHeaders() });
+      const response = await fetch(url, { headers: proxyHeaders(), signal: AbortSignal.timeout(7000) });
       if (!response.ok) {
         console.error('[Jupiter] getTokenPrice HTTP', response.status);
         return 0;
@@ -306,7 +306,7 @@ class JupiterSwapService {
     try {
       const ids = tokenMints.join(',');
       const url = `${proxy}?action=price&ids=${ids}`;
-      const response = await fetch(url, { headers: proxyHeaders() });
+      const response = await fetch(url, { headers: proxyHeaders(), signal: AbortSignal.timeout(7000) });
       if (!response.ok) {
         console.error('[Jupiter] getMultipleTokenPrices HTTP', response.status);
         return new Map();

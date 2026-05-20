@@ -57,6 +57,7 @@ export class NFTService {
       const response = await fetch(getNftRpcUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 'get-assets',
@@ -135,6 +136,7 @@ export class NFTService {
       const response = await fetch(getNftRpcUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 'get-asset',

@@ -166,7 +166,10 @@ class LiveTokenStoreService {
     entry.isFetching = true;
 
     try {
-      const res = await fetch(`${DEX_BASE}/latest/dex/tokens/${mint}`, { cache: 'no-store' });
+      const res = await fetch(`${DEX_BASE}/latest/dex/tokens/${mint}`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+      });
       if (!res.ok) return;
 
       const data = await res.json();

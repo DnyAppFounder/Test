@@ -294,7 +294,7 @@ export default function CreatePostScreen() {
     setGifSearching(true);
     try {
       const url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=20&media_filter=gif,tinygif`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setGifResults(parseTenorResults(json.results ?? []));
@@ -311,7 +311,7 @@ export default function CreatePostScreen() {
     setShowGifPicker(true);
     // Load featured/trending GIFs immediately on open
     setGifSearching(true);
-    fetch(`https://tenor.googleapis.com/v2/featured?key=${TENOR_KEY}&limit=20&media_filter=gif,tinygif`)
+    fetch(`https://tenor.googleapis.com/v2/featured?key=${TENOR_KEY}&limit=20&media_filter=gif,tinygif`, { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(json => setGifResults(parseTenorResults(json.results ?? [])))
       .catch(() => setGifResults([]))

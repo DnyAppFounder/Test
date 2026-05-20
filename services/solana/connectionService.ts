@@ -136,7 +136,7 @@ export class SolanaConnectionService {
 
     console.log('[RPC]', method, '->', url.slice(0, 60));
 
-    const response = await fetch(url, { method: 'POST', headers, body });
+    const response = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
@@ -173,7 +173,7 @@ export class SolanaConnectionService {
       }
     }
 
-    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
     if (!response.ok) {
       throw new Error(`Batch RPC HTTP ${response.status}`);
     }

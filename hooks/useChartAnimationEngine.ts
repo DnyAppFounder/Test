@@ -59,8 +59,8 @@ export interface UseChartAnimationEngineResult {
 }
 
 // RAF fires at display frequency but React state updates are throttled.
-const RENDER_INTERVAL_MOBILE  = 100; // 10fps — safe on older phones
-const RENDER_INTERVAL_DESKTOP =  60; // ~16fps — smooth on desktop
+const RENDER_INTERVAL_MOBILE  =  50; // ~20fps — smooth enough on mobile without overheating
+const RENDER_INTERVAL_DESKTOP =  16; // ~60fps — full smooth animation on desktop
 
 function isMobileBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;
