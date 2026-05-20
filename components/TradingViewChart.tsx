@@ -41,7 +41,6 @@ import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { chartDataService, CandleData, TimeFrame, ChartTimeFrame } from '@/services/chartDataService';
 import { liveTokenStore } from '@/services/liveTokenStore';
 import { supabase } from '@/lib/supabase';
-import { useChartAnimationEngine } from '@/hooks/useChartAnimationEngine';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -428,14 +427,16 @@ export function TradingViewChart({
   const [crosshair, setCrosshair] = useState<{
     x: number; y: number; idx: number; price: number; ts: number; pct: number;
   } | null>(null);
-  // (pendingPanCorrection removed — pan corrections go through animEngine.setInitialPanOffsetMs)
+  // When this is non-zero, the pan correction useEffect fires.
+  const [pendingPanCorrection, setPendingPanCorrection] = useState<number | null>(null);
 
   const headerPulseAnim = useRef(new Animated.Value(1)).current;
   const chartPulseAnim  = useRef(new Animated.Value(0)).current;
 
+  const [panOffsetCandles, setPanOffsetCandles] = useState(0);
+  const panOffsetRef        = useRef(0);
   const plotWRef            = useRef(0);
-  // pan gesture tracking refs (gesture deltas only — actual offset lives in engine)
-  const panStartOffsetMsRef = useRef(0);
+  const panStartOffsetRef   = useRef(0);
   // 'idle' → 'crosshair' or 'pan' — locked until touch release.
   const gestureModeRef      = useRef<'idle' | 'crosshair' | 'pan'>('idle');
   const touchStartXRef      = useRef(0);
@@ -474,6 +475,13 @@ export function TradingViewChart({
   // stale API responses from overwriting fresher live prices.
   const latestPriceTsRef = useRef<number>(0);
 
+  // True while the user is actively dragging the chart horizontally.
+  // Used by the live RAF to avoid updating rightTimeRef (which would cause the viewport
+  // to drift forward while the user tries to explore historical candles).
+  const isPanningRef = useRef(false);
+
+  // true = chart SVG is intersecting the viewport; RAF skips setClockTick when false.
+  const chartVisibleRef = useRef(true);
   // Set to true while applying a liveTokenStore-sourced update to prevent push-back.
   const fromStoreRef = useRef(false);
   // Set to true once the user manually picks a chart mode; suppresses auto-detection.
@@ -482,11 +490,8 @@ export function TradingViewChart({
   // Reset when tokenMint changes so a new token gets a fresh calculation.
   const stableSupplyRef = useRef<number | null>(null);
 
-  // Local mirror of chart visibility — used by WS reconnect guard to avoid reconnecting
-  // when the chart is scrolled off screen. Kept in sync by the IntersectionObserver effect.
-  const chartVisibleRef = useRef(true);
-
-  // Refs used for geometry calculations inside gesture handlers (stable, no re-render).
+  const [clockTick, setClockTick] = useState(0);
+  const rightTimeRef  = useRef<number>(Date.now());
   const leftTimeRef   = useRef<number>(Date.now() - 3_600_000 * 60);
   const visibleMsRef  = useRef<number>(3_600_000 * 60);
   const bucketMsRef   = useRef<number>(3_600_000);
@@ -496,13 +501,6 @@ export function TradingViewChart({
   useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
   useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
   useEffect(() => { activeLiveCandleRef.current = activeLiveCandle; }, [activeLiveCandle]);
-
-  // ── Animation engine ────────────────────────────────────────────────────────
-  // maxPanBackMs: how far back the user can scroll, based on the oldest loaded candle.
-  const maxPanBackMs = candles.length > 0
-    ? Math.max(0, Date.now() - candles[0].timestamp)
-    : 0;
-  const animEngine = useChartAnimationEngine(maxPanBackMs);
 
   // Resolve best pair address from DexScreener when token mint changes.
   // Prefers pairs with usable live price data (non-zero priceUsd + liquidity/volume).
@@ -586,29 +584,67 @@ export function TradingViewChart({
   // Live time engine — RAF slides the viewport forward in real time.
   // Throttled to 5fps (200ms) to avoid overheating.
   // Paused when the browser tab is hidden (Page Visibility API).
-  // Viewport visibility — wire IntersectionObserver to engine's setChartVisible
-  // and the local chartVisibleRef (used by WS reconnect guard).
+  useEffect(() => {
+    let rafId = 0;
+    let lastRender = 0;
+    // 10fps on mobile (100ms), 16fps on desktop (60ms) — smooth enough for a live clock
+    // without causing mobile overheating. The RAF itself runs at display frequency;
+    // only actual React state updates are throttled.
+    const RENDER_INTERVAL = typeof navigator !== 'undefined' && /Mobi/i.test(navigator.userAgent) ? 100 : 60;
+    let tabHidden = false;
+
+    const onVisChange = () => {
+      tabHidden = typeof document !== 'undefined' ? document.hidden : false;
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisChange);
+      tabHidden = document.hidden;
+    }
+
+    const tick = (now: number) => {
+      // Skip work when the tab is hidden OR chart is scrolled off-screen.
+      // Prevents the right-edge clock from jumping forward after long pauses and
+      // avoids unnecessary re-renders when the chart is not visible.
+      if (!tabHidden && chartVisibleRef.current) {
+        // Don't advance rightTime while the user is dragging — it would shift the
+        // viewport under their finger and create a "fighting" sensation.
+        // isPanningRef is set in onPanResponderGrant / onMouseDown and cleared on release.
+        if (!isPanningRef.current) {
+          rightTimeRef.current = Date.now();
+        }
+        if (now - lastRender >= RENDER_INTERVAL) {
+          lastRender = now;
+          setClockTick(t => t + 1);
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisChange);
+      }
+    };
+  }, []);
+
+  // Viewport visibility — pause setClockTick when chart is scrolled off-screen.
+  // Uses IntersectionObserver on web; native always stays active.
+  // Re-runs when hasData changes so the observer attaches after the SVG mounts.
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof IntersectionObserver === 'undefined') return;
-    if (!hasData) {
-      chartVisibleRef.current = true;
-      animEngine.actions.setChartVisible(true);
-      return;
-    }
+    if (!hasData) { chartVisibleRef.current = true; return; }
     const el = svgContainerRef.current as unknown as Element;
     if (!el) return;
     const obs = new IntersectionObserver(entries => {
-      const visible = entries[0]?.isIntersecting ?? true;
-      chartVisibleRef.current = visible;
-      animEngine.actions.setChartVisible(visible);
+      chartVisibleRef.current = entries[0]?.isIntersecting ?? true;
     }, { threshold: 0 });
     obs.observe(el);
     return () => {
       obs.disconnect();
       chartVisibleRef.current = true;
-      animEngine.actions.setChartVisible(true);
     };
-  }, [hasData, animEngine.actions]);
+  }, [hasData]);
 
   // ── Single price pipeline ────────────────────────────────────────────────────
   // All price sources funnel through applyLivePrice. Each call carries a timestamp
@@ -902,14 +938,15 @@ export function TradingViewChart({
 
   useEffect(() => {
     setCrosshair(null);
-    animEngine.actions.returnToLive();
+    setPanOffsetCandles(0);
+    panOffsetRef.current = 0;
     priceScaleKeyRef.current = '';
     hasAutoScrolledRef.current = false;
     userPannedRef.current = false;
     // Reset active live candle on timeframe change so it matches the new bucket size.
     setActiveLiveCandle(null);
     loadData(timeframe, false);
-  }, [tokenMint, timeframe, animEngine.actions]);
+  }, [tokenMint, timeframe]);
 
   useEffect(() => { setCrosshair(null); }, [mode]);
 
@@ -1075,8 +1112,6 @@ export function TradingViewChart({
 
   // Auto-scroll: when data loads but all candles are before the visible window,
   // pan back so the last real candle is visible near the right edge.
-  // Auto-scroll: when data loads and last candle is before the visible window, pan back.
-  // Delegates to engine.setInitialPanOffsetMs which ignores the call if user already panned.
   useEffect(() => {
     if (timeframe === 'ALL') return;
     if (!hasData || candles.length === 0) return;
@@ -1088,31 +1123,46 @@ export function TradingViewChart({
     const lastRealTs = candles[candles.length - 1].timestamp;
     if (lastRealTs > 0 && lastRealTs < now - visMs - bMs) {
       const targetRight = lastRealTs + visMs * 0.1;
-      const msBack      = Math.max(0, now - targetRight);
-      animEngine.actions.setInitialPanOffsetMs(msBack);
+      const msBack      = now - targetRight;
+      const bucketsBack = Math.max(0, Math.round(msBack / bMs));
+      panOffsetRef.current = bucketsBack;
+      setPanOffsetCandles(bucketsBack);
     }
-  }, [hasData, candles, timeframe, animEngine.actions]);
+  }, [hasData, candles, timeframe]);
 
-  // Pan correction: when no candles fall in the visible window after data/TF change,
-  // auto-correct the pan offset to show the latest real candle.
+  // Pan correction useEffect — fires when displayCandles is empty but candles exist.
+  // Moved out of render to avoid setState-during-render violations.
+  useEffect(() => {
+    if (pendingPanCorrection === null) return;
+    if (pendingPanCorrection !== panOffsetCandles) {
+      panOffsetRef.current = pendingPanCorrection;
+      setPanOffsetCandles(pendingPanCorrection);
+    }
+    setPendingPanCorrection(null);
+  }, [pendingPanCorrection]);
+
+  // When candles exist but none fall in the visible window, auto-correct the pan offset.
+  // This replaces the old setState-during-render pattern in the render body.
   // Only fires on data/timeframe change — not on user pan gestures.
   useEffect(() => {
     if (timeframe === 'ALL') return;
     if (candles.length === 0) return;
-    const bMs  = BUCKET_MS[timeframe] ?? 3_600_000;
-    const vB   = VISIBLE_BUCKETS[timeframe] ?? 48;
-    const panMs = animEngine.state.panOffsetMs;
-    const rightT = Date.now() - panMs;
-    const leftT  = rightT - vB * bMs;
+    const bMs = BUCKET_MS[timeframe] ?? 3_600_000;
+    const vB = VISIBLE_BUCKETS[timeframe] ?? 48;
+    const rightT = Date.now() - panOffsetRef.current * bMs;
+    const leftT = rightT - vB * bMs;
     const hasVisible = candles.some(
       c => c.timestamp >= leftT - bMs && c.timestamp <= rightT + bMs
     );
     if (hasVisible) return;
-    const lastRealTs   = candles[candles.length - 1].timestamp;
-    const targetRight  = lastRealTs + bMs * Math.floor(vB * 0.1);
-    const correctedMs  = Math.max(0, Date.now() - targetRight);
-    animEngine.actions.setInitialPanOffsetMs(correctedMs);
-  }, [candles, timeframe, animEngine.actions, animEngine.state.panOffsetMs]);
+    const lastRealTs = candles[candles.length - 1].timestamp;
+    const targetRight = lastRealTs + bMs * Math.floor(vB * 0.1);
+    const corrected = Math.max(0, Math.round((Date.now() - targetRight) / bMs));
+    if (corrected !== panOffsetRef.current) {
+      panOffsetRef.current = corrected;
+      setPanOffsetCandles(corrected);
+    }
+  }, [candles, timeframe]);
 
   // ── chart geometry ────────────────────────────────────────────────────────
   // MCAP scale: token supply frozen once per token so MCAP never drifts with quote prices.
@@ -1145,7 +1195,7 @@ export function TradingViewChart({
   const plotHRef = useRef(plotH);
   plotHRef.current = plotH;
 
-  // ── Live time geometry (from animation engine) ────────────────────────────
+  // ── Live time geometry ────────────────────────────────────────────────────
   // ALL mode: use the resolution that was actually fetched (allEffectiveTf),
   // not the hardcoded BUCKET_MS['ALL'] = 1D. Without this fix, 1H candles
   // all collapse to the same x-position (12h offset each), creating vertical walls.
@@ -1153,14 +1203,11 @@ export function TradingViewChart({
     ? (BUCKET_MS[allEffectiveTf] ?? 3_600_000)
     : (BUCKET_MS[timeframe] ?? 3_600_000);
   const visibleBuckets = VISIBLE_BUCKETS[timeframe] ?? 48;
-
-  // Derive pan in candle units from engine's ms-based offset (for legacy logic that uses candlecount).
-  const panOffsetCandles = bucketMs > 0 ? animEngine.state.panOffsetMs / bucketMs : 0;
-  // rightTime from engine's live clock minus pan offset.
-  let rightTime = animEngine.state.visualRightTime - animEngine.state.panOffsetMs;
-  const visibleMs = visibleBuckets * bucketMs;
-  let leftTime    = rightTime - visibleMs;
-  bucketMsRef.current = bucketMs;
+  const scrollOffsetMs = panOffsetCandles * bucketMs;
+  const rightTime      = rightTimeRef.current - scrollOffsetMs;
+  const visibleMs      = visibleBuckets * bucketMs;
+  const leftTime       = rightTime - visibleMs;
+  bucketMsRef.current  = bucketMs;
 
   // Merge real historical candles + active live candle at render time.
   // Real candles are immutable; only the active live candle updates on price change.
@@ -1179,54 +1226,44 @@ export function TradingViewChart({
     return [...withoutSameBucket, activeLiveCandle].sort((a, b) => a.timestamp - b.timestamp);
   }, [candles, activeLiveCandle, bucketMs]);
 
-  // Clamp viewport to the loaded real history before selecting visible candles.
-  // This prevents dead blank space when the latest DB candle is older than Date.now()
-  // and prevents panning past the start of available history.
-  // It changes only the visual window — no fake candles/timestamps/volume are created.
-  if (mergedCandles.length > 0) {
-    const firstMergedTs = mergedCandles[0].timestamp;
-    const lastMergedTs  = mergedCandles[mergedCandles.length - 1].timestamp;
-    const rightPadMs    = Math.max(bucketMs * 2.5, visibleMs * 0.08);
-    const leftPadMs     = Math.max(bucketMs * 1.5, visibleMs * 0.02);
-
-    // If there is no active real live candle, never let the right edge drift far
-    // beyond the last real candle just because the device clock advanced.
-    if (!activeLiveCandle && rightTime > lastMergedTs + rightPadMs) {
-      rightTime = lastMergedTs + rightPadMs;
-      leftTime  = rightTime - visibleMs;
-    }
-
-    // Do not allow the user to pan into a large empty area before the first candle.
-    const minLeft = firstMergedTs - leftPadMs;
-    if (leftTime < minLeft) {
-      leftTime  = minLeft;
-      rightTime = leftTime + visibleMs;
-    }
-  }
-
   // Filter to the visible time window.
-  // Pan must be a true viewport translation, never a zoom/squeeze.
-  // ALL and normal timeframes use the same rule: select candles by the current
-  // x-window plus a small edge margin. We never "fit all candles" during pan and
-  // never replace the window with nearest-centre candles, because that caused
-  // the chart/volume bars to compact and start in the middle.
+  // Use a 1-bucket margin on both sides so candles at the edge of the window
+  // are visible even when their centre is near the boundary.
   const MIN_LIVE_CANDLES = 6;
   let filledRaw: CandleData[];
   {
-    const standardRaw = mergedCandles.filter(c =>
-      c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
-    );
-
-    if (standardRaw.length > 0) {
-      filledRaw = standardRaw;
-    } else if (mergedCandles.length > 0 && panOffsetCandles === 0) {
-      // Live edge with old/sparse data: keep the latest real context visible
-      // without creating fake candles or resizing the x-scale.
-      filledRaw = mergedCandles.slice(-Math.min(Math.max(MIN_LIVE_CANDLES, Math.floor(visibleBuckets * 0.35)), mergedCandles.length));
+    if (timeframe === 'ALL') {
+      // ALL mode: show every candle — adaptive x-range fits the full span.
+      filledRaw = mergedCandles;
     } else {
-      // User panned to an area where there are truly no loaded candles.
-      // Keep it empty rather than jumping/recentering unpredictably.
-      filledRaw = [];
+      const standardRaw = mergedCandles.filter(c =>
+        c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
+      );
+
+      if (standardRaw.length < MIN_LIVE_CANDLES && mergedCandles.length > 0) {
+        // No/few candles in the scrolled window.
+        // When panning (offset > 0): find candles closest to the current window centre
+        // so panning into older history always shows something real.
+        if (panOffsetCandles > 0) {
+          const windowCentre = (leftTime + rightTime) / 2;
+          // Sort by distance to window centre and take up to one visible window's worth.
+          const sorted = [...mergedCandles].sort(
+            (a, b) => Math.abs(a.timestamp - windowCentre) - Math.abs(b.timestamp - windowCentre)
+          );
+          const takeCount = Math.min(visibleBuckets, mergedCandles.length);
+          filledRaw = sorted.slice(0, takeCount).sort((a, b) => a.timestamp - b.timestamp);
+        } else {
+          // Live mode: include recent historical context.
+          const lastMergedTs = mergedCandles[mergedCandles.length - 1].timestamp;
+          const isOldData = (rightTime - lastMergedTs) > bucketMs * 3;
+          const maxTake = isOldData
+            ? Math.min(Math.max(MIN_LIVE_CANDLES * 2, Math.floor(visibleBuckets * 0.4)), mergedCandles.length)
+            : Math.min(visibleBuckets, mergedCandles.length);
+          filledRaw = mergedCandles.slice(-Math.min(maxTake, mergedCandles.length));
+        }
+      } else {
+        filledRaw = standardRaw;
+      }
     }
   }
 
@@ -1286,31 +1323,60 @@ export function TradingViewChart({
   displayCandlesRef.current = displayCandles;
   const n = displayCandles.length;
 
-  // ── Viewport x-range ──────────────────────────────────────────────────────
-  // One stable x-scale per render. Pan changes xLeft only; it never changes
-  // xVisibleMs, so dragging cannot squeeze candles, lines, or volume bars.
-  // This is applied to ALL and every normal timeframe.
+  // ── Adaptive x-range ─────────────────────────────────────────────────────
   let xLeft      = leftTime;
   let xVisibleMs = visibleMs;
-  if (displayCandles.length > 0 && !isVisualGuideOnly) {
+  if (displayCandles.length > 0) {
     const firstDataTs = displayCandles[0].timestamp;
     const lastDataTs  = displayCandles[displayCandles.length - 1].timestamp;
-    const leftPadMs   = Math.max(bucketMs * 1.5, visibleMs * 0.02);
-    const rightPadMs  = Math.max(bucketMs * 2.5, visibleMs * 0.08);
 
-    const minLeft = firstDataTs - leftPadMs;
-    const maxRight = lastDataTs + rightPadMs;
-
-    // Keep the latest candle/point from being glued to the right axis in live mode,
-    // but do not let the window drift past the loaded history.
-    if (panOffsetCandles === 0) {
-      xLeft = Math.max(minLeft, maxRight - visibleMs);
+    if (isVisualGuideOnly) {
+      // The guide already spans a readable part of the live window. Keep the normal
+      // viewport so the line fills the container instead of becoming a tiny middle segment.
+      xLeft = leftTime;
+      xVisibleMs = visibleMs;
+    } else if (timeframe === 'ALL') {
+      // ALL mode: fit the x-axis to the actual data span.
+      // Never extend to current time — that creates huge blank right space.
+      const dataSpan = Math.max(lastDataTs - firstDataTs, bucketMs);
+      const leftPad  = bucketMs * 1.5;
+      const rightPad = Math.max(bucketMs * 1.5, dataSpan * 0.04);
+      xLeft      = firstDataTs - leftPad;
+      xVisibleMs = Math.max(dataSpan + leftPad + rightPad, bucketMs * 8);
     } else {
-      // Panned mode: preserve the user-selected window, clamped to real history.
-      xLeft = Math.max(minLeft, Math.min(xLeft, Math.max(minLeft, maxRight - visibleMs)));
+      // Non-ALL: anchor viewport to the real candle data.
+      // Always respect the current pan offset; never force the window back to live.
+      const isSparse       = !isVisualGuideOnly && displayCandles.length < 15;
+      const isUltraSparse  = !isVisualGuideOnly && displayCandles.length <= 2;
+      const futureCtx      = Math.min(6, Math.floor(visibleBuckets * 0.15)) * bucketMs;
+      const gapToNow       = rightTime - lastDataTs;
+
+      if (isUltraSparse) {
+        // 1-2 real candles: centre the candle(s) in a stable readable window.
+        const centerTs = displayCandles.length === 1
+          ? firstDataTs
+          : (firstDataTs + lastDataTs) / 2;
+        xVisibleMs = Math.max(visibleMs, bucketMs * Math.max(visibleBuckets, 24));
+        xLeft = centerTs - xVisibleMs * 0.55;
+      } else if (isSparse) {
+        // Sparse: anchor left just before first real candle, cap right just after last.
+        xLeft = firstDataTs - bucketMs * 2;
+        const cappedRight = (gapToNow > futureCtx && !activeLiveCandle)
+          ? lastDataTs + bucketMs * 2
+          : rightTime;
+        xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
+      } else {
+        // Dense: use normal scrolled window. Only cap the dead right-side space when
+        // the user is at live edge (no pan) and last candle is old.
+        if (panOffsetCandles === 0 && gapToNow > futureCtx * 4 && !activeLiveCandle) {
+          xLeft = firstDataTs - bucketMs * 2;
+          const cappedRight = lastDataTs + Math.min(futureCtx, gapToNow * 0.25);
+          xVisibleMs = Math.max(cappedRight - xLeft, bucketMs * 4);
+        }
+        // Otherwise let the scrolled window stand as-is.
+      }
     }
   }
-  // Visual guide already uses two guide points inside the current window.
   leftTimeRef.current  = xLeft;
   visibleMsRef.current = xVisibleMs;
 
@@ -1328,7 +1394,7 @@ export function TradingViewChart({
     // Restrict to visible window for scale computation — use xLeft (post-adjustment)
     // so the Y scale matches exactly what is rendered, not the wider raw time window.
     const visibleOnly = displayCandles.filter(
-      c => c.timestamp >= xLeft && c.timestamp <= xLeft + xVisibleMs
+      c => c.timestamp >= xLeft && c.timestamp <= rightTime
     );
     const scaleBase   = visibleOnly.length > 0 ? visibleOnly : displayCandles;
     // Real candles (volume > 0) take priority for scale; zero-volume live/visual guide candles expands it
@@ -1391,7 +1457,7 @@ export function TradingViewChart({
   // slotW: pixel-width of one candle slot.
   // For ALL mode we base it on the actual candle count so candles don't collide.
   // For other modes we use the target density (visibleBuckets) to keep widths stable.
-  const effectiveBuckets = visibleBuckets;
+  const effectiveBuckets = (timeframe === 'ALL' && n > visibleBuckets) ? n : visibleBuckets;
   const slotW = plotW / effectiveBuckets;
   const MAX_CANDLE_W = isMobile ? 14 : 10;
   const MAX_BAR_W    = isMobile ?  6 :  5;
@@ -1410,12 +1476,9 @@ export function TradingViewChart({
     const raw = PAD.top + plotH - ((price - minP) / priceRange) * plotH;
     return Math.max(PAD.top, Math.min(PAD.top + plotH, raw));
   }
-  const volumeTopY = CHART_H + 6;
-  const volumeAreaH = Math.max(10, VOL_H - 12);
-  const timeAxisTopY = CHART_H + VOL_H;
   function volBarH(vol: number): number {
     if (vol <= 0 || !isFinite(vol) || maxVol <= 0) return 0;
-    const h = (vol / maxVol) * volumeAreaH;
+    const h = (vol / maxVol) * (VOL_H - 6);
     // No hard minimum — micro-volume proportionally tiny (< 0.3px) renders as nothing.
     // Only apply 1px floor once the bar is visually meaningful (≥0.3px proportional height).
     return h < 0.3 ? 0 : Math.max(1, h);
@@ -1470,15 +1533,6 @@ export function TradingViewChart({
   const mouseDragStartXRef   = useRef(0);
   const mousePanStartRef     = useRef(0);
 
-  // Convert pixel delta to ms for the engine. plotW / visibleMs = px/ms → invert.
-  const pxToMs = (px: number): number => {
-    const pw = plotWRef.current;
-    const vm = visibleMsRef.current;
-    if (!pw || !vm) return 0;
-    // positive px = drag right = moving into past = positive ms (offset increases)
-    return (px / pw) * vm;
-  };
-
   const panResponder = useRef(
     PanResponder.create({
       // Do NOT grab on start — let the move threshold decide.
@@ -1492,37 +1546,39 @@ export function TradingViewChart({
       },
 
       onPanResponderGrant: (e) => {
-        panStartOffsetMsRef.current = animEngine.state.panOffsetMs;
-        gestureModeRef.current      = 'pan';
-        touchStartXRef.current      = e.nativeEvent.pageX;
-        touchStartYRef.current      = e.nativeEvent.pageY;
-        touchStartTimeRef.current   = Date.now();
-        animEngine.actions.onPanStart();
+        panStartOffsetRef.current = panOffsetRef.current;
+        gestureModeRef.current    = 'pan';
+        isPanningRef.current      = true;
+        touchStartXRef.current    = e.nativeEvent.pageX;
+        touchStartYRef.current    = e.nativeEvent.pageY;
+        touchStartTimeRef.current = Date.now();
         setCrosshair(null);
       },
 
       onPanResponderMove: (_e, gestureState) => {
         if (gestureModeRef.current !== 'pan') return;
         userPannedRef.current = true;
-        // Compute absolute ms offset from start of this gesture, then set engine to that position.
-        // Using delta-from-start avoids drift from incremental calls.
-        const deltaMsFromStart = pxToMs(gestureState.dx);
-        const newOffsetMs = Math.max(0, panStartOffsetMsRef.current + deltaMsFromStart);
-        // Clamp to loaded history — engine clamps to maxPanBackMs but we also clamp here
-        // so the chart doesn't pan into blank space before the first loaded candle.
-        const allCandles = candlesRef.current;
-        if (allCandles.length > 0) {
-          const oldestTs    = allCandles[0].timestamp;
-          const historySpan = Math.max(0, Date.now() - oldestTs);
-          const clampedMs   = Math.min(newOffsetMs, historySpan);
-          animEngine.actions.onPanDelta(clampedMs - animEngine.state.panOffsetMs);
-        } else {
-          animEngine.actions.onPanDelta(newOffsetMs - animEngine.state.panOffsetMs);
-        }
+        const pw  = plotWRef.current;
+        const bMs = bucketMsRef.current || 1;
+        // px-per-bucket based on the rendered visible window, not the nominal bucket count.
+        const visibleBucketCount = Math.max(1, visibleMsRef.current / bMs);
+        const candlePx = pw / visibleBucketCount;
+        // Dragging right (positive dx) means going back in time → positive offset.
+        // Dragging left (negative dx) means moving toward live → smaller offset.
+        const deltaCandles = gestureState.dx / candlePx;
+        const allCandles   = candlesRef.current;
+        const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
+        const msToOldest   = Math.max(0, Date.now() - oldestTs);
+        const visB         = Math.max(1, Math.round(visibleMsRef.current / bMs));
+        // maxBack: can pan until the earliest loaded candle reaches the right edge.
+        const maxBack      = Math.max(0, Math.floor(msToOldest / bMs) - Math.floor(visB * 0.1));
+        const newOffset    = Math.max(0, Math.min(maxBack, panStartOffsetRef.current + deltaCandles));
+        panOffsetRef.current = newOffset;
+        setPanOffsetCandles(newOffset);
       },
 
       onPanResponderRelease: (e) => {
-        animEngine.actions.onPanEnd();
+        isPanningRef.current = false;
         const totalMovement = Math.hypot(
           e.nativeEvent.pageX - touchStartXRef.current,
           e.nativeEvent.pageY - touchStartYRef.current,
@@ -1536,7 +1592,7 @@ export function TradingViewChart({
       },
 
       onPanResponderTerminate: () => {
-        animEngine.actions.onPanEnd();
+        isPanningRef.current = false;
         gestureModeRef.current = 'idle';
       },
     })
@@ -1545,22 +1601,23 @@ export function TradingViewChart({
   const webMouseHandlers = Platform.OS === 'web' ? {
     onMouseMove: (e: any) => {
       if (mouseDragRef.current) {
-        // Horizontal drag → pan via engine
+        // Horizontal drag → pan
         const rect = e.currentTarget?.getBoundingClientRect?.();
         if (!rect) return;
         userPannedRef.current = true;
+        const bMs = bucketMsRef.current || 1;
+        const visibleBucketCount = Math.max(1, visibleMsRef.current / bMs);
+        const candlePx = plotWRef.current / visibleBucketCount;
         const dx = e.clientX - mouseDragStartXRef.current;
-        const deltaMsFromStart = pxToMs(dx);
-        const newOffsetMs = Math.max(0, mousePanStartRef.current + deltaMsFromStart);
-        const allCandles = candlesRef.current;
-        if (allCandles.length > 0) {
-          const oldestTs    = allCandles[0].timestamp;
-          const historySpan = Math.max(0, Date.now() - oldestTs);
-          const clampedMs   = Math.min(newOffsetMs, historySpan);
-          animEngine.actions.onPanDelta(clampedMs - animEngine.state.panOffsetMs);
-        } else {
-          animEngine.actions.onPanDelta(newOffsetMs - animEngine.state.panOffsetMs);
-        }
+        const deltaCandles = dx / candlePx;
+        const allCandles   = candlesRef.current;
+        const oldestTs     = allCandles.length > 0 ? allCandles[0].timestamp : Date.now();
+        const msToOldest   = Math.max(0, Date.now() - oldestTs);
+        const visB         = Math.max(1, Math.round(visibleMsRef.current / bMs));
+        const maxBack      = Math.max(0, Math.floor(msToOldest / bMs) - Math.floor(visB * 0.1));
+        const newOffset    = Math.max(0, Math.min(maxBack, mousePanStartRef.current + deltaCandles));
+        panOffsetRef.current = newOffset;
+        setPanOffsetCandles(newOffset);
         setCrosshair(null);
       } else {
         // No drag — show crosshair at cursor
@@ -1571,18 +1628,18 @@ export function TradingViewChart({
     },
     onMouseDown: (e: any) => {
       mouseDragRef.current       = true;
+      isPanningRef.current       = true;
       mouseDragStartXRef.current = e.clientX;
-      mousePanStartRef.current   = animEngine.state.panOffsetMs;
-      animEngine.actions.onPanStart();
+      mousePanStartRef.current   = panOffsetRef.current;
       e.preventDefault();
     },
     onMouseUp: (_e: any) => {
       mouseDragRef.current = false;
-      animEngine.actions.onPanEnd();
+      isPanningRef.current = false;
     },
     onMouseLeave: (_e: any) => {
       mouseDragRef.current = false;
-      animEngine.actions.onPanEnd();
+      isPanningRef.current = false;
     },
     onContextMenu: (e: any) => e.preventDefault(),
   } : {};
@@ -1857,7 +1914,7 @@ export function TradingViewChart({
   // ── Build paths ───────────────────────────────────────────────────────────
   const bottomY    = (PAD.top + plotH).toFixed(1);
   const plotRightX = PAD.left + plotW;
-  const safeRightX = plotRightX - (isMobile ? 34 : 28);
+  const safeRightX = plotRightX - 4;
   const lastCandleX = xOf(n - 1);
   const lastCandleY = yOf(displayCandles[n - 1].close);
   const lastX = Math.min(lastCandleX, safeRightX);
@@ -1990,11 +2047,10 @@ export function TradingViewChart({
 
   // History start indicator
   const historyOldestTs   = candles.length > 0 ? candles[0].timestamp : Date.now();
-  const historyLatestTs   = candles.length > 0 ? candles[candles.length - 1].timestamp : Date.now();
-  const historySpanMs     = Math.max(0, historyLatestTs - historyOldestTs);
+  const historyMsToOldest = Math.max(0, Date.now() - historyOldestTs);
   const historyMaxPanBack = candles.length > 0
-    ? Math.max(0, Math.ceil(historySpanMs / bucketMs) - Math.floor(visibleBuckets * 0.92)) : 0;
-  const atHistoryStart = historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 0.5;
+    ? Math.max(0, Math.floor(historyMsToOldest / bucketMs) - visibleBuckets + 2) : 0;
+  const atHistoryStart = timeframe !== 'ALL' && historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 1;
 
   return (
     <View style={styles.container}>
@@ -2014,11 +2070,14 @@ export function TradingViewChart({
         </View>
       )}
 
-      {!animEngine.state.isLiveMode && (
+      {panOffsetCandles > 0 && (
         <TouchableOpacity
           style={styles.returnLiveBtn}
           onPress={() => {
-            animEngine.actions.returnToLive();
+            rightTimeRef.current = Date.now();
+            panOffsetRef.current = 0;
+            isPanningRef.current = false;
+            setPanOffsetCandles(0);
             setCrosshair(null);
             userPannedRef.current = false;
             priceScaleKeyRef.current = '';
@@ -2083,17 +2142,9 @@ export function TradingViewChart({
               <ClipPath id="chartClip">
                 <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} />
               </ClipPath>
-              <ClipPath id="volumeClip">
-                <Rect x={PAD.left} y={volumeTopY} width={plotW} height={volumeAreaH} />
-              </ClipPath>
-              <ClipPath id="timeAxisClip">
-                <Rect x={PAD.left} y={timeAxisTopY} width={plotW} height={TIME_H} />
-              </ClipPath>
             </Defs>
 
             <Rect x={PAD.left} y={PAD.top} width={plotW} height={plotH} fill="rgba(255,255,255,0.01)" />
-            <Rect x={PAD.left} y={volumeTopY} width={plotW} height={volumeAreaH} fill="rgba(255,255,255,0.006)" />
-            <Rect x={PAD.left} y={timeAxisTopY} width={plotW} height={TIME_H} fill="rgba(9,9,15,0.92)" />
 
             {/* Horizontal grid + price labels */}
             {priceGridLines.map(({ y, label }, i) => (
@@ -2267,41 +2318,35 @@ export function TradingViewChart({
               </G>
             )}
 
-            {/* Volume bars in their own clipped lane — never allowed to enter the price plot. */}
-            <G clipPath="url(#volumeClip)">
-              {showVolume && displayCandles.map((c, i) => {
-                const h    = volBarH(c.volume);
-                if (h <= 0) return null;
-                const w    = Math.max(barW, 1.5);
-                // Clamp so right edge (vx + w/2) never exceeds safeRightX
-                const vx   = Math.min(xOf(i), safeRightX - w / 2);
-                const isUp = c.close >= c.open;
-                return (
-                  <Rect key={`v${c.timestamp}`}
-                    x={vx - w / 2}
-                    y={volumeTopY + (volumeAreaH - h)}
-                    width={w}
-                    height={h}
-                    fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
-                    opacity={i === n - 1 ? 0.9 : 0.45}
-                    rx={1} />
-                );
-              })}
-            </G>
+            {/* Volume bars — zero/null/negative volume produces no bar (includes zero-volume live/visual guide candles) */}
+            {showVolume && displayCandles.map((c, i) => {
+              const h    = volBarH(c.volume);
+              if (h <= 0) return null;
+              const w    = Math.max(barW, 1.5);
+              // Clamp so right edge (vx + w/2) never exceeds safeRightX
+              const vx   = Math.min(xOf(i), safeRightX - w / 2);
+              const isUp = c.close >= c.open;
+              return (
+                <Rect key={`v${c.timestamp}`}
+                  x={vx - w / 2}
+                  y={CHART_H + (VOL_H - h - 2)}
+                  width={w}
+                  height={h}
+                  fill={isUp ? 'url(#volGradGreen)' : 'url(#volGradRed)'}
+                  opacity={i === n - 1 ? 0.9 : 0.45}
+                  rx={1} />
+              );
+            })}
 
             <Line x1={PAD.left} y1={CHART_H} x2={chartWidth - PAD.right} y2={CHART_H}
-              stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
-            <Line x1={PAD.left} y1={timeAxisTopY} x2={chartWidth - PAD.right} y2={timeAxisTopY}
-              stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+              stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
 
-            <G clipPath="url(#timeAxisClip)">
-              {timeLabels.map(({ ts, x, label }) => (
-                <SvgText key={`tl${ts}`} x={x} y={timeAxisTopY + TIME_H - 4}
-                  fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
-                  {label}
-                </SvgText>
-              ))}
-            </G>
+            {timeLabels.map(({ ts, x, label }) => (
+              <SvgText key={`tl${ts}`} x={x} y={CHART_H + VOL_H + TIME_H - 3}
+                fontSize={9} fill="rgba(255,255,255,0.35)" textAnchor="middle">
+                {label}
+              </SvgText>
+            ))}
 
             {atHistoryStart && (
               <SvgText x={PAD.left + 6} y={CHART_H - 8} fontSize={9}
