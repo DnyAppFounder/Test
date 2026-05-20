@@ -1278,36 +1278,21 @@ export function TradingViewChart({
   const n = displayCandles.length;
 
   // ── Viewport x-range ──────────────────────────────────────────────────────
-  // Single shared x-scale for line/area/mountain/pulse/candles/bars/volume/time axis.
-  // Pan changes only xLeft. It must never squeeze xVisibleMs or detach the latest dot.
-  let xLeft      = leftTime;
+  // In live mode the right edge IS visualRightTime — the engine's live clock.
+  // This makes the entire viewport slide continuously as time advances, creating
+  // the pump.fun feel without creating any fake data.
+  // In panned mode the right edge is visualRightTime - panOffsetMs (= rightTime).
+  let xLeft      = leftTime;     // = rightTime - visibleMs as initial fallback
   let xVisibleMs = visibleMs;
   if (displayCandles.length > 0 && !isVisualGuideOnly) {
     const firstDataTs = displayCandles[0].timestamp;
-    const lastDataTs  = displayCandles[displayCandles.length - 1].timestamp;
-    const dataSpan    = Math.max(lastDataTs - firstDataTs, 0);
-    const leftPadMs   = Math.max(bucketMs * 1.5, visibleMs * 0.025);
-    const rightPadMs  = Math.min(Math.max(bucketMs * 2.5, visibleMs * 0.08), visibleMs * 0.16);
+    const leftPadMs   = Math.max(bucketMs * 1.5, visibleMs * 0.02);
     const minLeft     = firstDataTs - leftPadMs;
-    const maxLiveLeft = lastDataTs + rightPadMs - visibleMs;
 
-    if (panOffsetCandles === 0) {
-      // Live edge: anchor the latest real rendered candle/point near the right side.
-      // If the dataset is sparse and fits inside the viewport, do NOT clamp to minLeft;
-      // that was putting the first candle at the far left and leaving a giant blank right side.
-      if (dataSpan <= visibleMs * 0.92) {
-        xLeft = lastDataTs - visibleMs * 0.86;
-        // When the full visible dataset fits, include the beginning too, but keep latest right-biased.
-        if (firstDataTs < xLeft) xLeft = Math.max(firstDataTs - visibleMs * 0.04, lastDataTs - visibleMs * 0.92);
-      } else {
-        xLeft = maxLiveLeft;
-      }
-    } else {
-      // User pan: keep the fixed-width viewport from the engine, clamped to real history bounds.
-      const desiredLeft = rightTime - visibleMs;
-      const maxLeft = Math.max(minLeft, maxLiveLeft);
-      xLeft = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
-    }
+    // rightTime = visualRightTime - panOffsetMs (engine-driven).
+    // Using rightTime directly makes the viewport track the live clock in live mode
+    // and track the user's pan offset in panned mode — same formula for both.
+    xLeft = Math.max(minLeft, rightTime - visibleMs);
   }
   // Visual guide already uses two guide points inside the current window.
   leftTimeRef.current  = xLeft;
@@ -1495,11 +1480,11 @@ export function TradingViewChart({
         if (gestureModeRef.current !== 'pan') return;
         userPannedRef.current = true;
         const pw = plotWRef.current || 1;
-        // Drag left (negative dx) = scroll into history (offset increases).
-        // Drag right (positive dx) = move back toward live (offset decreases).
+        // Dragging right (positive dx) = scroll into past (offset increases).
+        // Dragging left (negative dx)  = move toward live (offset decreases).
         const deltaMsFromStart = -(gestureState.dx / pw) * visibleMsRef.current;
         const newOffsetMs = Math.max(0, panStartOffsetMsRef.current + deltaMsFromStart);
-        animEngine.actions.setPanOffsetMs(newOffsetMs);
+        animEngine.actions.onPanDelta(newOffsetMs - animEngine.state.panOffsetMs);
       },
 
       onPanResponderRelease: (e) => {
@@ -1529,10 +1514,10 @@ export function TradingViewChart({
         userPannedRef.current = true;
         const pw = plotWRef.current || 1;
         const dx = e.clientX - mouseDragStartXRef.current;
-        // Drag left (negative dx) = scroll into history; drag right = toward live.
+        // Drag right (positive dx) = scroll into past; drag left = toward live.
         const deltaMsFromStart = -(dx / pw) * visibleMsRef.current;
         const newOffsetMs = Math.max(0, mousePanStartRef.current + deltaMsFromStart);
-        animEngine.actions.setPanOffsetMs(newOffsetMs);
+        animEngine.actions.onPanDelta(newOffsetMs - animEngine.state.panOffsetMs);
         setCrosshair(null);
       } else {
         const rect = e.currentTarget?.getBoundingClientRect?.();
@@ -1831,9 +1816,7 @@ export function TradingViewChart({
   const safeRightX = plotRightX - (isMobile ? 34 : 28);
   const lastCandleX = xOf(n - 1);
   const lastCandleY = yOf(displayCandles[n - 1].close);
-  // Clamp the visual endpoint once and reuse it for the path, dot, and guide.
-  // This prevents the dot from floating separately when the raw x is too close to the price axis.
-  const lastX = Math.max(PAD.left, Math.min(lastCandleX, safeRightX));
+  const lastX = Math.min(lastCandleX, safeRightX);
   const lastY = lastCandleY;
 
   // Continuation: flat dashed segment from last close → current time.
@@ -1849,7 +1832,7 @@ export function TradingViewChart({
   const contRightX      = Math.min(tsToX(contEndTs), safeRightX);
   const contY           = lastY;
   const showContinuation = timeframe !== 'ALL' && panOffsetCandles === 0 &&
-    n > 0 && n >= 2 && isRecentEnough && !isVisualGuideOnly && contRightX > lastX + 2;
+    n > 0 && isRecentEnough && !isVisualGuideOnly && contRightX > lastX + 2;
 
   // Visual path builder for line-style modes.
   // Important: this is rendering only. It does not create candles, trades, volume, or timestamps.
@@ -1857,9 +1840,8 @@ export function TradingViewChart({
   // For the trading view, line-style modes should render as one clean visual path using the real
   // visible candle closes only. Candlestick/Bar modes still render raw OHLC candles separately.
   const lineIndexList = displayCandles.map((_, i) => i);
-  const lineXOf = (idx: number) => idx === n - 1 ? lastX : xOf(idx);
   const continuousLinePath = lineIndexList.map((idx, j) => {
-    const x = lineXOf(idx).toFixed(1);
+    const x = xOf(idx).toFixed(1);
     const y = yOf(displayCandles[idx].close).toFixed(1);
     return `${j === 0 ? 'M' : 'L'}${x},${y}`;
   }).join(' ');
@@ -1882,16 +1864,14 @@ export function TradingViewChart({
   const shouldFillLineMode = n >= 2;
   const areaBaseClose = showContinuation
     ? `${contRightX.toFixed(1)},${bottomY}`
-    : `${lastX.toFixed(1)},${bottomY}`;
+    : `${xOf(n - 1).toFixed(1)},${bottomY}`;
   const areaPath = shouldFillLineMode
-    ? `${baseLinePath}${contExtension} L${areaBaseClose} L${lineXOf(0).toFixed(1)},${bottomY} Z`
+    ? `${baseLinePath}${contExtension} L${areaBaseClose} L${xOf(0).toFixed(1)},${bottomY} Z`
     : '';
 
   // Dots are restricted to the final live/current point only.
   // No constellation of isolated dots: they made sparse charts look broken.
-  const showOnlyLatestDot = !isVisualGuideOnly && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding');
-  const endpointX = showContinuation ? contRightX : lastX;
-  const endpointY = showContinuation ? contY : lastY;
+  const showOnlyLatestDot = mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding';
 
   // ── Smart grid: use "nice" steps to avoid duplicate rounded labels ─────────
   // Computes up to `gridCount` evenly-spaced price levels using a "round number" step
@@ -1962,11 +1942,15 @@ export function TradingViewChart({
     }
   }
 
-  // Guide line: anchored to the last rendered chart point/candle, not a separate quote source.
-  // This keeps the price pill, dotted guide, endpoint dot, and visible path synchronized.
-  const scaledGuidePrice = displayCandles.length > 0
-    ? displayCandles[displayCandles.length - 1].close
-    : (renderGuidePrice > 0 ? renderGuidePrice * mcapScale : 0);
+  // Guide line: anchored to real candle data so it never contradicts candle closes.
+  // Quote-only sources (DexScreener WS, Jupiter REST) update the header freely but must
+  // not move the guide line — that would create a detached Y position with no matching candle.
+  // Rule: guide uses activeLiveCandle only when it carries sourceType='realTrade' (confirmed trade).
+  const realChartClose =
+    activeLiveCandle?.sourceType === 'realTrade'
+      ? activeLiveCandle.close
+      : (mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : renderGuidePrice);
+  const scaledGuidePrice = realChartClose > 0 ? realChartClose * mcapScale : 0;
   const scaledLivePrice  = liveScaledValue; // header/display only — can include quote prices
   const clampedGuide = scaledGuidePrice > maxP ? maxP : scaledGuidePrice < minP ? minP : scaledGuidePrice;
   const currentY     = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedGuide)));
@@ -1977,8 +1961,7 @@ export function TradingViewChart({
   const historySpanMs     = Math.max(0, historyLatestTs - historyOldestTs);
   const historyMaxPanBack = candles.length > 0
     ? Math.max(0, Math.ceil(historySpanMs / bucketMs) - Math.floor(visibleBuckets * 0.92)) : 0;
-  // Hide the start marker for now; it was visually confusing on sparse charts and is not data.
-  const atHistoryStart = false;
+  const atHistoryStart = historyMaxPanBack > 0 && panOffsetCandles >= historyMaxPanBack - 0.5;
 
   return (
     <View style={styles.container}>
@@ -1998,7 +1981,7 @@ export function TradingViewChart({
         </View>
       )}
 
-      {userPannedRef.current && !animEngine.state.isLiveMode && (
+      {!animEngine.state.isLiveMode && (
         <TouchableOpacity
           style={styles.returnLiveBtn}
           onPress={() => {
@@ -2238,8 +2221,8 @@ export function TradingViewChart({
                 {activeLiveCandle?.sourceType === 'realTrade' &&
                  (Date.now() - activeLiveCandle.tradeTimestamp) < LIVE_CANDLE_STALE_MS && (
                   <AnimatedCircle
-                    cx={endpointX}
-                    cy={endpointY}
+                    cx={showContinuation ? contRightX : lastX}
+                    cy={contY}
                     r={isVerySparse ? 14 : 10}
                     fill="none"
                     stroke={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
@@ -2248,8 +2231,8 @@ export function TradingViewChart({
                   />
                 )}
                 <Circle
-                  cx={endpointX}
-                  cy={endpointY}
+                  cx={showContinuation ? contRightX : lastX}
+                  cy={contY}
                   r={isVerySparse ? 5 : 3.5}
                   fill={mode === 'bonding' ? '#06B6D4' : '#A78BFA'}
                 />
