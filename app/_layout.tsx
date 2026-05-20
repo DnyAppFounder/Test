@@ -9,6 +9,8 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import { ProfileProvider } from '@/contexts/ProfileContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { SecurityProvider } from '@/contexts/SecurityContext';
+import { InactivityLockProvider, useInactivityLock } from '@/contexts/InactivityLockContext';
+import { SessionLockOverlay } from '@/components/SessionLockOverlay';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { tokenRegistryService } from '@/services/tokenRegistryService';
@@ -24,6 +26,25 @@ function InAppNotifications() {
   const { profile } = useProfile();
   const { activeAddress } = useWallet();
   return <NotificationBanner userId={profile?.id ?? null} walletAddress={activeAddress} />;
+}
+
+/**
+ * Wraps the entire app content in a touch-capture layer that records real user
+ * activity for the inactivity lock. Uses onStartShouldSetResponder so it never
+ * steals events from child components — it only observes.
+ */
+function ActivityCapture({ children }: { children: React.ReactNode }) {
+  const { recordActivity } = useInactivityLock();
+  return (
+    <View
+      style={StyleSheet.absoluteFill}
+      // Observe start of any touch/press without consuming it
+      onStartShouldSetResponder={() => { recordActivity(); return false; }}
+      onMoveShouldSetResponder={() => { recordActivity(); return false; }}
+    >
+      {children}
+    </View>
+  );
 }
 
 export default function RootLayout() {
@@ -77,30 +98,36 @@ export default function RootLayout() {
       <LanguageProvider>
         <WalletProvider>
         <SecurityProvider>
+          <InactivityLockProvider>
           <ProfileProvider>
             <ErrorBoundary fallbackLabel="App error — please refresh">
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  contentStyle: styles.screenContent,
-                }}
-              >
-                <Stack.Screen name="index" />
-                <Stack.Screen name="onboarding" />
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="chat/[id]" />
-                <Stack.Screen name="create-post" />
-                {/* Route aliases — keep these so direct URL access doesn't 404 */}
-                <Stack.Screen name="discover" />
-                <Stack.Screen name="wallet" />
-                <Stack.Screen name="messages" />
-                <Stack.Screen name="settings" />
-                <Stack.Screen name="+not-found" />
-              </Stack>
-              <InAppNotifications />
-              <StatusBar style="light" />
+              <ActivityCapture>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: styles.screenContent,
+                  }}
+                >
+                  <Stack.Screen name="index" />
+                  <Stack.Screen name="onboarding" />
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="chat/[id]" />
+                  <Stack.Screen name="create-post" />
+                  {/* Route aliases — keep these so direct URL access doesn't 404 */}
+                  <Stack.Screen name="discover" />
+                  <Stack.Screen name="wallet" />
+                  <Stack.Screen name="messages" />
+                  <Stack.Screen name="settings" />
+                  <Stack.Screen name="+not-found" />
+                </Stack>
+                <InAppNotifications />
+                <StatusBar style="light" />
+                {/* Inactivity lock overlay — only shown for internal wallets */}
+                <SessionLockOverlay />
+              </ActivityCapture>
             </ErrorBoundary>
           </ProfileProvider>
+          </InactivityLockProvider>
         </SecurityProvider>
         </WalletProvider>
       </LanguageProvider>
