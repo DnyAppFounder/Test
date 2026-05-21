@@ -1181,10 +1181,12 @@ export function TradingViewChart({
     const rightPadMs    = Math.max(bucketMs * 2.5, visibleMs * 0.08);
     const leftPadMs     = Math.max(bucketMs * 1.5, visibleMs * 0.02);
 
-    // Do NOT clamp the live right edge to the last candle.
-    // The animation engine owns live time movement. Clamping here was the reason
-    // the chart looked static and never advanced: rightTime became frozen at
-    // lastCandle + padding. We only keep the left-history guard below.
+    // If there is no active real live candle, never let the right edge drift far
+    // beyond the last real candle just because the device clock advanced.
+    if (!activeLiveCandle && rightTime > lastMergedTs + rightPadMs) {
+      rightTime = lastMergedTs + rightPadMs;
+      leftTime  = rightTime - visibleMs;
+    }
 
     // Do not allow the user to pan into a large empty area before the first candle.
     const minLeft = firstMergedTs - leftPadMs;
@@ -1202,7 +1204,6 @@ export function TradingViewChart({
   // the chart/volume bars to compact and start in the middle.
   const MIN_LIVE_CANDLES = 6;
   let filledRaw: CandleData[];
-  let usingLatestContextFallback = false;
   {
     const standardRaw = mergedCandles.filter(c =>
       c.timestamp >= leftTime - bucketMs && c.timestamp <= rightTime + bucketMs
@@ -1213,9 +1214,6 @@ export function TradingViewChart({
     } else if (mergedCandles.length > 0 && panOffsetCandles === 0) {
       // Live edge with old/sparse data: keep the latest real context visible
       // without creating fake candles or resizing the x-scale.
-      // Mark the fallback so xLeft can frame these real candles instead of
-      // leaving them off-screen while the live clock keeps moving.
-      usingLatestContextFallback = true;
       filledRaw = mergedCandles.slice(-Math.min(Math.max(MIN_LIVE_CANDLES, Math.floor(visibleBuckets * 0.35)), mergedCandles.length));
     } else {
       // User panned to an area where there are truly no loaded candles.
@@ -1293,14 +1291,10 @@ export function TradingViewChart({
     const minLeft     = firstDataTs - leftPadMs;
     const maxLeft     = Math.max(minLeft, lastDataTs + rightPadMs - visibleMs);
 
-    if (panOffsetCandles === 0 && usingLatestContextFallback) {
-      // If the live clock has moved so far that no candle is inside the window,
-      // frame the latest real context. This is not fake data and it prevents a
-      // blank chart, but it also avoids drawing an artificial continuation segment.
-      xLeft = maxLeft;
-    } else if (panOffsetCandles === 0) {
-      // True live mode: the shared x-scale follows the animation engine.
-      // This is what makes the whole chart/time axis advance continuously.
+    if (panOffsetCandles === 0) {
+      // Live mode must follow the animation engine continuously. Do NOT anchor the
+      // viewport permanently to the last candle, otherwise the chart never moves.
+      // Clamp only to avoid starting before the first loaded candle on very new tokens.
       xLeft = Math.max(minLeft, rightTime - visibleMs);
     } else {
       // User pan: fixed-width translation only. Never change xVisibleMs and never
@@ -1835,15 +1829,22 @@ export function TradingViewChart({
   const lastX = Math.max(PAD.left, Math.min(lastCandleX, safeRightX));
   const lastY = lastCandleY;
 
-  // No artificial continuation segment.
-  // The chart should advance because the shared viewport/time-axis moves, not because
-  // we append an extra visual line after the last real candle. The old continuation
-  // segment looked like the chart was folding back on itself and created a separate
-  // fake-looking piece of line. Keep these constants only so the rest of the render
-  // code can stay simple.
-  const contRightX = lastX;
-  const contY = lastY;
-  const showContinuation = false;
+  // Continuation: flat dashed segment from last close → current time.
+  // In live mode (panOffset=0) it always extends, creating the Pump.fun feel of time
+  // passing even when no trade happens. The line stays flat (no Y movement) — it never
+  // invents price movement, it only moves horizontally with the clock.
+  // Disabled for: ALL mode, panned view. No volume gate — cold tokens also need time to move.
+  const lastCandleTs    = displayCandles[n - 1].timestamp;
+  const lastCandleAgeMs = rightTime - lastCandleTs;
+  // Live continuation: flat visual segment from the last real candle to the live clock.
+  // This is what creates the Pump.fun feel when no new trade arrives: horizontal time
+  // movement only, no invented price/volume. It is disabled while the user is panned.
+  const isRecentEnough  = lastCandleAgeMs <= bucketMs * Math.max(6, visibleBuckets);
+  const contEndTs       = rightTime;
+  const contRightX      = Math.min(tsToX(contEndTs), safeRightX);
+  const contY           = lastY;
+  const showContinuation = panOffsetCandles === 0 &&
+    n > 0 && n >= 2 && isRecentEnough && !isVisualGuideOnly && contRightX > lastX + 2;
 
   // Visual path builder for line-style modes.
   // Important: this is rendering only. It does not create candles, trades, volume, or timestamps.
@@ -1860,17 +1861,23 @@ export function TradingViewChart({
 
   const lastPriceGuidePath = `M${PAD.left.toFixed(1)},${lastY.toFixed(1)} L${safeRightX.toFixed(1)},${lastY.toFixed(1)}`;
 
-  // The stroke path is built only from real rendered candles.
-  // Do not append a continuation segment: it creates a misleading extra piece of line.
-  const contExtension = '';
+  // When the continuation segment is active, extend the solid line/area path to
+  // contRightX so the line, area fill, and dot all share the same endpoint.
+  // This eliminates the gap between the last candle center and the live dot.
+  const contExtension = showContinuation
+    ? ` L${contRightX.toFixed(1)},${contY.toFixed(1)}`
+    : '';
   const baseLinePath = n >= 2 ? continuousLinePath : lastPriceGuidePath;
-  const strokePath = baseLinePath;
+  // strokePath extends the solid line to the continuation endpoint when active.
+  const strokePath = baseLinePath + contExtension;
 
   // One continuous area fill for Area/Mountain/Pulse. It closes only once at the bottom of
   // the plot, so it cannot create separate purple rectangles between sparse segments.
   // We keep this as a visual fill only; it does not imply extra trades/candles.
   const shouldFillLineMode = n >= 2;
-  const areaBaseClose = `${lastX.toFixed(1)},${bottomY}`;
+  const areaBaseClose = showContinuation
+    ? `${contRightX.toFixed(1)},${bottomY}`
+    : `${lastX.toFixed(1)},${bottomY}`;
   const areaPath = shouldFillLineMode
     ? `${baseLinePath}${contExtension} L${areaBaseClose} L${lineXOf(0).toFixed(1)},${bottomY} Z`
     : '';
@@ -1878,8 +1885,8 @@ export function TradingViewChart({
   // Dots are restricted to the final live/current point only.
   // No constellation of isolated dots: they made sparse charts look broken.
   const showOnlyLatestDot = !isVisualGuideOnly && (mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding');
-  const endpointX = lastX;
-  const endpointY = lastY;
+  const endpointX = showContinuation ? contRightX : lastX;
+  const endpointY = showContinuation ? contY : lastY;
 
   // ── Smart grid: use "nice" steps to avoid duplicate rounded labels ─────────
   // Computes up to `gridCount` evenly-spaced price levels using a "round number" step
@@ -2181,7 +2188,8 @@ export function TradingViewChart({
 
             </G>{/* end chartClip */}
 
-            {/* No continuation line: viewport movement handles live time. */}
+            {/* Continuation for candle/bar modes: dashed segment from last candle center → current time.
+                Line/area/mountain/bonding already include this via contExtension in strokePath. */}
             {showContinuation && (mode === 'candlestick' || mode === 'bar') && (
               <Line
                 x1={lastX} y1={contY}
@@ -2211,8 +2219,10 @@ export function TradingViewChart({
               </>
             )}
 
-            {/* Endpoint marker — static dot is attached to the last real rendered candle.
-                Pulse ring appears only for confirmed real trades.
+            {/* Endpoint marker — static dot always visible; animated ring only for confirmed real trades.
+                When the continuation line is showing, the dot anchors to the end of the
+                continuation segment (contRightX) so it stays attached to the line endpoint.
+                When no continuation, it sits at the last candle center (lastX).
                 Pulse conditions (ALL must be true):
                   1. activeLiveCandle.sourceType === 'realTrade'  — came from is_live=true DB row
                   2. tradeTimestamp < LIVE_CANDLE_STALE_MS ago    — trade was recent
