@@ -31,6 +31,7 @@ import { Decode7Fragments } from '@/components/game/Decode7Fragments';
 import { GameResultCard } from '@/components/game/GameResultCard';
 import { TopRankLeaderboard } from '@/components/game/TopRankLeaderboard';
 import { DawenWorldPage } from '@/components/world/DawenWorldPage';
+import { DynastySignatures } from '@/components/game/DynastySignatures';
 
 const DAWEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 const SELL_COLOR = '#D946EF';
@@ -568,6 +569,7 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       {stage === 'game_select' && (
         <>
           <GameHub onSelect={handleGameSelect} />
+          <DynastySignatures walletAddress={walletAddress ?? null} />
           <TouchableOpacity
             style={gameStyles.worldCard}
             onPress={() => { setStage('world'); onSetFullscreen?.(true); }}

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,8 @@ import {
   TouchableOpacity,
   Modal,
   Image,
-  useWindowDimensions,
+  ScrollView,
+  Linking,
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -20,20 +21,87 @@ import Animated, {
   withRepeat,
   withSequence,
   Easing,
+  interpolate,
 } from 'react-native-reanimated';
-import { Wallet, ChevronRight, Plus, Download, Shield } from 'lucide-react-native';
+import { Wallet, ChevronRight, Plus, Download, Shield, Lock, Key } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { ConnectWalletModal } from '@/components/ConnectWalletModal';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 
 const ONBOARDING_KEY = 'onboarding_completed';
 
+// ─── Animated particle dot ───────────────────────────────────────────────────
+
+function Particle({ x, y, delay, size }: { x: number; y: number; delay: number; size: number }) {
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(0);
+
+  useEffect(() => {
+    opacity.value = withDelay(
+      delay,
+      withRepeat(
+        withSequence(
+          withTiming(0.6, { duration: 2000 + Math.random() * 1500, easing: Easing.inOut(Easing.sine) }),
+          withTiming(0, { duration: 1500 + Math.random() * 1000, easing: Easing.inOut(Easing.sine) })
+        ),
+        -1,
+        false
+      )
+    );
+    translateY.value = withDelay(
+      delay,
+      withRepeat(
+        withSequence(
+          withTiming(-12, { duration: 2500 + Math.random() * 2000, easing: Easing.inOut(Easing.sine) }),
+          withTiming(4, { duration: 2000, easing: Easing.inOut(Easing.sine) })
+        ),
+        -1,
+        true
+      )
+    );
+  }, []);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  return (
+    <Animated.View
+      style={[style, {
+        position: 'absolute',
+        left: x,
+        top: y,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: '#8B5CF6',
+      }]}
+    />
+  );
+}
+
+const PARTICLES = [
+  { x: 40, y: 120, delay: 0, size: 3 },
+  { x: 80, y: 200, delay: 300, size: 2 },
+  { x: 20, y: 350, delay: 800, size: 4 },
+  { x: 330, y: 150, delay: 200, size: 3 },
+  { x: 350, y: 280, delay: 600, size: 2 },
+  { x: 310, y: 420, delay: 1100, size: 3 },
+  { x: 60, y: 500, delay: 500, size: 2 },
+  { x: 300, y: 560, delay: 900, size: 4 },
+  { x: 150, y: 600, delay: 1400, size: 2 },
+  { x: 240, y: 80, delay: 700, size: 3 },
+];
+
+// ─── Main Screen ─────────────────────────────────────────────────────────────
+
 export default function OnboardingWelcome() {
   const router = useRouter();
-  const { width: screenWidth } = useWindowDimensions();
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showEnterModal, setShowEnterModal] = useState(false);
   const [hasWallet, setHasWallet] = useState<boolean | null>(null);
+  const [discordTooltip, setDiscordTooltip] = useState(false);
 
   const logoOpacity = useSharedValue(0);
   const logoScale = useSharedValue(0.85);
@@ -42,10 +110,10 @@ export default function OnboardingWelcome() {
   const subheadOpacity = useSharedValue(0);
   const buttonsOpacity = useSharedValue(0);
   const buttonsTranslateY = useSharedValue(30);
-  const glowOpacity = useSharedValue(0.4);
+  const glow1Opacity = useSharedValue(0.3);
+  const glow2Opacity = useSharedValue(0.15);
 
   useEffect(() => {
-    console.log('[Onboarding] Welcome screen mounted');
     logoOpacity.value = withDelay(150, withTiming(1, { duration: 800, easing: Easing.out(Easing.cubic) }));
     logoScale.value = withDelay(150, withTiming(1, { duration: 800, easing: Easing.out(Easing.cubic) }));
     headlineOpacity.value = withDelay(550, withTiming(1, { duration: 700 }));
@@ -53,14 +121,14 @@ export default function OnboardingWelcome() {
     subheadOpacity.value = withDelay(850, withTiming(1, { duration: 600 }));
     buttonsOpacity.value = withDelay(1100, withTiming(1, { duration: 600 }));
     buttonsTranslateY.value = withDelay(1100, withTiming(0, { duration: 600, easing: Easing.out(Easing.cubic) }));
-    glowOpacity.value = withRepeat(
-      withSequence(
-        withTiming(0.7, { duration: 2200 }),
-        withTiming(0.3, { duration: 2200 })
-      ),
-      -1,
-      true
+    glow1Opacity.value = withRepeat(
+      withSequence(withTiming(0.65, { duration: 2400 }), withTiming(0.25, { duration: 2400 })),
+      -1, true
     );
+    glow2Opacity.value = withDelay(1200, withRepeat(
+      withSequence(withTiming(0.35, { duration: 3000 }), withTiming(0.1, { duration: 3000 })),
+      -1, true
+    ));
   }, []);
 
   const logoStyle = useAnimatedStyle(() => ({
@@ -76,47 +144,63 @@ export default function OnboardingWelcome() {
     opacity: buttonsOpacity.value,
     transform: [{ translateY: buttonsTranslateY.value }],
   }));
-  const glowStyle = useAnimatedStyle(() => ({ opacity: glowOpacity.value }));
+  const glow1Style = useAnimatedStyle(() => ({ opacity: glow1Opacity.value }));
+  const glow2Style = useAnimatedStyle(() => ({ opacity: glow2Opacity.value }));
 
   const markOnboardingComplete = useCallback(async () => {
     try {
       await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
-      console.log('[Onboarding] Marked onboarding_completed = true');
-    } catch (e) {
-      console.warn('[Onboarding] Failed to persist onboarding_completed:', e);
-    }
+    } catch {}
   }, []);
 
   const handleEnterApp = useCallback(async () => {
     const walletManager = SecureWalletManager.getInstance();
     const accts = await walletManager.getAccounts().catch(() => []);
-    console.log('[Onboarding] handleEnterApp — hasWallet:', accts.length > 0);
     setHasWallet(accts.length > 0);
     setShowEnterModal(true);
   }, []);
 
+  const openLink = (url: string) => {
+    Linking.openURL(url).catch(() => {});
+  };
+
   return (
     <View style={styles.container}>
-      {/* Background grid dots */}
-      <View style={styles.bgDots} />
+      {/* Background gradient */}
+      <LinearGradient
+        colors={['#06060D', '#0D0620', '#06060D']}
+        locations={[0, 0.5, 1]}
+        style={StyleSheet.absoluteFill}
+      />
 
-      {/* Purple glow orb behind logo */}
-      <Animated.View style={[styles.glowOrb, glowStyle]} />
+      {/* Glow orbs */}
+      <Animated.View style={[styles.glowOrb1, glow1Style]} />
+      <Animated.View style={[styles.glowOrb2, glow2Style]} />
 
-      <View style={styles.content}>
-        {/* Top hero section */}
-        <View style={styles.topSection}>
+      {/* Particles */}
+      {PARTICLES.map((p, i) => <Particle key={i} {...p} />)}
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        {/* ── Hero ── */}
+        <View style={styles.hero}>
           <Animated.View style={[styles.logoWrap, logoStyle]}>
-            <View style={styles.logoGlow} />
-            <Image
-              source={require('../../dawenlogo.jpeg')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
+            <View style={styles.logoGlowRing} />
+            <View style={styles.logoContainer}>
+              <Image
+                source={require('../../dawenlogo.jpeg')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
+            </View>
           </Animated.View>
 
           <Animated.View style={headlineStyle}>
-            <Text style={styles.appName}>Dawen</Text>
+            <Text style={styles.appName}>DAWEN</Text>
             <Text style={styles.headline}>Empire of Crypto</Text>
           </Animated.View>
 
@@ -124,24 +208,30 @@ export default function OnboardingWelcome() {
             <Text style={styles.subheadline}>
               Trade. Post. <Text style={styles.subheadAccent}>Play. Earn.</Text>
             </Text>
+            <Text style={styles.description}>
+              One app for Solana trading, social rewards, and Dawen World.
+            </Text>
           </Animated.View>
 
-          <Animated.View style={[subheadStyle, styles.pillRow]}>
-            <View style={styles.pill}>
-              <Text style={styles.pillText}>Non-Custodial</Text>
+          <Animated.View style={[subheadStyle, styles.badgeRow]}>
+            <View style={styles.badge}>
+              <Shield size={10} color="#A78BFA" strokeWidth={2.5} />
+              <Text style={styles.badgeText}>Non-Custodial</Text>
             </View>
-            <View style={[styles.pill, styles.pillAccent]}>
-              <Text style={[styles.pillText, styles.pillAccentText]}>Solana Only</Text>
+            <View style={[styles.badge, styles.badgeAccent]}>
+              <Text style={styles.badgeTextAccent}>Solana Only</Text>
+            </View>
+            <View style={[styles.badge, styles.badgeBeta]}>
+              <Text style={styles.badgeTextBeta}>Web Beta</Text>
             </View>
           </Animated.View>
         </View>
 
-        {/* Bottom buttons */}
-        <Animated.View style={[styles.bottomSection, buttonsStyle]}>
-          {/* Enter App — primary */}
+        {/* ── CTA Buttons ── */}
+        <Animated.View style={[styles.ctaSection, buttonsStyle]}>
           <TouchableOpacity style={styles.enterAppBtn} onPress={handleEnterApp} activeOpacity={0.88}>
             <LinearGradient
-              colors={['#8B5CF6', '#6D28D9']}
+              colors={['#9333EA', '#6D28D9']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.enterAppGradient}
@@ -153,31 +243,105 @@ export default function OnboardingWelcome() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Connect Wallet — outlined */}
           <TouchableOpacity
             style={styles.connectBtn}
             onPress={() => setShowConnectModal(true)}
             activeOpacity={0.85}
           >
-            <Wallet size={20} color={colors.primary} strokeWidth={2} style={{ marginRight: 10 }} />
+            <Wallet size={20} color="#A78BFA" strokeWidth={2} style={{ marginRight: 10 }} />
             <Text style={styles.connectBtnText}>Connect Wallet</Text>
             <View style={styles.connectArrow}>
-              <ChevronRight size={18} color={colors.primary} strokeWidth={2} />
+              <ChevronRight size={18} color="#A78BFA" strokeWidth={2} />
             </View>
           </TouchableOpacity>
 
-          {/* Security badge */}
-          <View style={styles.securityRow}>
-            <Shield size={15} color={colors.textMuted} strokeWidth={2} />
-            <View>
-              <Text style={styles.securityTitle}>Your keys. Your crypto.</Text>
-              <Text style={styles.securitySub}>100% non-custodial. You're always in control.</Text>
+          {/* Security card */}
+          <View style={styles.securityCard}>
+            <LinearGradient
+              colors={['rgba(139,92,246,0.10)', 'rgba(109,40,217,0.04)']}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.securityHeader}>
+              <View style={styles.securityIconWrap}>
+                <Shield size={18} color="#8B5CF6" strokeWidth={2} />
+              </View>
+              <View style={styles.securityHeaderText}>
+                <Text style={styles.securityTitle}>Your keys. Your crypto.</Text>
+                <Text style={styles.securitySub}>100% non-custodial. You're always in control.</Text>
+              </View>
+            </View>
+            <View style={styles.trustRow}>
+              <TrustPoint icon={<Lock size={11} color="#A78BFA" strokeWidth={2.5} />} label="No seed stored" />
+              <TrustPoint icon={<Key size={11} color="#A78BFA" strokeWidth={2.5} />} label="PIN protected" />
+              <TrustPoint icon={<Shield size={11} color="#A78BFA" strokeWidth={2.5} />} label="You stay in control" />
             </View>
           </View>
-        </Animated.View>
-      </View>
 
-      {/* Enter App modal — Create or Import */}
+          {/* Legal */}
+          <Text style={styles.legalText}>
+            By continuing, you agree to DAWEN's{' '}
+            <Text style={styles.legalLink} onPress={() => openLink('/terms')}>Terms of Service</Text>
+            {' '}and{' '}
+            <Text style={styles.legalLink} onPress={() => openLink('/privacy')}>Privacy Policy</Text>.
+          </Text>
+        </Animated.View>
+
+        {/* ── Footer ── */}
+        <Animated.View style={[styles.footer, subheadStyle]}>
+          <View style={styles.footerDivider} />
+
+          {/* Social icons */}
+          <View style={styles.socialRow}>
+            <TouchableOpacity
+              style={styles.socialBtn}
+              onPress={() => openLink('https://t.me/WillOfDCrew')}
+              activeOpacity={0.75}
+            >
+              <TelegramIcon />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.socialBtn}
+              onPress={() => openLink('https://x.com/willoffd_?s=21')}
+              activeOpacity={0.75}
+            >
+              <XIcon />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.socialBtn, styles.socialBtnDisabled]}
+              onPress={() => setDiscordTooltip(v => !v)}
+              activeOpacity={0.7}
+            >
+              <DiscordIcon muted />
+              {discordTooltip && (
+                <View style={styles.tooltip}>
+                  <Text style={styles.tooltipText}>Discord coming soon</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Footer links */}
+          <View style={styles.footerLinks}>
+            <TouchableOpacity onPress={() => openLink('/privacy')} activeOpacity={0.7}>
+              <Text style={styles.footerLink}>Privacy Policy</Text>
+            </TouchableOpacity>
+            <View style={styles.footerDot} />
+            <TouchableOpacity onPress={() => openLink('/terms')} activeOpacity={0.7}>
+              <Text style={styles.footerLink}>Terms of Service</Text>
+            </TouchableOpacity>
+            <View style={styles.footerDot} />
+            <TouchableOpacity onPress={() => openLink('mailto:support@dawen.app')} activeOpacity={0.7}>
+              <Text style={styles.footerLink}>Support</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.footerBrand}>dawen.app</Text>
+        </Animated.View>
+      </ScrollView>
+
+      {/* ── Enter App Modal ── */}
       <Modal visible={showEnterModal} animationType="slide" transparent presentationStyle="overFullScreen">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowEnterModal(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
@@ -198,13 +362,12 @@ export default function OnboardingWelcome() {
                   onPress={async () => {
                     setShowEnterModal(false);
                     await markOnboardingComplete();
-                    console.log('[Onboarding] Navigating to /(tabs) — returning user');
                     router.replace('/(tabs)');
                   }}
                   activeOpacity={0.88}
                 >
                   <LinearGradient
-                    colors={['#8B5CF6', '#6D28D9']}
+                    colors={['#9333EA', '#6D28D9']}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.modalPrimaryGradient}
@@ -219,13 +382,12 @@ export default function OnboardingWelcome() {
                     style={styles.modalPrimaryBtn}
                     onPress={() => {
                       setShowEnterModal(false);
-                      console.log('[Onboarding] Navigating to create wallet');
                       router.push('/onboarding/create');
                     }}
                     activeOpacity={0.88}
                   >
                     <LinearGradient
-                      colors={['#8B5CF6', '#6D28D9']}
+                      colors={['#9333EA', '#6D28D9']}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 0 }}
                       style={styles.modalPrimaryGradient}
@@ -239,12 +401,11 @@ export default function OnboardingWelcome() {
                     style={styles.modalSecondaryBtn}
                     onPress={() => {
                       setShowEnterModal(false);
-                      console.log('[Onboarding] Navigating to import wallet');
                       router.push('/onboarding/import');
                     }}
                     activeOpacity={0.85}
                   >
-                    <Download size={18} color={colors.primary} strokeWidth={2} />
+                    <Download size={18} color="#A78BFA" strokeWidth={2} />
                     <Text style={styles.modalSecondaryText}>Import Wallet</Text>
                   </TouchableOpacity>
                 </>
@@ -258,7 +419,7 @@ export default function OnboardingWelcome() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Connect external wallet modal */}
+      {/* ── Connect external wallet modal ── */}
       <ConnectWalletModal
         visible={showConnectModal}
         onClose={() => setShowConnectModal(false)}
@@ -266,7 +427,6 @@ export default function OnboardingWelcome() {
           setShowConnectModal(false);
           await AsyncStorage.setItem('security:wallet_type', 'external');
           await markOnboardingComplete();
-          console.log('[Onboarding] External wallet connected — navigating to /(tabs)');
           router.replace('/(tabs)');
         }}
       />
@@ -274,120 +434,220 @@ export default function OnboardingWelcome() {
   );
 }
 
+// ─── Small helper components ──────────────────────────────────────────────────
+
+function TrustPoint({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <View style={styles.trustPoint}>
+      {icon}
+      <Text style={styles.trustPointText}>{label}</Text>
+    </View>
+  );
+}
+
+function TelegramIcon() {
+  return (
+    <View style={[styles.socialIconWrap, { borderColor: 'rgba(42,174,241,0.4)', backgroundColor: 'rgba(42,174,241,0.08)' }]}>
+      <Text style={[styles.socialIconText, { color: '#2AAEF1' }]}>TG</Text>
+    </View>
+  );
+}
+
+function XIcon() {
+  return (
+    <View style={[styles.socialIconWrap, { borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(255,255,255,0.06)' }]}>
+      <Text style={[styles.socialIconText, { color: '#fff', fontWeight: '900' }]}>𝕏</Text>
+    </View>
+  );
+}
+
+function DiscordIcon({ muted }: { muted?: boolean }) {
+  return (
+    <View style={[styles.socialIconWrap, { borderColor: muted ? 'rgba(255,255,255,0.1)' : 'rgba(88,101,242,0.4)', backgroundColor: muted ? 'rgba(255,255,255,0.03)' : 'rgba(88,101,242,0.08)' }]}>
+      <Text style={[styles.socialIconText, { color: muted ? 'rgba(255,255,255,0.25)' : '#5865F2' }]}>DC</Text>
+    </View>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#06060D',
   },
-  bgDots: {
-    position: 'absolute',
-    inset: 0,
-    backgroundColor: '#06060D',
+  scroll: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
   },
-  glowOrb: {
+
+  // Glow orbs
+  glowOrb1: {
     position: 'absolute',
-    top: '12%',
+    top: '8%',
     alignSelf: 'center',
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: 'rgba(109, 40, 217, 0.18)',
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: 'rgba(109,40,217,0.15)',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 80,
   },
-  content: {
-    flex: 1,
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.xxl,
+  glowOrb2: {
+    position: 'absolute',
+    top: '55%',
+    right: -60,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(168,85,247,0.10)',
   },
-  topSection: {
+
+  // Hero
+  hero: {
     alignItems: 'center',
-    paddingTop: Platform.OS === 'android' ? 60 : 80,
+    paddingTop: Platform.OS === 'android' ? 64 : 80,
+    paddingBottom: 32,
+    gap: 16,
   },
   logoWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xxl,
+    marginBottom: 8,
     position: 'relative',
   },
-  logoGlow: {
+  logoGlowRing: {
     position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(139, 92, 246, 0.25)',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    backgroundColor: 'rgba(139,92,246,0.08)',
+  },
+  logoContainer: {
+    width: 140,
+    height: 140,
+    borderRadius: 32,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(139,92,246,0.4)',
+    backgroundColor: '#0D0620',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
   },
   logoImage: {
-    width: 180,
-    height: 180,
-    borderRadius: 30,
+    width: '100%',
+    height: '100%',
   },
   appName: {
-    fontSize: 42,
+    fontSize: 46,
     fontWeight: '900',
-    color: '#8B5CF6',
+    color: '#9333EA',
     textAlign: 'center',
-    letterSpacing: 8,
-    marginBottom: 4,
+    letterSpacing: 10,
+    marginBottom: 2,
+    textShadowColor: 'rgba(147,51,234,0.5)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 20,
   },
   headline: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 26,
+    fontWeight: '700',
     color: colors.white,
     textAlign: 'center',
-    letterSpacing: -0.5,
-    marginBottom: spacing.sm,
+    letterSpacing: -0.3,
   },
   subheadline: {
-    fontSize: fontSize.lg,
-    color: colors.textSecondary,
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.7)',
     textAlign: 'center',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
     fontWeight: '500',
   },
   subheadAccent: {
-    color: '#8B5CF6',
+    color: '#C084FC',
     fontWeight: '700',
   },
-  pillRow: {
+  description: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.45)',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 8,
+    paddingHorizontal: 16,
+  },
+  badgeRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.xl,
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+    marginTop: 4,
   },
-  pill: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.full,
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(167,139,250,0.3)',
+    backgroundColor: 'rgba(167,139,250,0.07)',
   },
-  pillAccent: {
-    borderColor: 'rgba(139,92,246,0.5)',
-    backgroundColor: 'rgba(139,92,246,0.1)',
+  badgeAccent: {
+    borderColor: 'rgba(147,51,234,0.5)',
+    backgroundColor: 'rgba(147,51,234,0.12)',
   },
-  pillText: {
-    fontSize: fontSize.xs,
+  badgeBeta: {
+    borderColor: 'rgba(6,182,212,0.4)',
+    backgroundColor: 'rgba(6,182,212,0.07)',
+  },
+  badgeText: {
+    fontSize: 11,
     fontWeight: '600',
-    color: colors.textMuted,
-    letterSpacing: 0.5,
-  },
-  pillAccentText: {
     color: '#A78BFA',
+    letterSpacing: 0.3,
   },
-  bottomSection: {
-    paddingBottom: 52,
-    gap: spacing.md,
+  badgeTextAccent: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#C084FC',
+    letterSpacing: 0.3,
+  },
+  badgeTextBeta: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#22D3EE',
+    letterSpacing: 0.3,
+  },
+
+  // CTA section
+  ctaSection: {
+    gap: 12,
+    paddingBottom: 24,
   },
   enterAppBtn: {
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: 'hidden',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 8,
   },
   enterAppGradient: {
     paddingVertical: 18,
-    paddingHorizontal: spacing.xxl,
+    paddingHorizontal: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 14,
+    borderRadius: 16,
   },
   enterAppText: {
     color: colors.white,
@@ -398,10 +658,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   enterAppArrow: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.18)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -410,11 +670,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 18,
-    paddingHorizontal: spacing.xxl,
-    borderRadius: 14,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: 'rgba(139,92,246,0.5)',
-    backgroundColor: 'rgba(139,92,246,0.06)',
+    borderColor: 'rgba(139,92,246,0.45)',
+    backgroundColor: 'rgba(139,92,246,0.07)',
   },
   connectBtnText: {
     color: colors.white,
@@ -425,50 +685,186 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   connectArrow: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.4)',
+    borderColor: 'rgba(167,139,250,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  securityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.lg,
+
+  // Security card
+  securityCard: {
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(139,92,246,0.2)',
+    overflow: 'hidden',
+    padding: 16,
+    gap: 12,
+    marginTop: 4,
   },
+  securityHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  securityIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  securityHeaderText: { flex: 1 },
   securityTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: colors.white,
+    marginBottom: 2,
   },
   securitySub: {
     fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 1,
+    color: 'rgba(255,255,255,0.5)',
+    lineHeight: 17,
+  },
+  trustRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+    paddingLeft: 48,
+  },
+  trustPoint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: 'rgba(167,139,250,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.18)',
+  },
+  trustPointText: {
+    fontSize: 11,
+    color: '#A78BFA',
+    fontWeight: '600',
+  },
+
+  // Legal
+  legalText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.3)',
+    textAlign: 'center',
+    lineHeight: 17,
+    paddingHorizontal: 8,
+  },
+  legalLink: {
+    color: 'rgba(167,139,250,0.7)',
+    textDecorationLine: 'underline',
+  },
+
+  // Footer
+  footer: {
+    paddingTop: 8,
+    paddingBottom: 48,
+    alignItems: 'center',
+    gap: 16,
+  },
+  footerDivider: {
+    height: 1,
+    width: '60%',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 1,
+  },
+  socialRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  socialBtn: {
+    position: 'relative',
+  },
+  socialBtnDisabled: {
+    opacity: 0.6,
+  },
+  socialIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  socialIconText: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  tooltip: {
+    position: 'absolute',
+    bottom: 50,
+    left: '50%',
+    transform: [{ translateX: -56 }],
+    width: 112,
+    backgroundColor: '#1A1A2E',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+  },
+  tooltipText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.7)',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  footerLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  footerLink: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.35)',
+    fontWeight: '500',
+  },
+  footerDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  footerBrand: {
+    fontSize: 10,
+    color: 'rgba(139,92,246,0.4)',
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
   },
 
   // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.85)',
     justifyContent: 'flex-end',
   },
   modalSheet: {
-    backgroundColor: '#0F0F1A',
+    backgroundColor: '#0F0A1E',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    padding: spacing.xxl,
-    paddingBottom: 48,
+    padding: 28,
+    paddingBottom: 52,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(139,92,246,0.2)',
+    borderTopColor: 'rgba(139,92,246,0.25)',
   },
   modalHandle: {
     width: 40,
@@ -476,26 +872,26 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: 'rgba(255,255,255,0.15)',
     alignSelf: 'center',
-    marginBottom: spacing.xl,
+    marginBottom: 24,
   },
   modalTitle: {
     fontSize: 24,
     fontWeight: '800',
     color: colors.white,
     textAlign: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: 8,
   },
   modalSubtitle: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
-    marginBottom: spacing.xxl,
+    marginBottom: 28,
     lineHeight: 20,
   },
   modalPrimaryBtn: {
     borderRadius: 14,
     overflow: 'hidden',
-    marginBottom: spacing.md,
+    marginBottom: 12,
   },
   modalPrimaryGradient: {
     flexDirection: 'row',
@@ -518,9 +914,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1.5,
     borderColor: 'rgba(139,92,246,0.4)',
-    backgroundColor: 'rgba(139,92,246,0.06)',
+    backgroundColor: 'rgba(139,92,246,0.07)',
     gap: 10,
-    marginBottom: spacing.md,
+    marginBottom: 12,
   },
   modalSecondaryText: {
     color: colors.white,
@@ -532,7 +928,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   modalCancelText: {
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.4)',
     fontSize: 15,
     fontWeight: '600',
   },
