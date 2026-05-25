@@ -17,6 +17,7 @@ import { tokenRegistryService } from '@/services/tokenRegistryService';
 import { NotificationBanner } from '@/components/NotificationBanner';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useWallet } from '@/contexts/WalletContext';
+import { savePendingReferralCode } from '@/services/referralService';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -54,6 +55,20 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     'SpaceMono-Regular': require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
+
+  // Capture ?ref=CODE from the URL as early as possible and persist it
+  // temporarily so it survives the onboarding flow and can be auto-applied
+  // once the user's wallet/profile is ready.
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        const ref = new URL(window.location.href).searchParams.get('ref');
+        if (ref) {
+          savePendingReferralCode(ref).catch(() => {});
+        }
+      } catch {}
+    }
+  }, []);
 
   useEffect(() => {
     async function prepare() {

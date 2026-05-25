@@ -1,9 +1,11 @@
 import { supabase } from '@/lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SocialService } from './socialService';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
-const APP_BASE_URL = 'https://dawenapp.bolt.host';
+// Always use the official production domain for referral links
+const APP_BASE_URL = 'https://dawen.app';
 const REWARD_TOKEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 
 export interface ReferralCode {
@@ -49,8 +51,29 @@ export type ApplyResult =
   | { success: true;  reason: 'success' }
   | { success: false; reason: 'already_applied' | 'invalid_code' | 'self_referral' | 'error' };
 
+// AsyncStorage key used to persist a referral code captured from the URL
+// before the user has finished onboarding.
+const PENDING_REFERRAL_KEY = 'dawen:pending_referral_code';
+
 export function buildReferralLink(code: string): string {
   return `${APP_BASE_URL}/?ref=${code}`;
+}
+
+/** Persist a referral code from the URL until after onboarding completes. */
+export async function savePendingReferralCode(code: string): Promise<void> {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) return;
+  await AsyncStorage.setItem(PENDING_REFERRAL_KEY, normalized).catch(() => {});
+}
+
+/** Read the pending referral code (returns null if none). */
+export async function getPendingReferralCode(): Promise<string | null> {
+  return AsyncStorage.getItem(PENDING_REFERRAL_KEY).catch(() => null);
+}
+
+/** Clear the pending referral code (call after it has been applied or rejected). */
+export async function clearPendingReferralCode(): Promise<void> {
+  await AsyncStorage.removeItem(PENDING_REFERRAL_KEY).catch(() => {});
 }
 
 export function buildShareMessage(code: string): string {
@@ -76,29 +99,27 @@ export class ReferralService {
       const profile = await SocialService.getOrCreateProfile(walletAddress);
       if (!profile) return null;
 
-      const { data: existing } = await supabase
-        .from('referral_codes')
-        .select('*')
-        .eq('user_id', profile.id)
-        .maybeSingle();
-
-      if (existing) return existing;
-
-      // Generate new secure DAWEN- prefixed code via CSPRNG-backed DB function
-      const { data: codeStr } = await supabase.rpc('generate_referral_code', {
+      // Use the race-safe upsert RPC: generates a CSPRNG DAWEN-XXXXXXXX code,
+      // inserts it, and returns the existing row if user already has one.
+      // This prevents duplicate codes even under concurrent calls.
+      const { data, error } = await supabase.rpc('upsert_referral_code', {
         p_user_id: profile.id,
       });
 
-      if (!codeStr) return null;
+      if (error) {
+        console.error('[ReferralService] upsert_referral_code error:', error);
+        // Fallback: read existing code if rpc failed
+        const { data: existing } = await supabase
+          .from('referral_codes')
+          .select('*')
+          .eq('user_id', profile.id)
+          .maybeSingle();
+        return existing ?? null;
+      }
 
-      const { data: newCode, error } = await supabase
-        .from('referral_codes')
-        .insert({ user_id: profile.id, code: codeStr })
-        .select()
-        .single();
-
-      if (error) throw error;
-      return newCode;
+      // RPC returns an array (RETURNS TABLE), take first row
+      const row = Array.isArray(data) ? data[0] : data;
+      return row ?? null;
     } catch (err) {
       console.error('[ReferralService] getOrCreateReferralCode:', err);
       return null;
