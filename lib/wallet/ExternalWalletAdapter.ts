@@ -20,7 +20,7 @@ export interface ExternalWalletInfo {
   deepLinkScheme?: string;
 }
 
-export type ExternalWalletId = 'phantom' | 'backpack' | 'solflare' | 'solana';
+export type ExternalWalletId = 'phantom' | 'backpack' | 'solflare' | 'jupiter' | 'solana';
 
 export interface ConnectedExternalWallet {
   id: ExternalWalletId;
@@ -52,12 +52,21 @@ export const SUPPORTED_WALLETS: ExternalWalletInfo[] = [
     icon: 'https://solflare.com/favicon.ico',
     deepLinkScheme: 'solflare',
   },
+  {
+    id: 'jupiter',
+    name: 'Jupiter',
+    icon: 'https://jup.ag/favicon.ico',
+    deepLinkScheme: 'https',
+  },
 ];
 
 type WindowWithWallets = Window & {
   phantom?: { solana?: SolanaProvider };
   backpack?: { solana?: SolanaProvider };
   solflare?: SolanaProvider;
+  // Jupiter Wallet injects as window.jupiter or window.jupiterWallet
+  jupiter?: SolanaProvider;
+  jupiterWallet?: SolanaProvider;
   solana?: SolanaProvider;
 };
 
@@ -103,6 +112,10 @@ export class ExternalWalletAdapter {
     if (w.solflare?.isSolflare) {
       installed.push(SUPPORTED_WALLETS.find(x => x.id === 'solflare')!);
     }
+    // Jupiter Wallet (window.jupiter or window.jupiterWallet)
+    if (w.jupiter || w.jupiterWallet) {
+      installed.push(SUPPORTED_WALLETS.find(x => x.id === 'jupiter')!);
+    }
     // Generic window.solana (Phantom legacy fallback)
     if (w.solana?.isPhantom && !installed.find(x => x.id === 'phantom')) {
       installed.push(SUPPORTED_WALLETS.find(x => x.id === 'phantom')!);
@@ -118,7 +131,7 @@ export class ExternalWalletAdapter {
     if (Platform.OS !== 'web') return false;
     if (typeof window === 'undefined') return false;
     const w = window as WindowWithWallets;
-    return !!(w.phantom?.solana || w.backpack?.solana || w.solflare || w.solana);
+    return !!(w.phantom?.solana || w.backpack?.solana || w.solflare || w.jupiter || w.jupiterWallet || w.solana);
   }
 
   static getProvider(id: ExternalWalletId): SolanaProvider | null {
@@ -132,6 +145,8 @@ export class ExternalWalletAdapter {
         return w.backpack?.solana ?? null;
       case 'solflare':
         return w.solflare ?? null;
+      case 'jupiter':
+        return w.jupiter ?? w.jupiterWallet ?? null;
       default:
         return w.solana ?? null;
     }
@@ -250,6 +265,14 @@ export class ExternalWalletAdapter {
           // so the wallet stays "connected" in the UI. Balance will be stale but safe.
           console.log('[ExternalWallet] Provider not detected yet for', wallet.id, '— keeping stored session');
           return wallet;
+        }
+        // For Jupiter: also update address from provider if available
+        if (wallet.id === 'jupiter') {
+          const jupProvider = this.getProvider('jupiter');
+          if (jupProvider?.publicKey && jupProvider.publicKey.toBase58() !== wallet.address) {
+            wallet.address = jupProvider.publicKey.toBase58();
+            wallet.publicKey = wallet.address;
+          }
         }
       }
 

@@ -41,6 +41,7 @@ const DWORLD_PREMIUM_AMOUNTS: Record<PremiumTierKey, number> = {
 };
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { hashPin } from '@/lib/crypto/pinHash';
+import { ExportPrivateKeyModal } from '@/components/ExportPrivateKeyModal';
 
 type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'verify' | 'premium' | 'pin' | null;
 
@@ -59,6 +60,7 @@ export default function SettingsScreen() {
   const [pinConfirm, setPinConfirm] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinSuccess, setPinSuccess] = useState(false);
+  const [exportKeyVisible, setExportKeyVisible] = useState(false);
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
@@ -446,6 +448,12 @@ export default function SettingsScreen() {
           label: t.settings.biometric,
           value: Platform.OS === 'web' ? 'Not available' : undefined,
           onPress: () => {},
+        },
+        {
+          icon: <Key size={20} color={colors.error} />,
+          label: 'Export Private Key',
+          value: activeWallet?.type === 'connected' ? 'External wallet' : undefined,
+          onPress: () => setExportKeyVisible(true),
         },
       ],
     },
@@ -1296,6 +1304,11 @@ export default function SettingsScreen() {
           if (!premiumDone) setActiveModal(null);
         }}
         isExternalWallet={activeWallet?.type === 'connected'}
+      />
+
+      <ExportPrivateKeyModal
+        visible={exportKeyVisible}
+        onClose={() => setExportKeyVisible(false)}
       />
     </View>
   );

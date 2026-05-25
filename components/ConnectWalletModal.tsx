@@ -28,23 +28,33 @@ interface ConnectWalletModalProps {
 }
 
 const WALLET_COLORS: Record<string, [string, string]> = {
-  phantom: ['#AB9FF2', '#8A63F0'],
+  phantom:  ['#AB9FF2', '#8A63F0'],
   backpack: ['#E33E3F', '#C42B2C'],
   solflare: ['#FC8F2A', '#F56B10'],
+  jupiter:  ['#C2F341', '#8FB830'],
 };
 
 const WALLET_DESCRIPTIONS: Record<string, string> = {
-  phantom: 'The most trusted Solana wallet',
+  phantom:  'The most trusted Solana wallet',
   backpack: 'xNFT-powered Solana wallet',
   solflare: 'The original Solana wallet',
+  jupiter:  'Jupiter-compatible Solana wallet',
 };
+
+function getAppUrl(): string {
+  if (typeof window === 'undefined') return 'https://dawen.app';
+  // Use VITE_APP_URL env if set, otherwise fall back to actual origin
+  return (process.env.VITE_APP_URL as string | undefined) || window.location.origin || 'https://dawen.app';
+}
 
 function getMobileDeepLinks(appUrl: string) {
   const encoded = encodeURIComponent(appUrl);
   return {
-    phantom: `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
+    phantom:  `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
     backpack: `https://backpack.app/ul/browse/${encoded}`,
     solflare: `https://solflare.com/ul/v1/browse/${encoded}?ref=${encoded}`,
+    // Jupiter Mobile uses the same universal link pattern as Phantom (Jupiter is Phantom-compatible)
+    jupiter:  `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
   };
 }
 
@@ -58,12 +68,12 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
 
   const isMobile = Platform.OS !== 'web';
   const hasProvider = Platform.OS === 'web' ? ExternalWalletAdapter.hasAnyProvider() : false;
+  // On web: if we're inside a wallet's in-app browser, show the extension connect UI
+  // On mobile: always show deep link buttons (can't inject extensions on native)
   const isInsideWalletBrowser = !isMobile && hasProvider;
 
   useEffect(() => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      setAppUrl(window.location.href);
-    }
+    setAppUrl(getAppUrl());
   }, []);
 
   useEffect(() => {
@@ -212,8 +222,31 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
               </View>
             )}
 
-            {/* Mobile: deep link buttons to open app in wallet browser */}
-            {isMobile && (
+            {/* Mobile: if already inside a wallet's in-app browser, show connect UI directly */}
+            {isMobile && hasProvider && (
+              <ScrollView showsVerticalScrollIndicator={false} style={styles.walletList}>
+                {installedWallets.length > 0 && (
+                  <Text style={styles.sectionLabel}>Detected</Text>
+                )}
+                {SUPPORTED_WALLETS.map(wallet => {
+                  const installed = isInstalled(wallet.id);
+                  return (
+                    <WalletRow
+                      key={wallet.id}
+                      wallet={wallet}
+                      isInstalled={installed}
+                      isConnecting={connecting === wallet.id}
+                      onConnect={handleConnect}
+                      gradColors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
+                      description={WALLET_DESCRIPTIONS[wallet.id] ?? ''}
+                    />
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {/* Mobile: not inside a wallet browser — show deep links to open in wallet app */}
+            {isMobile && !hasProvider && (
               <View style={styles.mobileMessage}>
                 <Smartphone size={28} color={colors.primary} />
                 <Text style={styles.mobileMessageTitle}>Open in Your Wallet</Text>
@@ -222,8 +255,9 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
                 </Text>
                 <View style={styles.walletInstructionList}>
                   {SUPPORTED_WALLETS.map(wallet => {
-                    const links = getMobileDeepLinks(appUrl || 'https://dawencity.app');
+                    const links = getMobileDeepLinks(appUrl || 'https://dawen.app');
                     const deepLink = links[wallet.id as keyof typeof links];
+                    if (!deepLink) return null;
                     return (
                       <TouchableOpacity
                         key={wallet.id}
@@ -253,7 +287,7 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
             {!isMobile && !hasProvider && (
               <View style={styles.noProviderMessage}>
                 <Text style={styles.noProviderText}>
-                  No Solana wallet detected. Install Phantom, Backpack, or Solflare browser extension, then refresh.
+                  No Solana wallet detected. Install Phantom, Backpack, Solflare, or Jupiter browser extension, then refresh.
                 </Text>
               </View>
             )}
