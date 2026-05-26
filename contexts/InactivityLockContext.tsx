@@ -49,12 +49,31 @@ export interface InactivityLockContextValue {
 const InactivityLockContext = createContext<InactivityLockContextValue | undefined>(undefined);
 
 export function InactivityLockProvider({ children }: { children: ReactNode }) {
-  const { activeWallet } = useWallet();
+  const { activeWallet, isInitialized: walletInitialized } = useWallet();
 
   // Only engage for internal wallets (created or imported).
   const isInternalWallet = activeWallet?.type === 'created' || activeWallet?.type === 'imported';
 
-  const [isLocked, setIsLocked] = useState(false);
+  // On web, restore lock state from sessionStorage so a page refresh doesn't bypass the PIN screen.
+  const getInitialLocked = (): boolean => {
+    if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem('dawen_session_locked') === '1';
+    }
+    return false;
+  };
+
+  const [isLocked, setIsLockedState] = useState<boolean>(getInitialLocked);
+
+  const setIsLocked = useCallback((v: boolean) => {
+    setIsLockedState(v);
+    if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
+      if (v) {
+        sessionStorage.setItem('dawen_session_locked', '1');
+      } else {
+        sessionStorage.removeItem('dawen_session_locked');
+      }
+    }
+  }, []);
 
   const lastActivityRef   = useRef(Date.now());
   const backgroundAtRef   = useRef<number | null>(null);
@@ -75,7 +94,7 @@ export function InactivityLockProvider({ children }: { children: ReactNode }) {
         }, INACTIVITY_TIMEOUT_MS - elapsed);
       }
     }, INACTIVITY_TIMEOUT_MS);
-  }, []);
+  }, [setIsLocked]);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
@@ -97,16 +116,21 @@ export function InactivityLockProvider({ children }: { children: ReactNode }) {
     lastActivityRef.current = Date.now();
     setIsLocked(false);
     scheduleCheck();
-  }, [scheduleCheck]);
+  }, [setIsLocked, scheduleCheck]);
 
   const lock = useCallback(() => {
     setIsLocked(true);
     stopTimer();
-  }, [stopTimer]);
+  }, [setIsLocked, stopTimer]);
 
   // ── start/stop based on wallet type ──────────────────────────────────────
 
   useEffect(() => {
+    // Wait for wallet context to finish loading before making any lock decisions.
+    // Without this guard, the effect fires with isInternalWallet=false on every
+    // page refresh (wallet=null initially) and clears the persisted lock state.
+    if (!walletInitialized) return;
+
     if (!isInternalWallet) {
       stopTimer();
       setIsLocked(false);
@@ -115,7 +139,7 @@ export function InactivityLockProvider({ children }: { children: ReactNode }) {
     lastActivityRef.current = Date.now();
     scheduleCheck();
     return stopTimer;
-  }, [isInternalWallet, scheduleCheck, stopTimer]);
+  }, [walletInitialized, isInternalWallet, scheduleCheck, stopTimer]);
 
   // ── AppState — background detection ──────────────────────────────────────
 
@@ -143,7 +167,7 @@ export function InactivityLockProvider({ children }: { children: ReactNode }) {
 
     const sub = AppState.addEventListener('change', handleAppStateChange);
     return () => sub.remove();
-  }, [isInternalWallet, recordActivity, stopTimer]);
+  }, [isInternalWallet, recordActivity, stopTimer, setIsLocked]);
 
   // ── Web visibility API ────────────────────────────────────────────────────
 
@@ -170,15 +194,16 @@ export function InactivityLockProvider({ children }: { children: ReactNode }) {
 
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [isInternalWallet, recordActivity, stopTimer]);
+  }, [isInternalWallet, recordActivity, stopTimer, setIsLocked]);
 
   // ── Clear lock when wallet changes (e.g. switch to external) ─────────────
 
   useEffect(() => {
+    if (!walletInitialized) return;
     if (!isInternalWallet) {
       setIsLocked(false);
     }
-  }, [isInternalWallet]);
+  }, [walletInitialized, isInternalWallet, setIsLocked]);
 
   return (
     <InactivityLockContext.Provider value={{ isLocked, recordActivity, unlock, lock }}>

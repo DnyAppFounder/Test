@@ -111,7 +111,7 @@ export function SessionLockOverlay() {
   const isMaxed = attempts >= MAX_ATTEMPTS;
 
   return (
-    <View style={s.overlay} pointerEvents="box-only">
+    <View style={s.overlay}>
       <View style={s.glass}>
         {/* Icon */}
         <View style={s.iconRing}>
