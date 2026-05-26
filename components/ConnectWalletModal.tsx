@@ -10,7 +10,7 @@ import {
   ScrollView,
   Linking,
 } from 'react-native';
-import { X, WifiOff, Shield, Check, Smartphone, ExternalLink } from 'lucide-react-native';
+import { X, WifiOff, Shield, Check } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import {
@@ -47,15 +47,20 @@ function getAppUrl(): string {
   return (process.env.VITE_APP_URL as string | undefined) || window.location.origin || 'https://dawen.app';
 }
 
-function getMobileDeepLinks(appUrl: string) {
+function isMobileWebBrowser(): boolean {
+  if (Platform.OS !== 'web' || typeof navigator === 'undefined') return false;
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+}
+
+function getMobileDeepLink(walletId: string, appUrl: string): string {
   const encoded = encodeURIComponent(appUrl);
-  return {
-    phantom:  `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
-    backpack: `https://backpack.app/ul/browse/${encoded}`,
-    solflare: `https://solflare.com/ul/v1/browse/${encoded}?ref=${encoded}`,
-    // Jupiter Mobile uses the same universal link pattern as Phantom (Jupiter is Phantom-compatible)
-    jupiter:  `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`,
-  };
+  switch (walletId) {
+    case 'phantom':  return `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`;
+    case 'backpack': return `https://backpack.app/ul/browse/${encoded}`;
+    case 'solflare': return `https://solflare.com/ul/v1/browse/${encoded}?ref=${encoded}`;
+    case 'jupiter':  return `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`;
+    default:         return `https://phantom.app/ul/browse/${encoded}?ref=${encoded}`;
+  }
 }
 
 export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWalletModalProps) {
@@ -67,10 +72,8 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
   const [appUrl, setAppUrl] = useState('');
 
   const isMobile = Platform.OS !== 'web';
+  const isMobileWeb = isMobileWebBrowser();
   const hasProvider = Platform.OS === 'web' ? ExternalWalletAdapter.hasAnyProvider() : false;
-  // On web: if we're inside a wallet's in-app browser, show the extension connect UI
-  // On mobile: always show deep link buttons (can't inject extensions on native)
-  const isInsideWalletBrowser = !isMobile && hasProvider;
 
   useEffect(() => {
     setAppUrl(getAppUrl());
@@ -222,21 +225,30 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
               </View>
             )}
 
-            {/* Mobile: if already inside a wallet's in-app browser, show connect UI directly */}
-            {isMobile && hasProvider && (
+            {/* Show wallet list when: provider exists (any platform), OR on mobile web without provider */}
+            {(hasProvider || isMobile || isMobileWeb) && (
               <ScrollView showsVerticalScrollIndicator={false} style={styles.walletList}>
                 {installedWallets.length > 0 && (
                   <Text style={styles.sectionLabel}>Detected</Text>
                 )}
                 {SUPPORTED_WALLETS.map(wallet => {
                   const installed = isInstalled(wallet.id);
+                  const deepLinkMode = !hasProvider && (isMobile || isMobileWeb);
                   return (
                     <WalletRow
                       key={wallet.id}
                       wallet={wallet}
                       isInstalled={installed}
                       isConnecting={connecting === wallet.id}
-                      onConnect={handleConnect}
+                      onConnect={deepLinkMode
+                        ? () => {
+                            const url = getMobileDeepLink(wallet.id, appUrl || 'https://dawen.app');
+                            Linking.openURL(url).catch(() =>
+                              setError('Could not open this wallet. Please install the wallet app or open DAWEN inside the wallet browser.')
+                            );
+                          }
+                        : handleConnect
+                      }
                       gradColors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
                       description={WALLET_DESCRIPTIONS[wallet.id] ?? ''}
                     />
@@ -245,74 +257,13 @@ export function ConnectWalletModal({ visible, onClose, onConnected }: ConnectWal
               </ScrollView>
             )}
 
-            {/* Mobile: not inside a wallet browser — show deep links to open in wallet app */}
-            {isMobile && !hasProvider && (
-              <View style={styles.mobileMessage}>
-                <Smartphone size={28} color={colors.primary} />
-                <Text style={styles.mobileMessageTitle}>Open in Your Wallet</Text>
-                <Text style={styles.mobileMessageText}>
-                  Tap a wallet below to open this app inside its built-in browser and connect directly.
-                </Text>
-                <View style={styles.walletInstructionList}>
-                  {SUPPORTED_WALLETS.map(wallet => {
-                    const links = getMobileDeepLinks(appUrl || 'https://dawen.app');
-                    const deepLink = links[wallet.id as keyof typeof links];
-                    if (!deepLink) return null;
-                    return (
-                      <TouchableOpacity
-                        key={wallet.id}
-                        style={styles.walletInstruction}
-                        onPress={() => Linking.openURL(deepLink).catch(() => {})}
-                        activeOpacity={0.7}
-                      >
-                        <LinearGradient
-                          colors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
-                          style={styles.walletInstructionIcon}
-                        >
-                          <Text style={styles.walletInstructionIconText}>{wallet.name[0]}</Text>
-                        </LinearGradient>
-                        <Text style={styles.walletInstructionName}>{wallet.name}</Text>
-                        <View style={styles.openInBrowserBadge}>
-                          <ExternalLink size={12} color={colors.primary} />
-                          <Text style={styles.openInBrowserText}>Open</Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            )}
-
-            {/* Desktop: no wallet extension detected */}
-            {!isMobile && !hasProvider && (
+            {/* Desktop only: no wallet extension detected */}
+            {!isMobile && !isMobileWeb && !hasProvider && (
               <View style={styles.noProviderMessage}>
                 <Text style={styles.noProviderText}>
                   No Solana wallet detected. Install Phantom, Backpack, Solflare, or Jupiter browser extension, then refresh.
                 </Text>
               </View>
-            )}
-
-            {/* Desktop: wallet extension detected — show wallet list */}
-            {!isMobile && hasProvider && (
-              <ScrollView showsVerticalScrollIndicator={false} style={styles.walletList}>
-                {installedWallets.length > 0 && (
-                  <Text style={styles.sectionLabel}>Detected</Text>
-                )}
-                {SUPPORTED_WALLETS.map(wallet => {
-                  const installed = isInstalled(wallet.id);
-                  return (
-                    <WalletRow
-                      key={wallet.id}
-                      wallet={wallet}
-                      isInstalled={installed}
-                      isConnecting={connecting === wallet.id}
-                      onConnect={handleConnect}
-                      gradColors={WALLET_COLORS[wallet.id] ?? ['#3B82F6', '#1D4ED8']}
-                      description={WALLET_DESCRIPTIONS[wallet.id] ?? ''}
-                    />
-                  );
-                })}
-              </ScrollView>
             )}
 
             <View style={styles.footer}>
@@ -332,7 +283,7 @@ interface WalletRowProps {
   wallet: ExternalWalletInfo;
   isInstalled: boolean;
   isConnecting: boolean;
-  onConnect: (id: ExternalWalletId) => void;
+  onConnect: ((id: ExternalWalletId) => void) | (() => void);
   gradColors: [string, string];
   description: string;
 }
@@ -438,75 +389,7 @@ const styles = StyleSheet.create({
     color: colors.error,
     lineHeight: 18,
   },
-  // Mobile message
-  mobileMessage: {
-    alignItems: 'center',
-    paddingVertical: spacing.xl,
-    gap: spacing.md,
-  },
-  mobileMessageTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  mobileMessageText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  walletInstructionList: {
-    width: '100%',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  walletInstruction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-  },
-  walletInstructionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  walletInstructionIconText: {
-    fontSize: fontSize.md,
-    fontWeight: '800',
-    color: colors.white,
-  },
-  walletInstructionName: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    flex: 1,
-  },
-  walletInstructionStep: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-  },
-  openInBrowserBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: borderRadius.sm,
-    backgroundColor: colors.primaryMuted,
-    borderWidth: 1,
-    borderColor: colors.primary,
-  },
-  openInBrowserText: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  // No provider
+  // No provider (desktop only)
   noProviderMessage: {
     backgroundColor: colors.primaryMuted,
     borderRadius: borderRadius.md,
