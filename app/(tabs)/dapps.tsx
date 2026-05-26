@@ -986,7 +986,7 @@ export default function DawenCityPage() {
           <View style={pageStyles.headerInner}>
             <View style={pageStyles.headerLogoRow}>
               <View style={pageStyles.headerLogoBadge}>
-                <Image source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
+                <Image source={Platform.OS === 'web' ? { uri: '/dawenlogo.jpeg' } : require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
               </View>
               <View>
                 <Text style={pageStyles.headerTitle}>Dawen City</Text>

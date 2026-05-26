@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "EXPO_NO_TELEMETRY=1 expo start",
-    "build:web": "expo export --platform web && cp public/_headers dist/_headers && cp public/_redirects dist/_redirects && cp public/Dawen1D.png dist/Dawen1D.png && cp public/Dawencity.png dist/Dawencity.png && cp public/Dawensetting.png dist/Dawensetting.png && rm -rf dist/room-builder && mkdir -p dist/room-builder && cp -r public/room-builder/. dist/room-builder/ && rm -rf dist/avatar-gen && mkdir -p dist/avatar-gen && cp -r public/avatar-gen/. dist/avatar-gen/",
+    "build:web": "expo export --platform web && cp public/_headers dist/_headers && cp public/_redirects dist/_redirects && cp public/Dawen1D.png dist/Dawen1D.png && cp public/Dawencity.png dist/Dawencity.png && cp public/Dawensetting.png dist/Dawensetting.png && cp dawenlogo.jpeg dist/dawenlogo.jpeg && rm -rf dist/room-builder && mkdir -p dist/room-builder && cp -r public/room-builder/. dist/room-builder/ && rm -rf dist/avatar-gen && mkdir -p dist/avatar-gen && cp -r public/avatar-gen/. dist/avatar-gen/",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit"
   },
