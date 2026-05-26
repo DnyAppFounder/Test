@@ -434,6 +434,9 @@ export function TradingViewChart({
   const chartPulseAnim  = useRef(new Animated.Value(0)).current;
 
   const plotWRef            = useRef(0);
+  // Always mirrors the engine's current panOffsetMs so PanResponder closures
+  // don't read stale React state from the initial render.
+  const currentPanOffsetMsRef = useRef(0);
   // ms-based pan offset captured at gesture start (delta-from-start math).
   const panStartOffsetMsRef = useRef(0);
   // 'idle' → 'crosshair' or 'pan' — locked until touch release.
@@ -505,6 +508,8 @@ export function TradingViewChart({
   useEffect(() => { pairAddrRef.current = resolvedPairAddr; }, [resolvedPairAddr]);
   useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
   useEffect(() => { activeLiveCandleRef.current = activeLiveCandle; }, [activeLiveCandle]);
+  // Keep currentPanOffsetMsRef in sync so PanResponder (created once) reads fresh value.
+  currentPanOffsetMsRef.current = animEngine.state.panOffsetMs;
 
   // Resolve best pair address from DexScreener when token mint changes.
   // Prefers pairs with usable live price data (non-zero priceUsd + liquidity/volume).
@@ -1454,7 +1459,7 @@ export function TradingViewChart({
       },
 
       onPanResponderGrant: (e) => {
-        panStartOffsetMsRef.current = animEngine.state.panOffsetMs;
+        panStartOffsetMsRef.current = currentPanOffsetMsRef.current;
         gestureModeRef.current      = 'pan';
         animEngine.actions.onPanStart();
         touchStartXRef.current    = e.nativeEvent.pageX;
@@ -1514,7 +1519,7 @@ export function TradingViewChart({
     onMouseDown: (e: any) => {
       mouseDragRef.current       = true;
       mouseDragStartXRef.current = e.clientX;
-      mousePanStartRef.current   = animEngine.state.panOffsetMs;
+      mousePanStartRef.current   = currentPanOffsetMsRef.current;
       animEngine.actions.onPanStart();
       e.preventDefault();
     },
@@ -1525,6 +1530,17 @@ export function TradingViewChart({
     onMouseLeave: (_e: any) => {
       mouseDragRef.current = false;
       animEngine.actions.onPanEnd();
+    },
+    onWheel: (e: any) => {
+      e.preventDefault();
+      const pw = plotWRef.current || 1;
+      // Horizontal scroll or shift+wheel scrolls the chart timeline.
+      // Vertical scroll (without shift) also scrolls the chart.
+      const deltaX = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const scrollMs = (deltaX / pw) * visibleMsRef.current;
+      const newOffset = Math.max(0, currentPanOffsetMsRef.current + scrollMs);
+      userPannedRef.current = newOffset > 0;
+      animEngine.actions.setPanOffsetMs(newOffset);
     },
     onContextMenu: (e: any) => e.preventDefault(),
   } : {};
