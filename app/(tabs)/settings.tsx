@@ -43,6 +43,7 @@ const DWORLD_PREMIUM_AMOUNTS: Record<PremiumTierKey, number> = {
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { hashPin } from '@/lib/crypto/pinHash';
 import { ExportPrivateKeyModal } from '@/components/ExportPrivateKeyModal';
+import { AppGuideModal, APP_GUIDE_SEEN_KEY } from '@/components/AppGuideModal';
 
 type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'verify' | 'premium' | 'pin' | null;
 
@@ -53,6 +54,7 @@ export default function SettingsScreen() {
   const { profile, updateProfile: updateGlobalProfile, uploadAvatar: uploadGlobalAvatar, refreshProfile } = useProfile();
   const { pinHash, changePin } = useSecurity();
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
+  const [showAppGuide, setShowAppGuide] = useState(false);
 
   // Change PIN state
   const [pinStep, setPinStep] = useState<'current' | 'new' | 'confirm'>('current');
@@ -503,6 +505,15 @@ export default function SettingsScreen() {
           label: 'Terms of Service',
           onPress: () => router.push('/terms' as any),
         },
+        {
+          icon: <Info size={20} color="#60A5FA" />,
+          label: 'View App Guide',
+          onPress: async () => {
+            // Allow reopening by clearing the seen flag
+            await AsyncStorage.removeItem(APP_GUIDE_SEEN_KEY);
+            setShowAppGuide(true);
+          },
+        },
       ],
     },
   ];
@@ -599,8 +610,21 @@ export default function SettingsScreen() {
           <Text style={styles.logoutText}>{t.settings.logout}</Text>
         </TouchableOpacity>
 
+        {/* Official DAWEN token notice */}
+        <View style={styles.tokenNoticeBox}>
+          <View style={styles.tokenNoticeHeader}>
+            <Info size={14} color="#F59E0B" strokeWidth={2} />
+            <Text style={styles.tokenNoticeTitle}>Official DAWEN Token Notice</Text>
+          </View>
+          <Text style={styles.tokenNoticeText}>
+            The official DAWEN token has not launched yet. Do not trust or buy any token claiming to be the official DAWEN token before an official announcement through official DAWEN channels.
+          </Text>
+        </View>
+
         <Text style={styles.copyrightText}>© 2026 DAWEN. All rights reserved.</Text>
       </ScrollView>
+
+      <AppGuideModal visible={showAppGuide} onClose={() => setShowAppGuide(false)} />
 
       <Modal visible={activeModal === 'language'} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
@@ -1499,6 +1523,31 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     marginBottom: spacing.xxl,
     letterSpacing: 0.3,
+  },
+  tokenNoticeBox: {
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.25)',
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    marginTop: spacing.xl,
+    gap: spacing.xs,
+  },
+  tokenNoticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  tokenNoticeTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '800',
+    color: '#F59E0B',
+    letterSpacing: 0.3,
+  },
+  tokenNoticeText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
+    lineHeight: 16,
   },
   modalOverlay: {
     flex: 1,

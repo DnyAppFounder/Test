@@ -19,7 +19,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users, ShieldCheck, Shield, ShieldAlert, CircleX as XCircle } from 'lucide-react-native';
+import { Rocket, Plus, Sparkles, Clock, CircleCheck as CheckCircle2, ChevronRight, X, Upload, Globe, MessageCircle, Twitter, ExternalLink, Zap, Settings2, Star, DollarSign, Lock, Flame, ArrowRight, Copy, CircleCheck as CheckCircleIcon, ChartBar as BarChart3, TrendingUp, TrendingDown, Users, ShieldCheck, Shield, ShieldAlert, CircleX as XCircle, TriangleAlert as AlertTriangle } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { launchpadService, LaunchpadToken, LaunchpadStats } from '@/services/launchpadService';
@@ -1091,6 +1091,17 @@ export default function LaunchpadScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── Launchpad Beta Warning ── */}
+        <View style={styles.betaWarningBox}>
+          <View style={styles.betaWarningRow}>
+            <AlertTriangle size={14} color="#F59E0B" strokeWidth={2} />
+            <Text style={styles.betaWarningTitle}>Launchpad Beta Notice</Text>
+          </View>
+          <Text style={styles.betaWarningText}>
+            Token creation is functional, but automated liquidity and graduation are not connected yet. Only create a token if you understand that it may have 0 liquidity unless you add liquidity yourself.
+          </Text>
+        </View>
+
         {/* ── Stats ── */}
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
@@ -1336,6 +1347,33 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   createBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+
+  betaWarningBox: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.30)',
+    borderRadius: 12,
+    padding: 12,
+    gap: 6,
+  },
+  betaWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  betaWarningTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#F59E0B',
+    letterSpacing: 0.3,
+  },
+  betaWarningText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.55)',
+    lineHeight: 17,
+  },
 
   // Stats
   statsRow: {

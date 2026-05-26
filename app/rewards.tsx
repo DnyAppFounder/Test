@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock } from 'lucide-react-native';
+import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import {
@@ -466,6 +466,20 @@ export default function RewardsScreen() {
             ))}
           </View>
         )}
+
+        {/* $DAWORLD info box */}
+        <View style={styles.daworldInfoBox}>
+          <View style={styles.daworldInfoHeader}>
+            <Info size={14} color="#60A5FA" strokeWidth={2} />
+            <Text style={styles.daworldInfoTitle}>About $DAWORLD Rewards</Text>
+          </View>
+          <Text style={styles.daworldInfoText}>
+            $DAWORLD rewards are for Dawen World, in-app utility, gaming features, and future boutique/shop features. $DAWORLD is not the official DAWEN token.
+          </Text>
+          <Text style={[styles.daworldInfoText, { marginTop: 6 }]}>
+            There is no reason to try to buy or accumulate a large part of the $DAWORLD supply. Its main purpose is utility inside the DAWEN app ecosystem.
+          </Text>
+        </View>
 
         {/* How it works */}
         <View style={styles.infoSection}>
@@ -1078,5 +1092,30 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.textSecondary,
     lineHeight: 18,
+  },
+  daworldInfoBox: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    backgroundColor: 'rgba(96,165,250,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.25)',
+    borderRadius: 12,
+    padding: spacing.md,
+  },
+  daworldInfoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  daworldInfoTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#93C5FD',
+  },
+  daworldInfoText: {
+    fontSize: fontSize.sm,
+    color: 'rgba(255,255,255,0.65)',
+    lineHeight: 20,
   },
 });

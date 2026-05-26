@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { useWallet } from '@/contexts/WalletContext';
@@ -9,6 +9,7 @@ import { SeedBackupModal } from '@/components/onboarding/SeedBackupModal';
 import { ImportBackupModal } from '@/components/onboarding/ImportBackupModal';
 import { ExternalWarningModal } from '@/components/onboarding/ExternalWarningModal';
 import { BiometricModal } from '@/components/onboarding/BiometricModal';
+import { AppGuideModal, hasSeenAppGuide } from '@/components/AppGuideModal';
 import {
   ReferralService,
   getPendingReferralCode,
@@ -22,6 +23,9 @@ import {
  *
  * Also auto-applies any pending referral code that was captured from the
  * ?ref= URL param before the user finished setting up their wallet.
+ *
+ * After ALL security/onboarding steps are complete (nextStep === null +
+ * onboardingComplete), shows the DAWEN app guide once per device.
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { nextStep, isReady } = useOnboardingGuard();
@@ -30,11 +34,11 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { activeWallet, activeAddress } = useWallet();
   const referralAppliedRef = useRef(false);
 
+  // App guide — only shown after all security steps are done
+  const [showGuide, setShowGuide] = useState(false);
+  const guideCheckedRef = useRef(false);
+
   // Only mark complete when all steps are done AND a real wallet is present.
-  // Without the activeWallet guard this effect fires while activeWallet is null
-  // (brief window after navigation) and writes the global 'security:onboarding_complete'
-  // key, which then gets read by every future wallet address via the legacy-key
-  // fallback in readKey(), silently skipping all onboarding steps.
   useEffect(() => {
     console.log('[OnboardingGate] isReady:', isReady, '| nextStep:', nextStep);
   }, [isReady, nextStep]);
@@ -46,8 +50,22 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     }
   }, [isReady, activeWallet, nextStep, onboardingComplete, profile?.id]);
 
+  // Show app guide exactly once, only AFTER all onboarding/security steps done.
+  // Guard: isReady + onboardingComplete (or nextStep === null + activeWallet)
+  // + not already shown this session + hasn't been seen before.
+  useEffect(() => {
+    if (guideCheckedRef.current) return;
+    // Wait until fully ready and all steps complete
+    if (!isReady || !activeWallet || nextStep !== null) return;
+    // Either onboardingComplete flag or we just marked it (same tick)
+    guideCheckedRef.current = true;
+    (async () => {
+      const seen = await hasSeenAppGuide();
+      if (!seen) setShowGuide(true);
+    })();
+  }, [isReady, activeWallet, nextStep, onboardingComplete]);
+
   // Auto-apply pending referral code once the user is fully onboarded.
-  // Fires at most once per wallet session (ref guard prevents repeat runs).
   useEffect(() => {
     if (
       !isReady ||
@@ -65,14 +83,11 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
 
         const result = await ReferralService.applyReferralCode(activeAddress, pendingCode);
         if (result.success || result.reason === 'already_applied') {
-          // Both outcomes mean we should not retry — clear the pending code.
           await clearPendingReferralCode();
         }
-        // For 'invalid_code' or 'self_referral', also clear so we don't retry forever.
         if (result.reason === 'invalid_code' || result.reason === 'self_referral') {
           await clearPendingReferralCode();
         }
-        // For 'error', keep the code in storage so the next session can retry.
         if (result.reason === 'error') {
           referralAppliedRef.current = false;
         }
@@ -91,6 +106,7 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
       <ImportBackupModal visible={isReady && nextStep === 'import-backup'} />
       <ExternalWarningModal visible={isReady && nextStep === 'external-warning'} />
       <BiometricModal visible={isReady && nextStep === 'biometric'} />
+      <AppGuideModal visible={showGuide} onClose={() => setShowGuide(false)} />
     </>
   );
 }
