@@ -14,7 +14,7 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./public/Dawen1D.png"
     },
     "plugins": ["expo-router", "expo-font", "expo-web-browser"],
     "extra": {
