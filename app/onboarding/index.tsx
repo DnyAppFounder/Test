@@ -159,8 +159,12 @@ export default function OnboardingWelcome() {
     setShowEnterModal(true);
   }, []);
 
-  const openLink = (url: string) => {
+  const openExternal = (url: string) => {
     Linking.openURL(url).catch(() => {});
+  };
+
+  const openLegal = (route: '/privacy' | '/terms') => {
+    router.push(route as any);
   };
 
   return (
@@ -189,9 +193,10 @@ export default function OnboardingWelcome() {
         <View style={styles.hero}>
           <Animated.View style={[styles.logoWrap, logoStyle]}>
             <View style={styles.logoGlowRing} />
+            <View style={styles.logoGlowInner} />
             <View style={styles.logoContainer}>
               <Image
-                source={require('../../dawenlogo.jpeg')}
+                source={require('../../Dawen1D.png')}
                 style={styles.logoImage}
                 resizeMode="contain"
               />
@@ -279,9 +284,9 @@ export default function OnboardingWelcome() {
           {/* Legal */}
           <Text style={styles.legalText}>
             By continuing, you agree to DAWEN's{' '}
-            <Text style={styles.legalLink} onPress={() => openLink('/terms')}>Terms of Service</Text>
+            <Text style={styles.legalLink} onPress={() => openLegal('/terms')}>Terms of Service</Text>
             {' '}and{' '}
-            <Text style={styles.legalLink} onPress={() => openLink('/privacy')}>Privacy Policy</Text>.
+            <Text style={styles.legalLink} onPress={() => openLegal('/privacy')}>Privacy Policy</Text>.
           </Text>
         </Animated.View>
 
@@ -293,18 +298,18 @@ export default function OnboardingWelcome() {
           <View style={styles.socialRow}>
             <TouchableOpacity
               style={styles.socialBtn}
-              onPress={() => openLink('https://t.me/WillOfDCrew')}
+              onPress={() => openExternal('https://t.me/WillOfDCrew')}
               activeOpacity={0.75}
             >
-              <TelegramIcon />
+              <TelegramSVG />
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.socialBtn}
-              onPress={() => openLink('https://x.com/willoffd_?s=21')}
+              onPress={() => openExternal('https://x.com/willoffd_?s=21')}
               activeOpacity={0.75}
             >
-              <XIcon />
+              <XSVG />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -312,7 +317,7 @@ export default function OnboardingWelcome() {
               onPress={() => setDiscordTooltip(v => !v)}
               activeOpacity={0.7}
             >
-              <DiscordIcon muted />
+              <DiscordSVG muted />
               {discordTooltip && (
                 <View style={styles.tooltip}>
                   <Text style={styles.tooltipText}>Discord coming soon</Text>
@@ -323,20 +328,21 @@ export default function OnboardingWelcome() {
 
           {/* Footer links */}
           <View style={styles.footerLinks}>
-            <TouchableOpacity onPress={() => openLink('/privacy')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => openLegal('/privacy')} activeOpacity={0.7}>
               <Text style={styles.footerLink}>Privacy Policy</Text>
             </TouchableOpacity>
             <View style={styles.footerDot} />
-            <TouchableOpacity onPress={() => openLink('/terms')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => openLegal('/terms')} activeOpacity={0.7}>
               <Text style={styles.footerLink}>Terms of Service</Text>
             </TouchableOpacity>
             <View style={styles.footerDot} />
-            <TouchableOpacity onPress={() => openLink('mailto:support@dawen.app')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => openExternal('mailto:support@dawen.app')} activeOpacity={0.7}>
               <Text style={styles.footerLink}>Support</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.footerBrand}>dawen.app</Text>
+          <Text style={styles.footerBrand}>DAWEN.APP</Text>
+          <Text style={styles.copyright}>© 2026 DAWEN. All rights reserved.</Text>
         </Animated.View>
       </ScrollView>
 
@@ -444,26 +450,49 @@ function TrustPoint({ icon, label }: { icon: React.ReactNode; label: string }) {
   );
 }
 
-function TelegramIcon() {
+// ─── SVG Social Icons (React Native SVG via inline paths) ────────────────────
+
+import Svg, { Path, G, Circle } from 'react-native-svg';
+
+function TelegramSVG() {
   return (
     <View style={[styles.socialIconWrap, { borderColor: 'rgba(42,174,241,0.4)', backgroundColor: 'rgba(42,174,241,0.08)' }]}>
-      <Text style={[styles.socialIconText, { color: '#2AAEF1' }]}>TG</Text>
+      <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="M21.94 4.57L18.48 20.2c-.26 1.14-.93 1.42-1.88.88l-5.2-3.83-2.51 2.42c-.28.28-.51.51-1.04.51l.37-5.26L17.68 7.4c.42-.37-.09-.58-.65-.21L5.02 14.84.88 13.54c-.9-.28-.92-.9.19-1.33L20.64 3.28c.75-.28 1.4.17 1.3 1.29z"
+          fill="#2AAEF1"
+        />
+      </Svg>
     </View>
   );
 }
 
-function XIcon() {
+function XSVG() {
   return (
-    <View style={[styles.socialIconWrap, { borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(255,255,255,0.06)' }]}>
-      <Text style={[styles.socialIconText, { color: '#fff', fontWeight: '900' }]}>𝕏</Text>
+    <View style={[styles.socialIconWrap, { borderColor: 'rgba(255,255,255,0.2)', backgroundColor: 'rgba(255,255,255,0.05)' }]}>
+      <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.261 5.633 5.903-5.633zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77z"
+          fill="#ffffff"
+        />
+      </Svg>
     </View>
   );
 }
 
-function DiscordIcon({ muted }: { muted?: boolean }) {
+function DiscordSVG({ muted }: { muted?: boolean }) {
+  const color = muted ? 'rgba(255,255,255,0.2)' : '#5865F2';
   return (
-    <View style={[styles.socialIconWrap, { borderColor: muted ? 'rgba(255,255,255,0.1)' : 'rgba(88,101,242,0.4)', backgroundColor: muted ? 'rgba(255,255,255,0.03)' : 'rgba(88,101,242,0.08)' }]}>
-      <Text style={[styles.socialIconText, { color: muted ? 'rgba(255,255,255,0.25)' : '#5865F2' }]}>DC</Text>
+    <View style={[styles.socialIconWrap, {
+      borderColor: muted ? 'rgba(255,255,255,0.08)' : 'rgba(88,101,242,0.4)',
+      backgroundColor: muted ? 'rgba(255,255,255,0.02)' : 'rgba(88,101,242,0.08)',
+    }]}>
+      <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.032.054a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"
+          fill={color}
+        />
+      </Svg>
     </View>
   );
 }
@@ -520,29 +549,39 @@ const styles = StyleSheet.create({
   },
   logoGlowRing: {
     position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
     borderWidth: 1,
-    borderColor: 'rgba(139,92,246,0.3)',
-    backgroundColor: 'rgba(139,92,246,0.08)',
+    borderColor: 'rgba(139,92,246,0.25)',
+    backgroundColor: 'rgba(139,92,246,0.06)',
+  },
+  logoGlowInner: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(147,51,234,0.12)',
   },
   logoContainer: {
-    width: 140,
-    height: 140,
-    borderRadius: 32,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
     overflow: 'hidden',
     borderWidth: 1.5,
-    borderColor: 'rgba(139,92,246,0.4)',
+    borderColor: 'rgba(139,92,246,0.45)',
     backgroundColor: '#0D0620',
     shadowColor: '#8B5CF6',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
+    shadowOpacity: 0.6,
+    shadowRadius: 24,
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   logoImage: {
-    width: '100%',
-    height: '100%',
+    width: '88%',
+    height: '88%',
   },
   appName: {
     fontSize: 46,
@@ -844,10 +883,17 @@ const styles = StyleSheet.create({
   },
   footerBrand: {
     fontSize: 10,
-    color: 'rgba(139,92,246,0.4)',
+    color: 'rgba(139,92,246,0.5)',
     fontWeight: '700',
-    letterSpacing: 2,
+    letterSpacing: 3,
     textTransform: 'uppercase',
+  },
+  copyright: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.2)',
+    textAlign: 'center',
+    fontWeight: '400',
+    marginTop: -8,
   },
 
   // Modal

@@ -133,6 +133,8 @@ export default function RootLayout() {
                   <Stack.Screen name="wallet" />
                   <Stack.Screen name="messages" />
                   <Stack.Screen name="settings" />
+                  <Stack.Screen name="privacy" />
+                  <Stack.Screen name="terms" />
                   <Stack.Screen name="+not-found" />
                 </Stack>
                 <InAppNotifications />
