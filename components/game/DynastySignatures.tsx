@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
   ActivityIndicator, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -189,6 +189,17 @@ interface Props {
 }
 
 export function DynastySignatures({ walletAddress }: Props) {
+  // Inject CSS keyframe animations once on web
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const id = 'dawen-sig-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = WEB_CSS;
+    document.head.appendChild(el);
+  }, []);
+
   const [mySignature, setMySignature] = useState<GameSignature | null | undefined>(undefined);
   const [wall, setWall] = useState<GameSignature[]>([]);
   const [showAll, setShowAll] = useState(false);
@@ -470,13 +481,6 @@ export function DynastySignatures({ walletAddress }: Props) {
         </TouchableOpacity>
       )}
 
-      {/* Inject CSS animations for web */}
-      {Platform.OS === 'web' && (
-        <style
-          // @ts-ignore — web only
-          dangerouslySetInnerHTML={{ __html: WEB_CSS }}
-        />
-      )}
     </View>
   );
 }

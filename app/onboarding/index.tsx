@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,6 @@ import Animated, {
   withRepeat,
   withSequence,
   Easing,
-  interpolate,
 } from 'react-native-reanimated';
 import { Wallet, ChevronRight, Plus, Download, Shield, Lock, Key } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
@@ -41,8 +40,8 @@ function Particle({ x, y, delay, size }: { x: number; y: number; delay: number; 
       delay,
       withRepeat(
         withSequence(
-          withTiming(0.6, { duration: 2000 + Math.random() * 1500, easing: Easing.inOut(Easing.sine) }),
-          withTiming(0, { duration: 1500 + Math.random() * 1000, easing: Easing.inOut(Easing.sine) })
+          withTiming(0.6, { duration: 2000, easing: Easing.inOut(Easing.quad) }),
+          withTiming(0, { duration: 1500, easing: Easing.inOut(Easing.quad) })
         ),
         -1,
         false
@@ -52,8 +51,8 @@ function Particle({ x, y, delay, size }: { x: number; y: number; delay: number; 
       delay,
       withRepeat(
         withSequence(
-          withTiming(-12, { duration: 2500 + Math.random() * 2000, easing: Easing.inOut(Easing.sine) }),
-          withTiming(4, { duration: 2000, easing: Easing.inOut(Easing.sine) })
+          withTiming(-12, { duration: 2500, easing: Easing.inOut(Easing.quad) }),
+          withTiming(4, { duration: 2000, easing: Easing.inOut(Easing.quad) })
         ),
         -1,
         true
