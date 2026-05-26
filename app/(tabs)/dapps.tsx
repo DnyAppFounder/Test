@@ -31,7 +31,7 @@ import { Decode7Fragments } from '@/components/game/Decode7Fragments';
 import { GameResultCard } from '@/components/game/GameResultCard';
 import { TopRankLeaderboard } from '@/components/game/TopRankLeaderboard';
 import { DawenWorldPage } from '@/components/world/DawenWorldPage';
-import { DynastySignatures } from '@/components/game/DynastySignatures';
+import { LeaveYourMarkCard, LeaveYourMarkScreen } from '@/components/game/LeaveYourMark';
 
 const DAWEN_MINT = 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump';
 const SELL_COLOR = '#D946EF';
@@ -39,7 +39,7 @@ const SELL_MUTED = 'rgba(217,70,239,0.12)';
 
 type CityTab = 'token' | 'game' | 'rank';
 type DiscoverTab = 'featured' | 'trending' | 'new';
-type GameStage = 'game_select' | 'mode_select' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result' | 'world';
+type GameStage = 'game_select' | 'mode_select' | 'entry' | 'waiting' | 'matched' | 'playing' | 'result' | 'world' | 'mark';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -519,6 +519,16 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
     setSelectedGame(null); setMode(null);
   };
 
+  // ── Leave Your Mark: full screen ──
+  if (stage === 'mark') {
+    return (
+      <LeaveYourMarkScreen
+        walletAddress={walletAddress ?? null}
+        onBack={() => setStage('game_select')}
+      />
+    );
+  }
+
   // ── DAWEN World: full screen ──
   if (stage === 'world') {
     return (
@@ -569,7 +579,10 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       {stage === 'game_select' && (
         <>
           <GameHub onSelect={handleGameSelect} />
-          <DynastySignatures walletAddress={walletAddress ?? null} />
+          <LeaveYourMarkCard
+            walletAddress={walletAddress ?? null}
+            onOpen={() => setStage('mark')}
+          />
           <TouchableOpacity
             style={gameStyles.worldCard}
             onPress={() => { setStage('world'); onSetFullscreen?.(true); }}
