@@ -979,7 +979,7 @@ export default function DawenCityPage() {
     <View style={pageStyles.container}>
       {!gameFullscreen && (
         <ImageBackground
-          source={require('../../tour.jpeg')}
+          source={require('../../Dawencity.png')}
           style={pageStyles.header}
           imageStyle={pageStyles.headerImage}
           resizeMode="cover"

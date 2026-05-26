@@ -493,6 +493,16 @@ export default function SettingsScreen() {
           value: '1.0.0',
           onPress: () => {},
         },
+        {
+          icon: <Shield size={20} color={colors.primary} />,
+          label: 'Privacy Policy',
+          onPress: () => router.push('/privacy' as any),
+        },
+        {
+          icon: <Info size={20} color={colors.primary} />,
+          label: 'Terms of Service',
+          onPress: () => router.push('/terms' as any),
+        },
       ],
     },
   ];
@@ -515,7 +525,7 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       <ImageBackground
-        source={require('../../tour.jpeg')}
+        source={require('../../Dawensetting.png')}
         style={styles.header}
         imageStyle={styles.headerImage}
         resizeMode="cover"
@@ -594,29 +604,6 @@ export default function SettingsScreen() {
           <LogOut size={20} color={colors.error} />
           <Text style={styles.logoutText}>{t.settings.logout}</Text>
         </TouchableOpacity>
-
-        {/* Legal & Support section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Legal & Support</Text>
-          <View style={styles.sectionCard}>
-            {[
-              { label: 'Privacy Policy', onPress: () => router.push('/privacy' as any) },
-              { label: 'Terms of Service', onPress: () => router.push('/terms' as any) },
-              { label: 'Help & Support', onPress: () => setActiveModal('help') },
-              { label: 'Contact Support', onPress: () => Linking.openURL('mailto:support@dawen.app').catch(() => {}) },
-            ].map((item, idx, arr) => (
-              <TouchableOpacity
-                key={item.label}
-                style={[styles.settingRow, idx < arr.length - 1 && styles.settingRowBorder]}
-                onPress={item.onPress}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.settingLabel}>{item.label}</Text>
-                <ChevronRight size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
         <Text style={styles.copyrightText}>© 2026 DAWEN. All rights reserved.</Text>
       </ScrollView>

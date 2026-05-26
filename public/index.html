@@ -80,21 +80,26 @@
       }
     </style>
     <script>
-      // Once-per-session reload guard — prevents any code-driven reload loop.
-      // If location.reload() is called, it only fires once per browser session.
-      // Subsequent calls within the same session are silently ignored.
+      // Reload loop guard — prevents rapid reload loops from HMR or error recovery.
+      // Allows at most 1 programmatic reload per 30-second window using localStorage.
+      // Manual user refreshes (F5/Cmd+R) bypass this guard naturally.
       (function() {
-        var SESSION_KEY = 'dawen_reloaded_once';
+        var LS_KEY = 'dawen_last_auto_reload';
+        var WINDOW_MS = 30000; // 30 seconds
         var _nativeReload = window.location.reload.bind(window.location);
         Object.defineProperty(window.location, 'reload', {
           configurable: true,
           writable: true,
           value: function() {
-            if (sessionStorage.getItem(SESSION_KEY)) {
-              console.warn('[DAWEN] reload() blocked — already reloaded once this session');
-              return;
-            }
-            sessionStorage.setItem(SESSION_KEY, '1');
+            try {
+              var last = parseInt(localStorage.getItem(LS_KEY) || '0', 10);
+              var now = Date.now();
+              if (now - last < WINDOW_MS) {
+                console.warn('[DAWEN] reload() blocked — rate limited (' + Math.round((WINDOW_MS - (now - last)) / 1000) + 's remaining)');
+                return;
+              }
+              localStorage.setItem(LS_KEY, String(now));
+            } catch (e) {}
             _nativeReload();
           }
         });
