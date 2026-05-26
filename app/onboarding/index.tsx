@@ -196,7 +196,7 @@ export default function OnboardingWelcome() {
             <View style={styles.logoGlowInner} />
             <View style={styles.logoContainer}>
               <Image
-                source={require('../../Dawen1D.png')}
+                source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../../Dawen1D.png')}
                 style={styles.logoImage}
                 resizeMode="contain"
               />

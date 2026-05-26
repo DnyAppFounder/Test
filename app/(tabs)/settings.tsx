@@ -525,14 +525,14 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       <ImageBackground
-        source={require('../../Dawensetting.png')}
+        source={Platform.OS === 'web' ? { uri: '/Dawensetting.png' } : require('../../Dawensetting.png')}
         style={styles.header}
         resizeMode="cover"
       >
         <View style={styles.headerContent}>
           <View style={styles.headerLogoRow}>
             <View style={styles.headerLogoBadge}>
-              <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
+              <Image source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
             </View>
             <View>
               <Text style={styles.headerTitle}>{t.settings.title}</Text>

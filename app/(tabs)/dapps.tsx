@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Animated,
-  Image, ActivityIndicator, TextInput, RefreshControl, ImageBackground,
+  Image, ActivityIndicator, TextInput, RefreshControl, ImageBackground, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -979,14 +979,14 @@ export default function DawenCityPage() {
     <View style={pageStyles.container}>
       {!gameFullscreen && (
         <ImageBackground
-          source={require('../../Dawencity.png')}
+          source={Platform.OS === 'web' ? { uri: '/Dawencity.png' } : require('../../Dawencity.png')}
           style={pageStyles.header}
           resizeMode="cover"
         >
           <View style={pageStyles.headerInner}>
             <View style={pageStyles.headerLogoRow}>
               <View style={pageStyles.headerLogoBadge}>
-                <Image source={require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
+                <Image source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
               </View>
               <View>
                 <Text style={pageStyles.headerTitle}>Dawen City</Text>

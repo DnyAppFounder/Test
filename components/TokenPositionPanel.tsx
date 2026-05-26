@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, Image, Share, Pressable } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, Image, Share, Pressable, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Wallet, Share2, X, TrendingUp } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
@@ -199,7 +199,7 @@ export function TokenPositionPanel({
 
             <View style={styles.shareCardHeader}>
               <Image
-                source={require('../dawenlogo.jpeg')}
+                source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../dawenlogo.jpeg')}
                 style={styles.shareLogo}
                 resizeMode="contain"
               />

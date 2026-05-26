@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Animated,
-  useWindowDimensions, Image,
+  useWindowDimensions, Image, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -299,7 +299,7 @@ export function DawenMemoryDuel({ seed, mode, onGameEnd }: Props) {
                 ) : (
                   <View style={styles.cardBack}>
                     <Image
-                      source={require('../../dawenlogo.jpeg')}
+                      source={Platform.OS === 'web' ? { uri: '/Dawen1D.png' } : require('../../dawenlogo.jpeg')}
                       style={styles.cardBackLogo}
                       resizeMode="cover"
                     />
