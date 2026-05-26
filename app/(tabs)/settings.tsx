@@ -524,48 +524,23 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      {Platform.OS === 'web' ? (
-        <View style={[styles.header, {
-          backgroundImage: 'linear-gradient(rgba(5,0,15,0.30), rgba(5,0,15,0.55)), url(/Dawensetting.png)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-        } as any]}>
-          <View style={styles.headerContent}>
-            <View style={styles.headerLogoRow}>
-              <View style={styles.headerLogoBadge}>
-                <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
-              </View>
-              <View>
-                <Text style={styles.headerTitle}>{t.settings.title}</Text>
-                <Text style={styles.headerSub}>Wallet & Preferences</Text>
-              </View>
+      <ImageBackground
+        source={require('../../Dawensetting.png')}
+        style={styles.header}
+        resizeMode="cover"
+      >
+        <View style={styles.headerContent}>
+          <View style={styles.headerLogoRow}>
+            <View style={styles.headerLogoBadge}>
+              <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
+            </View>
+            <View>
+              <Text style={styles.headerTitle}>{t.settings.title}</Text>
+              <Text style={styles.headerSub}>Wallet & Preferences</Text>
             </View>
           </View>
         </View>
-      ) : (
-        <ImageBackground
-          source={require('../../Dawensetting.png')}
-          style={styles.header}
-          imageStyle={styles.headerImage}
-          resizeMode="cover"
-        >
-          <LinearGradient
-            colors={['rgba(5,0,15,0.30)', 'rgba(5,0,15,0.55)']}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.headerContent}>
-            <View style={styles.headerLogoRow}>
-              <View style={styles.headerLogoBadge}>
-                <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
-              </View>
-              <View>
-                <Text style={styles.headerTitle}>{t.settings.title}</Text>
-                <Text style={styles.headerSub}>Wallet & Preferences</Text>
-              </View>
-            </View>
-          </View>
-        </ImageBackground>
-      )}
+      </ImageBackground>
 
       <ScrollView
         style={styles.content}
@@ -1364,11 +1339,6 @@ const styles = StyleSheet.create({
   header: {
     height: 120,
     overflow: 'hidden',
-    position: 'relative',
-    backgroundColor: '#0D0520',
-  },
-  headerImage: {
-    opacity: 1,
   },
   headerContent: {
     position: 'absolute',

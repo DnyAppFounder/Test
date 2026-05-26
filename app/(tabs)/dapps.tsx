@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Animated,
-  Image, ActivityIndicator, TextInput, RefreshControl, ImageBackground, Platform,
+  Image, ActivityIndicator, TextInput, RefreshControl, ImageBackground,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -978,48 +978,23 @@ export default function DawenCityPage() {
   return (
     <View style={pageStyles.container}>
       {!gameFullscreen && (
-        Platform.OS === 'web' ? (
-          <View style={[pageStyles.header, {
-            backgroundImage: 'linear-gradient(rgba(5,0,15,0.30), rgba(5,0,15,0.55)), url(/Dawencity.png)',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          } as any]}>
-            <View style={pageStyles.headerInner}>
-              <View style={pageStyles.headerLogoRow}>
-                <View style={pageStyles.headerLogoBadge}>
-                  <Image source={require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
-                </View>
-                <View>
-                  <Text style={pageStyles.headerTitle}>Dawen City</Text>
-                  <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
-                </View>
+        <ImageBackground
+          source={require('../../Dawencity.png')}
+          style={pageStyles.header}
+          resizeMode="cover"
+        >
+          <View style={pageStyles.headerInner}>
+            <View style={pageStyles.headerLogoRow}>
+              <View style={pageStyles.headerLogoBadge}>
+                <Image source={require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
+              </View>
+              <View>
+                <Text style={pageStyles.headerTitle}>Dawen City</Text>
+                <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
               </View>
             </View>
           </View>
-        ) : (
-          <ImageBackground
-            source={require('../../Dawencity.png')}
-            style={pageStyles.header}
-            imageStyle={pageStyles.headerImage}
-            resizeMode="cover"
-          >
-            <LinearGradient
-              colors={['rgba(5,0,15,0.30)', 'rgba(5,0,15,0.55)']}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={pageStyles.headerInner}>
-              <View style={pageStyles.headerLogoRow}>
-                <View style={pageStyles.headerLogoBadge}>
-                  <Image source={require('../../dawenlogo.jpeg')} style={pageStyles.headerLogoImg} resizeMode="cover" />
-                </View>
-                <View>
-                  <Text style={pageStyles.headerTitle}>Dawen City</Text>
-                  <Text style={pageStyles.headerSubtitle}>Tokens • Games • Rankings</Text>
-                </View>
-              </View>
-            </View>
-          </ImageBackground>
-        )
+        </ImageBackground>
       )}
 
       {!gameFullscreen && (
@@ -1046,11 +1021,6 @@ const pageStyles = StyleSheet.create({
   header: {
     height: 120,
     overflow: 'hidden',
-    position: 'relative',
-    backgroundColor: '#0D0520',
-  },
-  headerImage: {
-    opacity: 1,
   },
   headerInner: {
     position: 'absolute',
