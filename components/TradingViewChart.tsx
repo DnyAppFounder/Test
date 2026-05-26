@@ -1360,15 +1360,19 @@ export function TradingViewChart({
   // For other modes we use the target density (visibleBuckets) to keep widths stable.
   const effectiveBuckets = visibleBuckets;
   const slotW = plotW / effectiveBuckets;
-  const MAX_CANDLE_W = isMobile ? 14 : 10;
-  const MAX_BAR_W    = isMobile ?  6 :  5;
+  const MAX_CANDLE_W = isMobile ? 16 : 12;
+  const MAX_BAR_W    = isMobile ?  7 :  6;
   // Body/tick widths derived from slotW so they never widen due to sparse data
   // Very sparse tokens (1-4 candles): use wider bodies so isolated candles are readable.
   const _vSparse = n > 0 && n < 5;
   const isOneMinuteTf = timeframe === '1m';
-  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2 : 1.5, slotW * (_vSparse ? 0.55 : 0.38)));
-  const minCandleW = isMobile ? (isOneMinuteTf ? 5 : (_vSparse ? 6 : 3)) : (isOneMinuteTf ? 4 : (_vSparse ? 5 : 2));
-  const candleW = Math.min(MAX_CANDLE_W, Math.max(minCandleW, slotW * (isMobile ? (_vSparse ? 0.80 : 0.62) : (_vSparse ? 0.70 : 0.55))));
+  const isFiveMinuteTf = timeframe === '5m';
+  const isShortTf = isOneMinuteTf || isFiveMinuteTf;
+  const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2.5 : 2, slotW * (_vSparse ? 0.60 : 0.42)));
+  const minCandleW = isMobile
+    ? (isOneMinuteTf ? 6 : isFiveMinuteTf ? 5 : (_vSparse ? 7 : 4))
+    : (isOneMinuteTf ? 5 : isFiveMinuteTf ? 4 : (_vSparse ? 6 : 3));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(minCandleW, slotW * (isMobile ? (_vSparse ? 0.82 : 0.68) : (_vSparse ? 0.72 : 0.62))));
 
   function tsToX(ts: number): number {
     return PAD.left + ((ts - xLeft) / xVisibleMs) * plotW;
@@ -1847,16 +1851,17 @@ export function TradingViewChart({
     ? baseLinePoints[baseLinePoints.length - 1]
     : { x: PAD.left, y: yOf(fallbackGuideValue), ts: xLeft, price: fallbackGuideValue };
 
-  // Pump-style live hold: line modes may extend visually to the live edge at the
-  // SAME price as the last rendered point. This creates live time movement without
-  // creating candles, volume, or fake vertical price changes. It is flat by design,
-  // so it cannot fold back on itself.
-  const liveHoldTs = xLeft + xVisibleMs * 0.94;
-  const liveHoldX = Math.max(PAD.left, Math.min(safeRightX, tsToX(liveHoldTs)));
-  // Do not append a fake flat segment after the last real candle.
-  // The chart is live because the viewport/time axis moves via the animation engine,
-  // not because we draw extra data points. This avoids the "extra fake line" look.
-  const shouldAppendLiveHold = false;
+  // Live-hold point: extend the line horizontally to the right edge of the live viewport
+  // at the same price as the last real candle. This is a flat segment — no vertical
+  // movement, no fake price, no fake trade. The viewport already moves via RAF so the
+  // candles slide left over time; the hold segment gives the chart that Pump.fun feel of
+  // always touching the right edge even between trades.
+  // Only append in live mode (no user pan) so the hold doesn't distort panned views.
+  const liveHoldTs = rightTime - bucketMs * 0.5;
+  const liveHoldX = Math.min(safeRightX, tsToX(liveHoldTs));
+  const shouldAppendLiveHold = animEngine.state.isLiveMode &&
+    baseLinePoints.length > 0 &&
+    liveHoldX > lastBasePoint.x + 2;
 
   const linePoints: LinePoint[] = shouldAppendLiveHold
     ? [...baseLinePoints, { x: liveHoldX, y: lastBasePoint.y, ts: liveHoldTs, price: lastBasePoint.price }]
@@ -1870,33 +1875,72 @@ export function TradingViewChart({
   const lastX = lastLinePoint.x;
   const lastY = lastLinePoint.y;
 
-  // Kept for backwards-compatible JSX below; actual continuation rendering is disabled.
   const contRightX = lastX;
   const contY = lastY;
   const showContinuation = false;
 
-  const continuousLinePath = linePoints.map((pt, j) => {
-    const x = pt.x.toFixed(1);
-    const y = pt.y.toFixed(1);
-    return `${j === 0 ? 'M' : 'L'}${x},${y}`;
-  }).join(' ');
+  // Gap threshold: a gap larger than 3× bucketMs means the two candles are not adjacent
+  // in real trading time and should NOT be connected by a diagonal line. Use M (moveto)
+  // to lift the pen and start a new sub-path so no phantom line crosses the gap.
+  const GAP_BREAK_FACTOR = 3;
 
+  function buildGapAwareStrokePath(pts: LinePoint[]): string {
+    if (pts.length === 0) return '';
+    const parts: string[] = [];
+    let segStart = true;
+    for (let j = 0; j < pts.length; j++) {
+      const x = pts[j].x.toFixed(1);
+      const y = pts[j].y.toFixed(1);
+      if (segStart) {
+        parts.push(`M${x},${y}`);
+        segStart = false;
+      } else {
+        const gapMs = pts[j].ts - pts[j - 1].ts;
+        if (gapMs > bucketMs * GAP_BREAK_FACTOR) {
+          // Lift pen: jump to new position without drawing a line across the gap.
+          parts.push(`M${x},${y}`);
+        } else {
+          parts.push(`L${x},${y}`);
+        }
+      }
+    }
+    return parts.join(' ');
+  }
+
+  // Gap-aware area fill: each contiguous segment is closed to the bottom individually
+  // so no phantom fill spans across an empty gap.
+  function buildGapAwareAreaPath(pts: LinePoint[]): string {
+    if (pts.length < 2) return '';
+    const segments: LinePoint[][] = [];
+    let seg: LinePoint[] = [pts[0]];
+    for (let j = 1; j < pts.length; j++) {
+      const gapMs = pts[j].ts - pts[j - 1].ts;
+      if (gapMs > bucketMs * GAP_BREAK_FACTOR) {
+        if (seg.length >= 2) segments.push(seg);
+        seg = [pts[j]];
+      } else {
+        seg.push(pts[j]);
+      }
+    }
+    if (seg.length >= 2) segments.push(seg);
+    return segments.map(s => {
+      const first = s[0];
+      const last  = s[s.length - 1];
+      const line  = s.map((p, k) =>
+        `${k === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`
+      ).join(' ');
+      return `${line} L${last.x.toFixed(1)},${bottomY} L${first.x.toFixed(1)},${bottomY} Z`;
+    }).join(' ');
+  }
+
+  const continuousLinePath = buildGapAwareStrokePath(linePoints);
   const lastPriceGuidePath = `M${PAD.left.toFixed(1)},${lastY.toFixed(1)} L${safeRightX.toFixed(1)},${lastY.toFixed(1)}`;
 
-  // The stroke path is built from real rendered candles plus the optional flat
-  // live-hold point. No extra diagonal/fake segment is appended.
   const baseLinePath = linePoints.length >= 2 ? continuousLinePath : lastPriceGuidePath;
   const strokePath = baseLinePath;
 
-  // One continuous area fill for Area/Mountain/Pulse. It closes only once at the bottom of
-  // the plot, so it cannot create separate purple rectangles between sparse segments.
-  // We keep this as a visual fill only; it does not imply extra trades/candles.
   const shouldFillLineMode = n >= 2;
-  const areaBaseClose = `${lastX.toFixed(1)},${bottomY}`;
-  const firstLineX = linePoints.length > 0 ? linePoints[0].x : PAD.left;
-  const areaPath = shouldFillLineMode
-    ? `${baseLinePath} L${areaBaseClose} L${firstLineX.toFixed(1)},${bottomY} Z`
-    : '';
+  const areaPath = shouldFillLineMode ? buildGapAwareAreaPath(linePoints) : '';
 
   // Dots are restricted to the final live/current point only.
   // No constellation of isolated dots: they made sparse charts look broken.
@@ -2175,7 +2219,7 @@ export function TradingViewChart({
                 const up      = c.close >= c.open;
                 const col     = up ? '#10B981' : '#EC4899';
                 const fillCol = up ? '#10B981' : '#EC4899';
-                const wickW   = 1;
+                const wickW   = candleW <= 4 ? 1 : 1.5;
                 const cx      = xOf(i);
                 const bodyTop = yOf(Math.max(c.open, c.close));
                 const bodyBot = yOf(Math.min(c.open, c.close));
@@ -2183,7 +2227,7 @@ export function TradingViewChart({
                 // Keep 1m/flat candles readable. A 1px doji line looked like a
                 // random tick/bar instead of a candle on mobile. This only changes
                 // visual body height; OHLC data remains untouched.
-                const minBodyH = isOneMinuteTf ? 2.5 : 1.5;
+                const minBodyH = isOneMinuteTf ? 3 : isFiveMinuteTf ? 2.5 : 2;
                 const bodyH = Math.max(minBodyH, rawH);
                 const bodyY = rawH < minBodyH ? bodyTop - minBodyH / 2 : bodyTop;
                 return (
