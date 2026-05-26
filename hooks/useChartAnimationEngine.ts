@@ -1,57 +1,23 @@
-/**
- * useChartAnimationEngine
- *
- * Controls the live viewport clock and pan state for TradingViewChart.
- * Owns ONLY visual time movement — never creates candles, trades, volume, or prices.
- *
- * Responsibilities:
- *   - requestAnimationFrame loop (paused when tab hidden / chart off-screen)
- *   - visualRightTime — live clock that advances in real time, frozen while user pans
- *   - panOffsetMs — how far the user has scrolled into history (0 = live edge)
- *   - isLiveMode — true when panOffsetMs === 0
- *   - Return to Live — snap back to live edge cleanly
- *   - Pause/resume based on Page Visibility API and IntersectionObserver
- *
- * Not responsible for:
- *   - OHLCV data loading (chartDataService)
- *   - candle creation or mutation
- *   - price calculation or quote updates
- *   - wallet/trading logic
- */
-
-import { useRef, useState, useEffect, useCallback } from 'react';
-import { Platform } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface ChartAnimationState {
-  /** Unix-ms timestamp used as the right edge of the live viewport. */
+  /** Right edge of the live viewport in unix ms. This is the only live clock. */
   visualRightTime: number;
-  /** How many ms the user has scrolled into history. 0 = live edge. */
+  /** How far the user is panned back from live. 0 = live edge. */
   panOffsetMs: number;
-  /** True when panOffsetMs === 0 (chart follows live time). */
+  /** True when panOffsetMs is essentially zero. */
   isLiveMode: boolean;
+  /** True while the user is actively dragging the chart. */
+  isPanning: boolean;
 }
 
 export interface ChartAnimationActions {
-  /** Call when a horizontal pan gesture starts (touch or mouse-down). */
   onPanStart: () => void;
-  /**
-   * Call on each gesture move frame.
-   * Adds a relative time offset to the viewport.
-   * The chart component converts gesture direction into ms.
-   */
   onPanDelta: (deltaMs: number) => void;
-  /** Set the absolute pan offset in ms during a gesture. Safer than delta when React state is throttled. */
   setPanOffsetMs: (ms: number) => void;
-  /** Call when gesture ends (touch-up, mouse-up, terminate). */
   onPanEnd: () => void;
-  /** Snap the viewport back to the live edge. */
   returnToLive: () => void;
-  /** Notify the engine when the chart SVG enters or leaves the viewport. */
   setChartVisible: (visible: boolean) => void;
-  /**
-   * Apply an auto-scroll correction (e.g. after data loads and last candle is
-   * outside the live window). Ignored if the user has already panned manually.
-   */
   setInitialPanOffsetMs: (ms: number) => void;
 }
 
@@ -60,126 +26,150 @@ export interface UseChartAnimationEngineResult {
   actions: ChartAnimationActions;
 }
 
-// RAF fires at display frequency but React state updates are throttled.
-const RENDER_INTERVAL_MOBILE  =  50; // ~20fps — smooth enough on mobile without overheating
-const RENDER_INTERVAL_DESKTOP =  16; // ~60fps — full smooth animation on desktop
+const EPS_LIVE_MS = 80;
+const MOBILE_FRAME_MS = 16;
+const DESKTOP_FRAME_MS = 16;
 
 function isMobileBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;
-  return /Mobi|Android/i.test(navigator.userAgent);
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-export function useChartAnimationEngine(
-  /** Maximum allowed pan-back in ms (normally = Date.now() - oldestCandle.timestamp). */
-  maxPanBackMs: number,
-): UseChartAnimationEngineResult {
+/**
+ * DAWEN chart animation engine.
+ *
+ * This hook owns viewport time only. It never creates candles, prices, trades, or volume.
+ * Pump-style behavior is achieved by moving the whole viewport with visualRightTime:
+ *   xLeft = visualRightTime - panOffsetMs - visibleMs
+ *
+ * The renderer must use that same xLeft for line, candles, volumes, grid, time axis and crosshair.
+ */
+export function useChartAnimationEngine(maxPanBackMs: number): UseChartAnimationEngineResult {
+  const maxPanBackMsRef = useRef(Math.max(0, maxPanBackMs || 0));
+  const panOffsetMsRef = useRef(0);
+  const visualRightTimeRef = useRef(Date.now());
+  const chartVisibleRef = useRef(true);
+  const isPanningRef = useRef(false);
+  const userHasPannedRef = useRef(false);
+  const lastClockRef = useRef(Date.now());
 
-  // ── Internal refs (read-only inside RAF closure) ────────────────────────────
-  const isPanningRef        = useRef(false);
-  const chartVisibleRef     = useRef(true);
-  const panOffsetMsRef      = useRef(0);
-  const visualRightTimeRef  = useRef(Date.now());
-  const maxPanBackMsRef     = useRef(maxPanBackMs);
-  // Track whether any user-initiated pan has occurred so auto-corrections
-  // (setInitialPanOffsetMs) are accepted only before the first manual pan.
-  const userHasPannedRef    = useRef(false);
+  const [visualRightTime, setVisualRightTime] = useState(() => visualRightTimeRef.current);
+  const [panOffsetMsState, setPanOffsetMsState] = useState(0);
+  const [isPanningState, setIsPanningState] = useState(false);
 
-  // Keep maxPanBackMs current without recreating the RAF effect.
-  useEffect(() => { maxPanBackMsRef.current = maxPanBackMs; }, [maxPanBackMs]);
-
-  // ── React state (triggers re-renders) ──────────────────────────────────────
-  const [visualRightTime, setVisualRightTime] = useState(() => Date.now());
-  const [panOffsetMs,     setPanOffsetMs]     = useState(0);
-
-  const isLiveMode = panOffsetMs < 50;
-
-  // ── RAF clock ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    let rafId    = 0;
-    let lastRender = 0;
-    let tabHidden  = false;
-    const INTERVAL = isMobileBrowser() ? RENDER_INTERVAL_MOBILE : RENDER_INTERVAL_DESKTOP;
+    maxPanBackMsRef.current = Math.max(0, maxPanBackMs || 0);
+    if (panOffsetMsRef.current > maxPanBackMsRef.current) {
+      const clamped = Math.max(0, maxPanBackMsRef.current);
+      panOffsetMsRef.current = clamped;
+      setPanOffsetMsState(clamped < EPS_LIVE_MS ? 0 : clamped);
+    }
+  }, [maxPanBackMs]);
 
-    const onVisibilityChange = () => {
-      tabHidden = typeof document !== 'undefined' ? document.hidden : false;
+  useEffect(() => {
+    let rafId = 0;
+    let lastRender = 0;
+    let hidden = typeof document !== 'undefined' ? document.hidden : false;
+    const frameMs = isMobileBrowser() ? MOBILE_FRAME_MS : DESKTOP_FRAME_MS;
+
+    const onVisibility = () => {
+      hidden = typeof document !== 'undefined' ? document.hidden : false;
+      lastClockRef.current = Date.now();
+      if (!hidden) {
+        visualRightTimeRef.current = Date.now();
+        setVisualRightTime(visualRightTimeRef.current);
+      }
     };
+
     if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibilityChange);
-      tabHidden = document.hidden;
+      document.addEventListener('visibilitychange', onVisibility);
     }
 
-    const tick = (now: number) => {
-      if (!tabHidden && chartVisibleRef.current) {
-        // Freeze the clock while the user is dragging so the viewport doesn't
-        // shift under their finger and create a fighting/snapping sensation.
+    const tick = (nowPerf: number) => {
+      const now = Date.now();
+      if (!hidden && chartVisibleRef.current) {
         if (!isPanningRef.current) {
-          visualRightTimeRef.current = Date.now();
+          // Move the LIVE VIEWPORT in real time. Not a fake price movement.
+          const dt = Math.max(0, Math.min(now - lastClockRef.current, 1000));
+          visualRightTimeRef.current += dt;
+          // Avoid long-term drift from browser sleep/throttle.
+          if (Math.abs(visualRightTimeRef.current - now) > 1500) {
+            visualRightTimeRef.current = now;
+          }
         }
-        if (now - lastRender >= INTERVAL) {
-          lastRender = now;
+        lastClockRef.current = now;
+        if (nowPerf - lastRender >= frameMs) {
+          lastRender = nowPerf;
           setVisualRightTime(visualRightTimeRef.current);
         }
+      } else {
+        lastClockRef.current = now;
       }
       rafId = requestAnimationFrame(tick);
     };
-    rafId = requestAnimationFrame(tick);
 
+    rafId = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(rafId);
       if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibilityChange);
+        document.removeEventListener('visibilitychange', onVisibility);
       }
     };
-  }, []); // intentionally empty — single RAF loop for the component lifetime
-
-  // ── Actions ─────────────────────────────────────────────────────────────────
-  const onPanStart = useCallback(() => {
-    isPanningRef.current    = true;
-    userHasPannedRef.current = true;
   }, []);
 
   const clampPanOffset = useCallback((ms: number) => {
-    const maxBack = maxPanBackMsRef.current;
-    const clamped = Math.max(0, Math.min(maxBack, ms));
-    return clamped < 50 ? 0 : clamped;
+    const maxBack = Math.max(0, maxPanBackMsRef.current || 0);
+    const safe = Math.max(0, Math.min(maxBack, Number.isFinite(ms) ? ms : 0));
+    return safe < EPS_LIVE_MS ? 0 : safe;
   }, []);
 
-  const setPanOffsetMsAbsolute = useCallback((ms: number) => {
-    const clamped = clampPanOffset(ms);
-    panOffsetMsRef.current = clamped;
-    setPanOffsetMs(clamped);
+  const setPanOffsetMs = useCallback((ms: number) => {
+    const safe = clampPanOffset(ms);
+    panOffsetMsRef.current = safe;
+    setPanOffsetMsState(safe);
   }, [clampPanOffset]);
 
+  const onPanStart = useCallback(() => {
+    isPanningRef.current = true;
+    userHasPannedRef.current = true;
+    setIsPanningState(true);
+  }, []);
+
   const onPanDelta = useCallback((deltaMs: number) => {
-    setPanOffsetMsAbsolute(panOffsetMsRef.current + deltaMs);
-  }, [setPanOffsetMsAbsolute]);
+    setPanOffsetMs(panOffsetMsRef.current + deltaMs);
+  }, [setPanOffsetMs]);
 
   const onPanEnd = useCallback(() => {
     isPanningRef.current = false;
+    setIsPanningState(false);
+    lastClockRef.current = Date.now();
   }, []);
 
   const returnToLive = useCallback(() => {
-    panOffsetMsRef.current     = 0;
-    isPanningRef.current       = false;
-    userHasPannedRef.current   = false;
+    isPanningRef.current = false;
+    userHasPannedRef.current = false;
+    panOffsetMsRef.current = 0;
     visualRightTimeRef.current = Date.now();
-    setPanOffsetMs(0);
-    setVisualRightTime(Date.now());
+    lastClockRef.current = Date.now();
+    setIsPanningState(false);
+    setPanOffsetMsState(0);
+    setVisualRightTime(visualRightTimeRef.current);
   }, []);
 
   const setChartVisible = useCallback((visible: boolean) => {
     chartVisibleRef.current = visible;
+    lastClockRef.current = Date.now();
   }, []);
 
   const setInitialPanOffsetMs = useCallback((ms: number) => {
-    // Only accept auto-corrections when the user hasn't manually panned yet,
-    // otherwise we'd fight user intent by snapping the chart away mid-exploration.
     if (userHasPannedRef.current) return;
-    setPanOffsetMsAbsolute(ms);
-  }, [setPanOffsetMsAbsolute]);
+    setPanOffsetMs(ms);
+  }, [setPanOffsetMs]);
+
+  const isLiveMode = panOffsetMsState < EPS_LIVE_MS;
 
   return {
-    state:   { visualRightTime, panOffsetMs, isLiveMode },
-    actions: { onPanStart, onPanDelta, setPanOffsetMs: setPanOffsetMsAbsolute, onPanEnd, returnToLive, setChartVisible, setInitialPanOffsetMs },
+    state: { visualRightTime, panOffsetMs: panOffsetMsState, isLiveMode, isPanning: isPanningState },
+    actions: { onPanStart, onPanDelta, setPanOffsetMs, onPanEnd, returnToLive, setChartVisible, setInitialPanOffsetMs },
   };
 }
