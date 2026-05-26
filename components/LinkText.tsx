@@ -3,8 +3,10 @@ import { Text, Linking, TextStyle, StyleProp, Platform } from 'react-native';
 // Regex: matches http(s):// URLs and bare domain.tld/... patterns
 const URL_REGEX = /(?:https?:\/\/[^\s]+|(?<!\w)(?:[a-zA-Z0-9-]+\.)+(?:com|io|org|net|app|xyz|gg|co|dev|info|me|tv|finance|money|crypto|sol|trade|exchange)(?:\/[^\s]*)?)/g;
 
-// Regex: matches $CASHTAG patterns (uppercase letters and digits, 1-10 chars after $)
-const CASHTAG_REGEX = /^\$[A-Z0-9]{1,10}$/;
+// Cashtag: $SYMBOL where SYMBOL starts with a letter (not a digit — avoids $4.99 etc.)
+// Supports 1-15 chars of letters, digits, underscores after the leading letter.
+const CASHTAG_SPLIT = /(\$[A-Za-z][A-Za-z0-9_]{0,14})/g;
+const CASHTAG_TEST  = /^\$[A-Za-z][A-Za-z0-9_]{0,14}$/;
 
 interface Props {
   text: string;
@@ -18,7 +20,7 @@ interface Props {
 
 export default function LinkText({ text, style, linkStyle, onMentionPress, mentionStyle, onCashtagPress, isPremiumAuthor }: Props) {
   // Split by @mentions AND $CASHTAGS
-  const parts = text.split(/(@\w+|\$[A-Z0-9]{1,10})/g);
+  const parts = text.split(/(@\w+|\$[A-Za-z][A-Za-z0-9_]{0,14})/g);
 
   return (
     <Text style={style}>
@@ -37,20 +39,22 @@ export default function LinkText({ text, style, linkStyle, onMentionPress, menti
         }
 
         // $CASHTAG
-        if (CASHTAG_REGEX.test(part)) {
+        if (CASHTAG_TEST.test(part)) {
+          const symbol = part.slice(1).toUpperCase();
           if (isPremiumAuthor && onCashtagPress) {
+            // Premium author: render as green clickable cashtag
             return (
               <Text
                 key={i}
                 style={{ color: '#10B981', fontWeight: '700' }}
-                onPress={() => onCashtagPress(part.slice(1))}
+                onPress={() => onCashtagPress(symbol)}
               >
                 {part}
               </Text>
             );
           }
-          // Not premium or no handler — render as plain gray text
-          return <Text key={i}>{part}</Text>;
+          // Non-premium author: render as plain text (same color as rest)
+          return <Text key={i} style={style}>{part}</Text>;
         }
 
         // Check for URLs inside plain text segments

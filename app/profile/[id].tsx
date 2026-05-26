@@ -810,7 +810,8 @@ export default function ProfileScreen() {
 
         {/* Avatar + name row */}
         <View style={styles.profileTopRow}>
-          <View style={styles.avatarWrap}>
+          <View style={[styles.avatarWrap, isPremiumActive && styles.avatarWrapPremium]}>
+            {isPremiumActive && <View style={styles.premiumGlowRing} />}
             {profile?.avatar_url ? (
               <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
             ) : (
@@ -1120,6 +1121,39 @@ export default function ProfileScreen() {
                     <Text style={styles.premiumTitle}>Dawen Premium</Text>
                     <Text style={styles.premiumDesc}>
                       Gold badge with star next to your name, everywhere on the platform. Subscription renews at the same price.
+                    </Text>
+                  </View>
+
+                  {/* Premium Benefits */}
+                  <Text style={styles.editLabel}>Premium Benefits</Text>
+                  <View style={styles.benefitsGrid}>
+                    {[
+                      { emoji: '⭐', title: 'Gold Star Badge', text: 'Stand out with a gold star badge next to your name across DAWEN.' },
+                      { emoji: '$', title: 'Clickable Cashtags', text: 'Create clickable green cashtags in posts, replies, comments, and chats.' },
+                      { emoji: '💬', title: 'Create Group Chats', text: 'Create group conversations and community spaces.' },
+                      { emoji: '🎞', title: 'GIF Posting', text: 'Post GIFs in Dawen Pulse, replies, comments, and messages.' },
+                      { emoji: '★', title: 'Expanded Watchlist', text: 'Track up to 100 tokens instead of 10.' },
+                      { emoji: '🔔', title: 'More Price Alerts', text: 'Create up to 50 price alerts instead of 3.' },
+                      { emoji: '✦', title: 'Premium Profile Style', text: 'Gold profile border and premium glow on your profile.' },
+                      { emoji: '⚡', title: 'Early Access', text: 'Get early access to upcoming DAWEN features before public release.' },
+                    ].map((b, i) => (
+                      <View key={i} style={styles.benefitRow}>
+                        <View style={styles.benefitEmojiWrap}>
+                          <Text style={styles.benefitEmoji}>{b.emoji}</Text>
+                        </View>
+                        <View style={styles.benefitText}>
+                          <Text style={styles.benefitTitle}>{b.title}</Text>
+                          <Text style={styles.benefitDesc}>{b.text}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Coming Soon */}
+                  <View style={styles.benefitsComingSoon}>
+                    <Text style={styles.benefitsComingSoonTitle}>Coming Soon</Text>
+                    <Text style={styles.benefitsComingSoonText}>
+                      Dawen World cosmetics, boutique perks, premium rooms, and more app utilities will be added later.
                     </Text>
                   </View>
 
@@ -1751,6 +1785,21 @@ const styles = StyleSheet.create({
     shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5, shadowRadius: 12, elevation: 12,
   },
+  avatarWrapPremium: {
+    borderColor: '#FBBF24',
+    shadowColor: '#FBBF24',
+    shadowOpacity: 0.7,
+    shadowRadius: 18,
+    elevation: 16,
+  },
+  premiumGlowRing: {
+    position: 'absolute',
+    top: -6, left: -6, right: -6, bottom: -6,
+    borderRadius: 58,
+    borderWidth: 2,
+    borderColor: 'rgba(251,191,36,0.4)',
+    zIndex: -1,
+  },
   avatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#1A1A28' },
   avatarFallback: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#1A1A28', justifyContent: 'center', alignItems: 'center' },
   premiumBadgeOnAvatar: {
@@ -1913,6 +1962,16 @@ const styles = StyleSheet.create({
   premiumPayBtn: { backgroundColor: '#D97706', borderRadius: borderRadius.full, paddingVertical: spacing.md, alignItems: 'center', flexDirection: 'row', gap: spacing.sm, justifyContent: 'center', marginTop: spacing.lg },
   premiumPayBtnText: { fontSize: fontSize.md, fontWeight: '700', color: colors.white },
   premiumNote: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center', marginTop: spacing.lg, lineHeight: 18 },
+  benefitsGrid: { gap: 8, marginBottom: spacing.md },
+  benefitRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: 'rgba(251,191,36,0.05)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(251,191,36,0.12)', padding: 10 },
+  benefitEmojiWrap: { width: 28, height: 28, borderRadius: 8, backgroundColor: 'rgba(251,191,36,0.12)', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  benefitEmoji: { fontSize: 14 },
+  benefitText: { flex: 1 },
+  benefitTitle: { fontSize: 12, fontWeight: '800', color: '#FBBF24', marginBottom: 2 },
+  benefitDesc: { fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 16 },
+  benefitsComingSoon: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', padding: 10, marginBottom: spacing.md },
+  benefitsComingSoonTitle: { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.5)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+  benefitsComingSoonText: { fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 16 },
   premiumDoneIcon: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center', position: 'relative', marginBottom: spacing.sm },
   saveBtnDisabled: { opacity: 0.5 },
 

@@ -34,6 +34,7 @@ import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { SolanaPriceService } from '@/services/solana/priceService';
 import { payToTreasury, TREASURY_WALLET, PayStatus } from '@/services/treasuryService';
 import { supabase } from '@/lib/supabase';
+import { PremiumUpsellModal } from '@/components/PremiumUpsellModal';
 
 type WhoCanReply = 'everyone' | 'followers' | 'mentioned';
 type Visibility = 'public' | 'followers';
@@ -87,6 +88,10 @@ export default function CreatePostScreen() {
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
   const [solUsdPrice, setSolUsdPrice] = useState<number>(0);
   const [promotePayStatus, setPromotePayStatus] = useState<PayStatus>('idle');
+
+  // Premium upsell
+  const [showPremiumUpsell, setShowPremiumUpsell] = useState(false);
+  const [premiumUpsellNote, setPremiumUpsellNote] = useState('');
 
   // GIF
   const [gifUrl, setGifUrl] = useState<string | null>(null);
@@ -306,6 +311,11 @@ export default function CreatePostScreen() {
   }, [TENOR_KEY]);
 
   const openGifPicker = () => {
+    if (!isPremium) {
+      setPremiumUpsellNote('GIF posting is a Premium feature.');
+      setShowPremiumUpsell(true);
+      return;
+    }
     setGifQuery('');
     setGifResults([]);
     setShowGifPicker(true);
@@ -454,6 +464,11 @@ export default function CreatePostScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <PremiumUpsellModal
+        visible={showPremiumUpsell}
+        onClose={() => setShowPremiumUpsell(false)}
+        featureNote={premiumUpsellNote}
+      />
       <View style={styles.container}>
         {/* Top bar */}
         <View style={styles.topBar}>

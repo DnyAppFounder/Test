@@ -7,12 +7,21 @@ import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/
 import { AlertsService, PriceAlert } from '@/services/alertsService';
 import { liveMarketService, LiveToken } from '@/services/liveMarketService';
 import { useWallet } from '@/contexts/WalletContext';
+import { useProfile } from '@/contexts/ProfileContext';
+import { VerificationService } from '@/services/verificationService';
+import { PremiumUpsellModal } from '@/components/PremiumUpsellModal';
+
+const FREE_ALERT_LIMIT = 3;
+const PREMIUM_ALERT_LIMIT = 50;
 
 export default function PriceAlertsScreen() {
   const router = useRouter();
   const { activeAddress } = useWallet();
+  const { profile } = useProfile();
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
+  const [showPremiumUpsell, setShowPremiumUpsell] = useState(false);
+  const [premiumUpsellNote, setPremiumUpsellNote] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -178,12 +187,34 @@ export default function PriceAlertsScreen() {
 
   return (
     <LinearGradient colors={colors.gradient.primary as any} style={styles.container}>
+      <PremiumUpsellModal
+        visible={showPremiumUpsell}
+        onClose={() => setShowPremiumUpsell(false)}
+        featureNote={premiumUpsellNote}
+      />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Price Alerts</Text>
-        <TouchableOpacity onPress={() => setShowCreateModal(true)} style={styles.addButton}>
+        <TouchableOpacity
+          onPress={() => {
+            const isPremium = profile ? VerificationService.isPremiumActive(profile as any) : false;
+            const limit = isPremium ? PREMIUM_ALERT_LIMIT : FREE_ALERT_LIMIT;
+            const activeAlerts = alerts.filter(a => !a.triggered).length;
+            if (activeAlerts >= limit) {
+              setPremiumUpsellNote(
+                isPremium
+                  ? `You have reached the maximum of ${PREMIUM_ALERT_LIMIT} active price alerts.`
+                  : `Free users can create up to ${FREE_ALERT_LIMIT} price alerts. Upgrade to Premium for more alerts.`
+              );
+              setShowPremiumUpsell(!isPremium);
+              return;
+            }
+            setShowCreateModal(true);
+          }}
+          style={styles.addButton}
+        >
           <Plus size={24} color={colors.textPrimary} />
         </TouchableOpacity>
       </View>
@@ -197,7 +228,7 @@ export default function PriceAlertsScreen() {
           <BellOff size={64} color={colors.textMuted} />
           <Text style={styles.emptyText}>No price alerts set</Text>
           <Text style={styles.emptySubtext}>Get notified when prices reach your targets</Text>
-          <TouchableOpacity style={styles.createFirstButton} onPress={() => setShowCreateModal(true)}>
+          <TouchableOpacity style={styles.createFirstButton} onPress={() => setShowCreateModal(true)} >
             <Text style={styles.createFirstButtonText}>Create Your First Alert</Text>
           </TouchableOpacity>
         </View>

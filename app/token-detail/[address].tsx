@@ -53,11 +53,16 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TokenAboutCard } from '@/components/TokenAboutCard';
 import { TokenPositionPanel } from '@/components/TokenPositionPanel';
 import { SocialService } from '@/services/socialService';
+import { VerificationService } from '@/services/verificationService';
+import { PremiumUpsellModal } from '@/components/PremiumUpsellModal';
 import {
   resolveAddressLabel,
   batchResolveOwnerPrograms,
   AddressLabel,
 } from '@/services/knownAddressResolver';
+
+const FREE_WATCHLIST_LIMIT = 10;
+const PREMIUM_WATCHLIST_LIMIT = 100;
 
 type BottomTab = 'chat' | 'activity' | 'transactions' | 'holders';
 
@@ -116,6 +121,8 @@ export default function TokenDetailScreen() {
   const [alertType, setAlertType] = useState<'above' | 'below'>('above');
   const [alertPrice, setAlertPrice] = useState('');
   const [alertSaving, setAlertSaving] = useState(false);
+  const [showPremiumUpsell, setShowPremiumUpsell] = useState(false);
+  const [premiumUpsellNote, setPremiumUpsellNote] = useState('');
 
   // Live token state from shared store (10s poll + Supabase realtime candles)
   const liveData = useLiveToken(address ?? null);
@@ -305,6 +312,21 @@ export default function TokenDetailScreen() {
   const toggleWatchlist = async () => {
     if (!token || !profile?.id) return;
     const wasWatchlisted = isWatchlisted;
+    if (!wasWatchlisted) {
+      // Enforce limit before adding
+      const isPremium = VerificationService.isPremiumActive(profile as any);
+      const limit = isPremium ? PREMIUM_WATCHLIST_LIMIT : FREE_WATCHLIST_LIMIT;
+      const currentList = await watchlistService.getWatchlist(profile.id).catch(() => []);
+      if (currentList.length >= limit) {
+        setPremiumUpsellNote(
+          isPremium
+            ? `You have reached the maximum watchlist size of ${PREMIUM_WATCHLIST_LIMIT} tokens.`
+            : `Free users can save up to ${FREE_WATCHLIST_LIMIT} tokens. Upgrade to Premium for an expanded watchlist.`
+        );
+        setShowPremiumUpsell(!isPremium);
+        return;
+      }
+    }
     const success = await watchlistService.toggleWatchlist(token.address, token.symbol, token.name, profile.id).catch(() => false);
     if (success) {
       setIsWatchlisted(!wasWatchlisted);
@@ -473,6 +495,11 @@ export default function TokenDetailScreen() {
 
   return (
     <View style={styles.container}>
+      <PremiumUpsellModal
+        visible={showPremiumUpsell}
+        onClose={() => setShowPremiumUpsell(false)}
+        featureNote={premiumUpsellNote}
+      />
       {/* Compact top bar: < SYMBOL on left | icons on right */}
       <View style={styles.topBar}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>

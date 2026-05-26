@@ -37,6 +37,8 @@ import PostCard, { timeAgo } from '@/components/PostCard';
 import VerificationBadge from '@/components/VerificationBadge';
 // NotificationBanner is handled globally in _layout.tsx
 import { supabase } from '@/lib/supabase';
+import { VerificationService } from '@/services/verificationService';
+import { PremiumUpsellModal } from '@/components/PremiumUpsellModal';
 
 type TopTab = 'feed' | 'profile' | 'messages' | 'notifications';
 type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
@@ -89,6 +91,10 @@ export default function CommunityScreen() {
   const [composeSearch, setComposeSearch] = useState('');
   const [composeResults, setComposeResults] = useState<any[]>([]);
   const [composeSearching, setComposeSearching] = useState(false);
+
+  // Premium upsell
+  const [showPremiumUpsell, setShowPremiumUpsell] = useState(false);
+  const [premiumUpsellNote, setPremiumUpsellNote] = useState('');
 
   // Group chat creation
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -1372,6 +1378,11 @@ export default function CommunityScreen() {
 
   return (
     <View style={styles.container}>
+      <PremiumUpsellModal
+        visible={showPremiumUpsell}
+        onClose={() => setShowPremiumUpsell(false)}
+        featureNote={premiumUpsellNote}
+      />
       {/* Nebula background gradient */}
       <LinearGradient
         colors={['#0D0618', '#130A24', '#0A0A14', '#0D0618']}
@@ -1392,7 +1403,15 @@ export default function CommunityScreen() {
             <TouchableOpacity
               style={[styles.composeBtn, { backgroundColor: 'rgba(139,92,246,0.2)', borderWidth: 1, borderColor: 'rgba(139,92,246,0.4)' }]}
               activeOpacity={0.85}
-              onPress={() => { setGroupName(''); setGroupSelectedMembers([]); setGroupMemberSearch(''); setGroupMemberResults([]); setGroupCreateError(''); setShowGroupModal(true); }}
+              onPress={() => {
+                const isPremium = profile ? VerificationService.isPremiumActive(profile as any) : false;
+                if (!isPremium) {
+                  setPremiumUpsellNote('Group chat creation is a Premium feature.');
+                  setShowPremiumUpsell(true);
+                  return;
+                }
+                setGroupName(''); setGroupSelectedMembers([]); setGroupMemberSearch(''); setGroupMemberResults([]); setGroupCreateError(''); setShowGroupModal(true);
+              }}
             >
               <Users size={17} color={colors.primary} strokeWidth={2.5} />
             </TouchableOpacity>
