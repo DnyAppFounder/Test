@@ -91,7 +91,7 @@ export function useChartAnimationEngine(
   const [visualRightTime, setVisualRightTime] = useState(() => Date.now());
   const [panOffsetMs,     setPanOffsetMs]     = useState(0);
 
-  const isLiveMode = panOffsetMs === 0;
+  const isLiveMode = panOffsetMs < 50;
 
   // ── RAF clock ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -140,7 +140,8 @@ export function useChartAnimationEngine(
 
   const clampPanOffset = useCallback((ms: number) => {
     const maxBack = maxPanBackMsRef.current;
-    return Math.max(0, Math.min(maxBack, ms));
+    const clamped = Math.max(0, Math.min(maxBack, ms));
+    return clamped < 50 ? 0 : clamped;
   }, []);
 
   const setPanOffsetMsAbsolute = useCallback((ms: number) => {
