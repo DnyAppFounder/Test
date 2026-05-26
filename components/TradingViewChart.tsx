@@ -1887,43 +1887,70 @@ export function TradingViewChart({
   function buildGapAwareStrokePath(pts: LinePoint[]): string {
     if (pts.length === 0) return '';
     const parts: string[] = [];
-    let segStart = true;
+    // Track segment starts to detect isolated single-point segments.
+    // For isolated points, draw a tiny horizontal stub so strokeLinecap="round"
+    // renders a visible dot instead of an invisible zero-length path segment.
+    let segStartIdx = 0;
     for (let j = 0; j < pts.length; j++) {
       const x = pts[j].x.toFixed(1);
       const y = pts[j].y.toFixed(1);
-      if (segStart) {
+      if (j === segStartIdx) {
         parts.push(`M${x},${y}`);
-        segStart = false;
       } else {
         const gapMs = pts[j].ts - pts[j - 1].ts;
         if (gapMs > bucketMs * GAP_BREAK_FACTOR) {
+          // Check if the previous segment was a single isolated point — draw a stub
+          if (j - 1 === segStartIdx) {
+            const px = pts[j - 1].x;
+            const py = pts[j - 1].y.toFixed(1);
+            const stub = (slotW * 0.15).toFixed(1);
+            parts.push(`M${(px - parseFloat(stub)).toFixed(1)},${py} L${(px + parseFloat(stub)).toFixed(1)},${py}`);
+          }
           // Lift pen: jump to new position without drawing a line across the gap.
           parts.push(`M${x},${y}`);
+          segStartIdx = j;
         } else {
           parts.push(`L${x},${y}`);
         }
       }
+    }
+    // Handle trailing isolated point
+    if (pts.length > 0 && pts.length - 1 === segStartIdx && pts.length > 1) {
+      const px = pts[segStartIdx].x;
+      const py = pts[segStartIdx].y.toFixed(1);
+      const stub = (slotW * 0.15).toFixed(1);
+      parts.push(`M${(px - parseFloat(stub)).toFixed(1)},${py} L${(px + parseFloat(stub)).toFixed(1)},${py}`);
     }
     return parts.join(' ');
   }
 
   // Gap-aware area fill: each contiguous segment is closed to the bottom individually
   // so no phantom fill spans across an empty gap.
+  // Single-point segments are rendered as a thin vertical sliver so isolated candles
+  // don't cause the area fill to vanish and leave disconnected vertical blocks.
   function buildGapAwareAreaPath(pts: LinePoint[]): string {
-    if (pts.length < 2) return '';
+    if (pts.length === 0) return '';
     const segments: LinePoint[][] = [];
     let seg: LinePoint[] = [pts[0]];
     for (let j = 1; j < pts.length; j++) {
       const gapMs = pts[j].ts - pts[j - 1].ts;
       if (gapMs > bucketMs * GAP_BREAK_FACTOR) {
-        if (seg.length >= 2) segments.push(seg);
+        segments.push(seg);
         seg = [pts[j]];
       } else {
         seg.push(pts[j]);
       }
     }
-    if (seg.length >= 2) segments.push(seg);
+    segments.push(seg);
     return segments.map(s => {
+      if (s.length === 1) {
+        // Single isolated point: render as a hairline vertical fill so area doesn't disappear
+        const p = s[0];
+        const px = p.x.toFixed(1);
+        const py = p.y.toFixed(1);
+        const hw = (slotW * 0.3).toFixed(1);
+        return `M${(p.x - parseFloat(hw)).toFixed(1)},${py} L${(p.x + parseFloat(hw)).toFixed(1)},${py} L${(p.x + parseFloat(hw)).toFixed(1)},${bottomY} L${(p.x - parseFloat(hw)).toFixed(1)},${bottomY} Z`;
+      }
       const first = s[0];
       const last  = s[s.length - 1];
       const line  = s.map((p, k) =>
@@ -2221,6 +2248,8 @@ export function TradingViewChart({
                 const fillCol = up ? '#10B981' : '#EC4899';
                 const wickW   = candleW <= 4 ? 1 : 1.5;
                 const cx      = xOf(i);
+                const yHigh   = yOf(c.high);
+                const yLow    = yOf(c.low);
                 const bodyTop = yOf(Math.max(c.open, c.close));
                 const bodyBot = yOf(Math.min(c.open, c.close));
                 const rawH    = bodyBot - bodyTop;
@@ -2229,11 +2258,15 @@ export function TradingViewChart({
                 // visual body height; OHLC data remains untouched.
                 const minBodyH = isOneMinuteTf ? 3 : isFiveMinuteTf ? 2.5 : 2;
                 const bodyH = Math.max(minBodyH, rawH);
-                const bodyY = rawH < minBodyH ? bodyTop - minBodyH / 2 : bodyTop;
+                // Center expanded body around the actual price midpoint (between bodyTop and bodyBot).
+                // Do NOT shift by minBodyH/2 from bodyTop alone — that floats the body above the wick
+                // for flat doji candles where bodyTop === bodyBot.
+                const bodyMidY = (bodyTop + bodyBot) / 2;
+                const bodyY = bodyH > rawH ? bodyMidY - bodyH / 2 : bodyTop;
                 return (
                   <G key={`cs${c.timestamp}`}>
                     {/* Thin wick — always centered on the same x as the candle body */}
-                    <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
+                    <Line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={col} strokeWidth={wickW} />
                     {/* Normal body: up = hollow outline, down = filled (TradingView convention) */}
                     {up ? (
                       <Rect x={cx - candleW / 2} y={bodyY} width={candleW} height={bodyH}
