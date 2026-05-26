@@ -49,8 +49,14 @@ export default function RewardsScreen() {
   const [decodeStatus, setDecodeStatus]           = useState<DecodeRewardStatus | null>(null);
   const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
   const [generatingCode, setGeneratingCode]       = useState(false);
+  const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ text, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   // Reset stale 'claiming' DB records then load fresh data
   const loadData = useCallback(async () => {
@@ -76,7 +82,9 @@ export default function RewardsScreen() {
         DecodeRewardService.getDecodeUserReward(activeAddress),
       ]);
 
-      if (code) setReferralCode(code.code);
+      if (code) {
+        setReferralCode(code.code);
+      }
       setReferrals(refs);
       // Filter decode reward out of the generic list — shown in its own dedicated card
       setRewards(rwds.filter(r => r.reason !== 'decode_first_completion'));
@@ -106,19 +114,33 @@ export default function RewardsScreen() {
   }, []);
 
   const handleGenerateCode = async () => {
-    if (!activeAddress || generatingCode) return;
+    if (generatingCode) return;
+    if (!activeAddress) {
+      showToast('Please connect or create a wallet first', 'error');
+      return;
+    }
     setGeneratingCode(true);
     try {
       const code = await ReferralService.getOrCreateReferralCode(activeAddress);
-      if (code) setReferralCode(code.code);
-    } catch {}
-    setGeneratingCode(false);
+      if (code?.code) {
+        setReferralCode(code.code);
+        showToast(referralCode ? 'Referral code loaded' : 'Referral code generated', 'success');
+      } else {
+        showToast('Unable to generate referral code', 'error');
+      }
+    } catch (err: any) {
+      console.error('[RewardsScreen] handleGenerateCode error:', err);
+      showToast('Unable to generate referral code', 'error');
+    } finally {
+      setGeneratingCode(false);
+    }
   };
 
   const handleCopyCode = async () => {
     if (!referralCode) return;
     await Clipboard.setStringAsync(referralCode);
     setCopied(true);
+    showToast('Code copied', 'success');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -126,6 +148,7 @@ export default function RewardsScreen() {
     if (!referralCode) return;
     await Clipboard.setStringAsync(buildReferralLink(referralCode));
     setCopiedLink(true);
+    showToast('Referral link copied', 'success');
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
@@ -245,6 +268,18 @@ export default function RewardsScreen() {
   // ── Main content ───────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
+      {/* Toast notification */}
+      {toast && (
+        <View style={[
+          styles.toastBanner,
+          toast.type === 'success' ? styles.toastSuccess
+            : toast.type === 'error' ? styles.toastError
+            : styles.toastInfo,
+        ]} pointerEvents="none">
+          <Text style={styles.toastText}>{toast.text}</Text>
+        </View>
+      )}
+
       <LinearGradient colors={colors.gradient.primary} style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color={colors.textPrimary} />
@@ -1117,5 +1152,31 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: 'rgba(255,255,255,0.65)',
     lineHeight: 20,
+  },
+  toastBanner: {
+    position: 'absolute',
+    top: 100,
+    left: 24,
+    right: 24,
+    zIndex: 999,
+    borderRadius: 12,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    ...elevation.md,
+  },
+  toastSuccess: {
+    backgroundColor: 'rgba(16,185,129,0.95)',
+  },
+  toastError: {
+    backgroundColor: 'rgba(239,68,68,0.95)',
+  },
+  toastInfo: {
+    backgroundColor: 'rgba(59,130,246,0.95)',
+  },
+  toastText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.white,
   },
 });

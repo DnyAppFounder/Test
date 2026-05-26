@@ -224,7 +224,7 @@ export default function ProfileScreen() {
   const [premiumPayStatus, setPremiumPayStatus] = useState<PayStatus>('idle');
   const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
   const [solUsdPrice, setSolUsdPrice] = useState(0);
-  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DTEST'>('SOL');
+  const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DAWORLD'>('SOL');
 
   // Basic verification modal
   const [showVerifyModal, setShowVerifyModal] = useState(false);
@@ -706,8 +706,8 @@ export default function ProfileScreen() {
     const result = await payToTreasury({
       fromAddress: fromAddr,
       amountSol: premiumPayWith === 'SOL' ? (solAmt > 0 ? solAmt : 0.001) : undefined,
-      amountToken: premiumPayWith === 'DTEST' ? tier.usd : undefined,
-      tokenMint: premiumPayWith === 'DTEST' ? DTEST_MINT : undefined,
+      amountToken: premiumPayWith === 'DAWORLD' ? tier.usd : undefined,
+      tokenMint: premiumPayWith === 'DAWORLD' ? DTEST_MINT : undefined,
       connectedWalletId: connectedWallet?.id ?? null,
       internalAccountIndex: selectedAccount?.accountIndex ?? 0,
       onStatus: setPremiumPayStatus,
@@ -1137,7 +1137,11 @@ export default function ProfileScreen() {
                           <Text style={[styles.premiumTierLabel, isSelected && styles.premiumTierLabelActive]}>
                             {tier.label}
                           </Text>
-                          <Text style={styles.premiumTierSub}>${(tier.usd / tier.months).toFixed(0)}/mo</Text>
+                          <Text style={styles.premiumTierSub}>
+                            {tier.months === 1
+                              ? `$${tier.usd.toFixed(2)}/mo`
+                              : `≈ $${(tier.usd / tier.months).toFixed(2)}/mo`}
+                          </Text>
                         </View>
                         <View style={styles.premiumTierRight}>
                           <Text style={[styles.premiumTierPrice, isSelected && styles.premiumTierPriceActive]}>
@@ -1152,17 +1156,26 @@ export default function ProfileScreen() {
                   {/* Pay with */}
                   <Text style={styles.editLabel}>Pay with</Text>
                   <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-                    {(['SOL', 'DTEST'] as const).map(method => (
-                      <TouchableOpacity
-                        key={method}
-                        style={{ flex: 1, backgroundColor: premiumPayWith === method ? 'rgba(59,130,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: premiumPayWith === method ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
-                        onPress={() => setPremiumPayWith(method)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={{ fontSize: 16 }}>{method === 'SOL' ? '◎' : 'D'}</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: premiumPayWith === method ? colors.primary : colors.textPrimary }}>{method}</Text>
-                      </TouchableOpacity>
-                    ))}
+                    {(['SOL', 'DAWORLD'] as const).map(method => {
+                      const isActive = premiumPayWith === method;
+                      return (
+                        <TouchableOpacity
+                          key={method}
+                          style={{ flex: 1, backgroundColor: isActive ? 'rgba(59,130,246,0.12)' : colors.surface, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: isActive ? colors.primary : colors.surfaceBorder, alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }}
+                          onPress={() => setPremiumPayWith(method)}
+                          activeOpacity={0.8}
+                        >
+                          {method === 'SOL' ? (
+                            <Text style={{ fontSize: 16, color: isActive ? colors.primary : 'rgba(255,255,255,0.75)' }}>◎</Text>
+                          ) : (
+                            <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: isActive ? 'rgba(96,165,250,0.25)' : 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: isActive ? colors.primary : 'rgba(255,255,255,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+                              <Text style={{ fontSize: 12, fontWeight: '900', color: isActive ? colors.primary : 'rgba(255,255,255,0.85)', lineHeight: 14 }}>D</Text>
+                            </View>
+                          )}
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: isActive ? colors.primary : colors.textPrimary }}>{method}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
 
                   {premiumPayStatus === 'preparing' || premiumPayStatus === 'signing' || premiumPayStatus === 'sending' ? (
