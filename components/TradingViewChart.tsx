@@ -11,6 +11,7 @@ import {
   ScrollView,
   PanResponder,
   Platform,
+  Linking,
 } from 'react-native';
 import Svg, {
   Path,
@@ -137,7 +138,7 @@ const BUCKET_MS: Record<string, number> = {
 };
 
 const VISIBLE_BUCKETS: Record<string, number> = {
-  '1m':  60,
+  '1m':  45,
   '5m':  72,
   '15m': 48,
   '1H':  48,
@@ -489,8 +490,12 @@ export function TradingViewChart({
   // ── Animation engine ────────────────────────────────────────────────────────
   // maxPanBackMs: how far back in time the user can scroll, anchored to the
   // oldest loaded real candle so we never pan into a blank empty void.
+  const panBucketMsForLimit = timeframe === 'ALL'
+    ? (BUCKET_MS[allEffectiveTf] ?? 3_600_000)
+    : (BUCKET_MS[timeframe] ?? 3_600_000);
+  const panVisibleMsForLimit = (VISIBLE_BUCKETS[timeframe] ?? 48) * panBucketMsForLimit;
   const maxPanBackMs = candles.length > 0
-    ? Math.max(0, Date.now() - candles[0].timestamp)
+    ? Math.max(0, Date.now() - candles[0].timestamp + panVisibleMsForLimit)
     : 0;
   const animEngine = useChartAnimationEngine(maxPanBackMs);
 
@@ -1086,15 +1091,16 @@ export function TradingViewChart({
       const ts = resolvedInfo?.totalSupply;
       const sp = resolvedInfo?.price;
       const sm = resolvedInfo?.marketCap;
-      if (ts && ts > 0) {
-        // Prefer real supply provided by caller — no division, no drift.
-        stableSupplyRef.current = ts;
-      } else if (sp && sp > 0 && sm && sm > 0) {
-        // Derive supply from snapshot marketCap / snapshot price (consistent snapshot).
+      // Prefer the snapshot marketCap/price ratio when both exist. Some token APIs
+      // return misleading totalSupply values for pump/sparse tokens, which can make
+      // chart MCAP explode into billions. The snapshot ratio keeps header, axis and
+      // price pill consistent with the token card.
+      if (sp && sp > 0 && sm && sm > 0) {
         stableSupplyRef.current = sm / sp;
       } else if (livePrice && livePrice > 0 && sm && sm > 0) {
-        // Backup only: use live quote price — only when snapshot price unavailable.
         stableSupplyRef.current = sm / livePrice;
+      } else if (ts && ts > 0) {
+        stableSupplyRef.current = ts;
       }
     }
   }
@@ -1163,14 +1169,19 @@ export function TradingViewChart({
     const rightPadMs = Math.min(Math.max(bucketMs * 2.5, visibleMs * 0.08), visibleMs * 0.16);
 
     const minLeft = firstHistoryTs - leftPadMs;
-    const maxLeft = Math.max(minLeft, lastHistoryTs + rightPadMs - visibleMs);
+    // Live left edge is the newest viewport position. User pan can move from
+    // this live edge back to minLeft, even when the token is sparse or the
+    // candle span is shorter than the visible window. Using lastHistoryTs here
+    // made sparse charts feel locked and prevented scrolling to history.
+    const liveLeft = Math.max(minLeft, rightTime - visibleMs);
+    const maxLeft = liveLeft;
 
     if (panOffsetCandles === 0) {
       // Live mode: follow the animation engine directly. Do not clamp to the
       // latest candle, because that freezes the chart and prevents continuous
       // Pump-style time movement. If no real candle is inside the live window,
       // the renderer shows a flat last-price guide instead of moving xLeft back.
-      xLeft = Math.max(minLeft, rightTime - visibleMs);
+      xLeft = liveLeft;
     } else {
       // User pan: fixed-width viewport translation only.
       // Do not autosnap on release. Do not zoom/squeeze. Do not reclamp using a
@@ -1216,40 +1227,54 @@ export function TradingViewChart({
             : 0;
 
   const hasRealRenderCandles = filledRaw.length > 0;
-  const visualGuideRaw: CandleData[] = !hasRealRenderCandles && renderGuidePrice > 0
-    ? [
-        {
-          timestamp: xLeft + Math.max(xVisibleMs * 0.18, bucketMs * 1),
-          open: renderGuidePrice,
-          high: renderGuidePrice,
-          low: renderGuidePrice,
-          close: renderGuidePrice,
-          volume: 0,
-        },
-        {
-          timestamp: xLeft + Math.max(xVisibleMs * 0.92, bucketMs * 2),
-          open: renderGuidePrice,
-          high: renderGuidePrice,
-          low: renderGuidePrice,
-          close: renderGuidePrice,
-          volume: 0,
-        },
-      ]
-    : [];
 
-  const renderRaw = hasRealRenderCandles ? filledRaw : visualGuideRaw;
+  // Do NOT create a fake two-point guide line when no real candle is visible.
+  // The price guide/pill can still show the current value, but the plotted line,
+  // area, candles and volume must come only from real OHLCV candles.
+  const renderRaw = hasRealRenderCandles ? filledRaw : [];
+  const isVisualGuideOnly = false;
 
-  const displayCandles = mcapScale !== 1
+  // Normalize candle unit before display.
+  // Some upstream APIs occasionally return OHLCV values in a wrong unit/mcap-like
+  // magnitude while the token header has the correct live price. We preserve the
+  // real candle SHAPE, but anchor the last candle to the live/snapshot price so
+  // PRICE mode cannot show values like $179B for a $0.0002 token.
+  const quoteAnchorPrice = livePrice && livePrice > 0
+    ? livePrice
+    : currentPrice && currentPrice > 0
+      ? currentPrice
+      : resolvedInfo?.price && resolvedInfo.price > 0
+        ? resolvedInfo.price
+        : 0;
+  const rawLastCloseForUnit = renderRaw.length > 0
+    ? renderRaw[renderRaw.length - 1].close
+    : renderGuidePrice;
+  const rawToPriceRatio = quoteAnchorPrice > 0 && rawLastCloseForUnit > 0
+    ? rawLastCloseForUnit / quoteAnchorPrice
+    : 1;
+  const candleToPriceScale = rawToPriceRatio > 1000 || rawToPriceRatio < 0.001
+    ? quoteAnchorPrice / rawLastCloseForUnit
+    : 1;
+  const normalizedPriceRaw = candleToPriceScale !== 1
     ? renderRaw.map(c => ({
         ...c,
-        open:  c.open  * mcapScale,
-        high:  c.high  * mcapScale,
-        low:   c.low   * mcapScale,
-        close: c.close * mcapScale,
+        open:  c.open  * candleToPriceScale,
+        high:  c.high  * candleToPriceScale,
+        low:   c.low   * candleToPriceScale,
+        close: c.close * candleToPriceScale,
       }))
     : renderRaw;
 
-  const isVisualGuideOnly = !hasRealRenderCandles && visualGuideRaw.length > 0;
+  const displayScale = valueMode === 'mcap' ? mcapScale : 1;
+  const displayCandles = displayScale !== 1
+    ? normalizedPriceRaw.map(c => ({
+        ...c,
+        open:  c.open  * displayScale,
+        high:  c.high  * displayScale,
+        low:   c.low   * displayScale,
+        close: c.close * displayScale,
+      }))
+    : normalizedPriceRaw;
 
   displayCandlesRef.current = displayCandles;
   const n = displayCandles.length;
@@ -1334,8 +1359,10 @@ export function TradingViewChart({
   // Body/tick widths derived from slotW so they never widen due to sparse data
   // Very sparse tokens (1-4 candles): use wider bodies so isolated candles are readable.
   const _vSparse = n > 0 && n < 5;
+  const isOneMinuteTf = timeframe === '1m';
   const barW    = Math.min(MAX_BAR_W,    Math.max(isMobile ? 2 : 1.5, slotW * (_vSparse ? 0.55 : 0.38)));
-  const candleW = Math.min(MAX_CANDLE_W, Math.max(isMobile ? (_vSparse ? 6 : 3) : (_vSparse ? 5 : 2), slotW * (isMobile ? (_vSparse ? 0.80 : 0.60) : (_vSparse ? 0.70 : 0.55))));
+  const minCandleW = isMobile ? (isOneMinuteTf ? 5 : (_vSparse ? 6 : 3)) : (isOneMinuteTf ? 4 : (_vSparse ? 5 : 2));
+  const candleW = Math.min(MAX_CANDLE_W, Math.max(minCandleW, slotW * (isMobile ? (_vSparse ? 0.80 : 0.62) : (_vSparse ? 0.70 : 0.55))));
 
   function tsToX(ts: number): number {
     return PAD.left + ((ts - xLeft) / xVisibleMs) * plotW;
@@ -1541,7 +1568,7 @@ export function TradingViewChart({
     ? realAnchoredPrice * mcapScale
     : displayPriceVal;
   const headerValue = valueMode === 'mcap'
-    ? fmtMcap(liveScaledValue > 0 ? liveScaledValue : (mcapVal ?? 0))
+    ? fmtMcap(mcapVal && mcapVal > 0 ? mcapVal : liveScaledValue)
     : `$${fmtPrice(displayPriceVal)}`;
 
   const currentModeConfig = CHART_MODES.find(m => m.key === mode) ?? CHART_MODES[0];
@@ -1552,6 +1579,23 @@ export function TradingViewChart({
     await Clipboard.setStringAsync(contractAddr);
     setCopiedAddr(true);
     setTimeout(() => setCopiedAddr(false), 2000);
+  };
+
+  // Opens the official TradingView chart/search page without changing this chart's data.
+  // TradingView only displays symbols that exist on TradingView. Arbitrary pump/Solana
+  // mints cannot be forced into the official TradingView widget from a public URL.
+  // The in-app chart remains the source of truth for DAWEN token OHLCV.
+  const handleOpenTradingView = async () => {
+    const cleanSymbol = (sym || 'TOKEN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    const query = cleanSymbol ? `${cleanSymbol}USD` : (tokenMint ?? 'SOLUSD');
+    const url = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(query)}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      try {
+        await Linking.openURL(`https://www.tradingview.com/search/?query=${encodeURIComponent(cleanSymbol || tokenMint || 'Solana token')}`);
+      } catch {}
+    }
   };
 
   // ── Chart header ──────────────────────────────────────────────────────────
@@ -1619,6 +1663,12 @@ export function TradingViewChart({
           ))}
         </ScrollView>
         <View style={styles.chartCtrlBtns}>
+          <TouchableOpacity
+            style={styles.tradingViewBtn}
+            onPress={handleOpenTradingView}
+            activeOpacity={0.8}>
+            <Text style={styles.tradingViewBtnText}>TV</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.chartCtrlBtn, showModePanel && styles.chartCtrlBtnActive]}
             onPress={() => { setShowModePanel(p => !p); setShowSettingsPanel(false); }}
@@ -1718,7 +1768,7 @@ export function TradingViewChart({
         <View style={[styles.unavailableWrap, { height: CHART_H }]}>
           {displayPriceVal > 0 ? (
             <>
-              <Text style={styles.priceFallback}>{fmtValue(displayPriceVal * mcapScale, valueMode)}</Text>
+              <Text style={styles.priceFallback}>{fmtValue(valueMode === 'mcap' ? (mcapVal ?? displayPriceVal * mcapScale) : displayPriceVal, valueMode)}</Text>
               <Text style={styles.unavailableText}>Price unavailable</Text>
             </>
           ) : (
@@ -1736,7 +1786,7 @@ export function TradingViewChart({
         <View style={[styles.unavailableWrap, { height: CHART_H }]}>
           {displayPriceVal > 0 ? (
             <>
-              <Text style={styles.priceFallback}>{fmtValue(displayPriceVal * mcapScale, valueMode)}</Text>
+              <Text style={styles.priceFallback}>{fmtValue(valueMode === 'mcap' ? (mcapVal ?? displayPriceVal * mcapScale) : displayPriceVal, valueMode)}</Text>
               <Text style={styles.unavailableText}>Loading price…</Text>
             </>
           ) : (
@@ -1782,9 +1832,12 @@ export function TradingViewChart({
     price: c.close,
   }));
 
+  const fallbackGuideValue = valueMode === 'mcap'
+    ? (quoteAnchorPrice > 0 ? quoteAnchorPrice * mcapScale : minP)
+    : (quoteAnchorPrice > 0 ? quoteAnchorPrice : minP);
   const lastBasePoint = baseLinePoints.length > 0
     ? baseLinePoints[baseLinePoints.length - 1]
-    : { x: PAD.left, y: yOf(scaledGuidePrice || minP), ts: xLeft, price: scaledGuidePrice || minP };
+    : { x: PAD.left, y: yOf(fallbackGuideValue), ts: xLeft, price: fallbackGuideValue };
 
   // Pump-style live hold: line modes may extend visually to the live edge at the
   // SAME price as the last rendered point. This creates live time movement without
@@ -1792,12 +1845,10 @@ export function TradingViewChart({
   // so it cannot fold back on itself.
   const liveHoldTs = xLeft + xVisibleMs * 0.94;
   const liveHoldX = Math.max(PAD.left, Math.min(safeRightX, tsToX(liveHoldTs)));
-  const shouldAppendLiveHold =
-    isLineVisualMode &&
-    !isVisualGuideOnly &&
-    panOffsetCandles === 0 &&
-    baseLinePoints.length > 0 &&
-    liveHoldX > lastBasePoint.x + 4;
+  // Do not append a fake flat segment after the last real candle.
+  // The chart is live because the viewport/time axis moves via the animation engine,
+  // not because we draw extra data points. This avoids the "extra fake line" look.
+  const shouldAppendLiveHold = false;
 
   const linePoints: LinePoint[] = shouldAppendLiveHold
     ? [...baseLinePoints, { x: liveHoldX, y: lastBasePoint.y, ts: liveHoldTs, price: lastBasePoint.price }]
@@ -1920,7 +1971,7 @@ export function TradingViewChart({
     ? linePoints[linePoints.length - 1].price
     : (displayCandles.length > 0
       ? displayCandles[displayCandles.length - 1].close
-      : (renderGuidePrice > 0 ? renderGuidePrice * mcapScale : 0));
+      : (fallbackGuideValue > 0 ? fallbackGuideValue : 0));
   const scaledLivePrice  = liveScaledValue; // header/display only — can include quote prices
   const clampedGuide = scaledGuidePrice > maxP ? maxP : scaledGuidePrice < minP ? minP : scaledGuidePrice;
   const currentY     = Math.max(PAD.top + 2, Math.min(PAD.top + plotH - 2, yOf(clampedGuide)));
@@ -2121,25 +2172,23 @@ export function TradingViewChart({
                 const bodyTop = yOf(Math.max(c.open, c.close));
                 const bodyBot = yOf(Math.min(c.open, c.close));
                 const rawH    = bodyBot - bodyTop;
-                // Doji: render as a thin horizontal line, not a thick slab
-                const isDoji  = rawH < 0.8;
+                // Keep 1m/flat candles readable. A 1px doji line looked like a
+                // random tick/bar instead of a candle on mobile. This only changes
+                // visual body height; OHLC data remains untouched.
+                const minBodyH = isOneMinuteTf ? 2.5 : 1.5;
+                const bodyH = Math.max(minBodyH, rawH);
+                const bodyY = rawH < minBodyH ? bodyTop - minBodyH / 2 : bodyTop;
                 return (
                   <G key={`cs${c.timestamp}`}>
-                    {/* Thin wick — always 1px, centered */}
+                    {/* Thin wick — always centered on the same x as the candle body */}
                     <Line x1={cx} y1={yOf(c.high)} x2={cx} y2={yOf(c.low)} stroke={col} strokeWidth={wickW} />
-                    {isDoji ? (
-                      // Doji: single horizontal tick at close level
-                      <Line x1={cx - candleW / 2} y1={bodyTop} x2={cx + candleW / 2} y2={bodyTop}
-                        stroke={col} strokeWidth={1.5} />
+                    {/* Normal body: up = hollow outline, down = filled (TradingView convention) */}
+                    {up ? (
+                      <Rect x={cx - candleW / 2} y={bodyY} width={candleW} height={bodyH}
+                        fill="none" stroke={fillCol} strokeWidth={1} />
                     ) : (
-                      // Normal body: up = hollow outline, down = filled (TradingView convention)
-                      up ? (
-                        <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)}
-                          fill="none" stroke={fillCol} strokeWidth={1} />
-                      ) : (
-                        <Rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={Math.max(1, rawH)}
-                          fill={fillCol} />
-                      )
+                      <Rect x={cx - candleW / 2} y={bodyY} width={candleW} height={bodyH}
+                        fill={fillCol} />
                     )}
                   </G>
                 );
@@ -2325,6 +2374,14 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
   chartCtrlBtnActive: { backgroundColor: 'rgba(139,92,246,0.2)', borderColor: 'rgba(139,92,246,0.4)' },
+  tradingViewBtn: {
+    minWidth: 30, height: 30, borderRadius: 8,
+    paddingHorizontal: 7,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(167,139,250,0.35)',
+  },
+  tradingViewBtnText: { fontSize: 10, fontWeight: '900', color: '#A78BFA', letterSpacing: 0.4 },
   modePanelRow: {
     flexDirection: 'row', gap: 4, flexWrap: 'wrap',
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 6,
