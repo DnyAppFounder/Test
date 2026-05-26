@@ -11,7 +11,7 @@ import {
   ScrollView,
   PanResponder,
   Platform,
-  Linking,
+  Modal,
 } from 'react-native';
 import Svg, {
   Path,
@@ -39,6 +39,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
+import { DawenProChart } from '@/components/DawenProChart';
 import { chartDataService, CandleData, TimeFrame, ChartTimeFrame } from '@/services/chartDataService';
 import { liveTokenStore } from '@/services/liveTokenStore';
 import { supabase } from '@/lib/supabase';
@@ -421,6 +422,7 @@ export function TradingViewChart({
   const [wsConnected, setWsConnected] = useState(false);
   const [showModePanel, setShowModePanel] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [showProChart, setShowProChart] = useState(false);
   const [showVolume, setShowVolume] = useState(true);
   const [showPriceLine, setShowPriceLine] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
@@ -1537,7 +1539,11 @@ export function TradingViewChart({
 
   // Latest price: prioritise livePrice (from all sources), then last candle, then prop.
   // livePrice is reset to null on token change so no cross-token bleed.
-  const latestClose      = mergedCandles.length > 0 ? mergedCandles[mergedCandles.length - 1].close : 0;
+  // Latest close must use the normalized PRICE unit, not raw upstream candle magnitude.
+  // This prevents PRICE/MCAP displays like $179B when the actual token price is $0.0002.
+  const latestClose      = normalizedPriceRaw.length > 0
+    ? normalizedPriceRaw[normalizedPriceRaw.length - 1].close
+    : (quoteAnchorPrice > 0 ? quoteAnchorPrice : 0);
   const displayPriceVal  = (livePrice != null && livePrice > 0) ? livePrice
     : latestClose > 0 ? latestClose
     : (currentPrice != null && currentPrice > 0 ? currentPrice : 0);
@@ -1559,9 +1565,7 @@ export function TradingViewChart({
   // Guide-anchored price: same source as the chart guide line.
   // In MCAP mode the header uses this so header and guide never contradict each other.
   // In price mode the header uses the live quote price (quote display is acceptable).
-  const realAnchoredPrice = activeLiveCandle?.sourceType === 'realTrade'
-    ? activeLiveCandle.close
-    : latestClose > 0 ? latestClose : displayPriceVal;
+  const realAnchoredPrice = latestClose > 0 ? latestClose : displayPriceVal;
   // MCAP mode: multiply real candle price by stable supply (same as guide + axis).
   // Price mode: show live quote price directly.
   const liveScaledValue = valueMode === 'mcap'
@@ -1581,21 +1585,10 @@ export function TradingViewChart({
     setTimeout(() => setCopiedAddr(false), 2000);
   };
 
-  // Opens the official TradingView chart/search page without changing this chart's data.
-  // TradingView only displays symbols that exist on TradingView. Arbitrary pump/Solana
-  // mints cannot be forced into the official TradingView widget from a public URL.
-  // The in-app chart remains the source of truth for DAWEN token OHLCV.
-  const handleOpenTradingView = async () => {
-    const cleanSymbol = (sym || 'TOKEN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-    const query = cleanSymbol ? `${cleanSymbol}USD` : (tokenMint ?? 'SOLUSD');
-    const url = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(query)}`;
-    try {
-      await Linking.openURL(url);
-    } catch {
-      try {
-        await Linking.openURL(`https://www.tradingview.com/search/?query=${encodeURIComponent(cleanSymbol || tokenMint || 'Solana token')}`);
-      } catch {}
-    }
+  // Opens DAWEN's internal TradingView-style chart.
+  // It stays inside the app and uses the same existing token data sources.
+  const handleOpenTradingView = () => {
+    setShowProChart(true);
   };
 
   // ── Chart header ──────────────────────────────────────────────────────────
@@ -2319,6 +2312,20 @@ export function TradingViewChart({
 
         </View>
       </View>
+
+      <Modal visible={showProChart} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setShowProChart(false)}>
+        <DawenProChart
+          tokenInfo={resolvedInfo}
+          symbol={sym}
+          currentPrice={displayPriceVal}
+          pairAddress={resolvedPairAddr ?? pairAddress}
+          tokenMint={tokenMint}
+          valueMode={valueMode}
+          initialTimeframe={timeframe}
+          onClose={() => setShowProChart(false)}
+          onTradePress={() => setShowProChart(false)}
+        />
+      </Modal>
     </View>
   );
 }
