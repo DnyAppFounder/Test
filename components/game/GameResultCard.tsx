@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Trophy, Target, Clock, Zap, Star, ExternalLink, RotateCcw, Crosshair, Route, Brain, BookOpen } from 'lucide-react-native';
@@ -134,7 +134,14 @@ export function GameResultCard({ result, gameId = 'dawen_rush', mode, entryId, m
           style={StyleSheet.absoluteFill}
         />
         <View style={[styles.gradeCircle, { borderColor: accentColor, backgroundColor: `${accentColor}22` }]}>
-          <Text style={[styles.gradeText, { color: scoreColor }]}>{grade}</Text>
+          <Image
+            source={Platform.OS === 'web' ? { uri: '/dawenlogo.jpeg' } : require('../../dawenlogo.jpeg')}
+            style={styles.gradeLogoImg}
+            resizeMode="cover"
+          />
+          <View style={[styles.gradeBadge, { backgroundColor: accentColor }]}>
+            <Text style={styles.gradeText}>{grade}</Text>
+          </View>
         </View>
         <Text style={[styles.bigScore, { color: scoreColor }]}>{result.score.toLocaleString()}</Text>
         <Text style={styles.scoreLabel}>FINAL SCORE</Text>
@@ -279,16 +286,32 @@ const styles = StyleSheet.create({
     ...elevation.md,
   },
   gradeCircle: {
-    width: 56, height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primaryMuted,
+    width: 64, height: 64,
+    borderRadius: 32,
     borderWidth: 2,
     borderColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.sm,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  gradeText: { fontSize: fontSize.xxl, fontWeight: '900' },
+  gradeLogoImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 32,
+  },
+  gradeBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  gradeText: { fontSize: 11, fontWeight: '900', color: '#fff' },
   bigScore: { fontSize: 42, fontWeight: '900', letterSpacing: 1 },
   scoreLabel: {
     fontSize: fontSize.xs,

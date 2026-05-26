@@ -48,6 +48,7 @@ export default function RewardsScreen() {
   const [claimSignature, setClaimSignature]       = useState<string | null>(null);
   const [decodeStatus, setDecodeStatus]           = useState<DecodeRewardStatus | null>(null);
   const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
+  const [generatingCode, setGeneratingCode]       = useState(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -103,6 +104,16 @@ export default function RewardsScreen() {
       } catch {}
     }
   }, []);
+
+  const handleGenerateCode = async () => {
+    if (!activeAddress || generatingCode) return;
+    setGeneratingCode(true);
+    try {
+      const code = await ReferralService.getOrCreateReferralCode(activeAddress);
+      if (code) setReferralCode(code.code);
+    } catch {}
+    setGeneratingCode(false);
+  };
 
   const handleCopyCode = async () => {
     if (!referralCode) return;
@@ -306,11 +317,12 @@ export default function RewardsScreen() {
             <View style={styles.codeDisplay}>
               {referralCode ? (
                 <Text style={styles.codeText}>{referralCode}</Text>
+              ) : generatingCode ? (
+                <ActivityIndicator size="small" color={colors.primary} />
               ) : (
-                <TouchableOpacity onPress={loadData} activeOpacity={0.7} style={{ alignItems: 'center' }}>
-                  <Text style={[styles.codeText, { fontSize: 16, color: colors.textMuted }]}>
-                    Tap to generate code
-                  </Text>
+                <TouchableOpacity onPress={handleGenerateCode} activeOpacity={0.7} style={styles.generateBtn}>
+                  <Gift size={16} color={colors.primary} />
+                  <Text style={styles.generateBtnText}>Tap to generate your code</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -806,6 +818,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
     letterSpacing: 2,
+  },
+  generateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  generateBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: colors.primary,
   },
   codeActions: {
     flexDirection: 'row',

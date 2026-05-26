@@ -977,6 +977,13 @@ export default function DawenCityPage() {
 
   return (
     <View style={pageStyles.container}>
+      <LinearGradient
+        colors={['#09060f', '#12091f', '#08050d']}
+        locations={[0, 0.55, 1]}
+        style={pageStyles.bgGradient}
+      />
+      <View style={pageStyles.bgGlow1} />
+      <View style={pageStyles.bgGlow2} />
       {!gameFullscreen && (
         <ImageBackground
           source={Platform.OS === 'web' ? { uri: '/Dawencity.png' } : require('../../Dawencity.png')}
@@ -1017,7 +1024,18 @@ export default function DawenCityPage() {
 }
 
 const pageStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: '#09060f' },
+  bgGradient: { ...StyleSheet.absoluteFillObject },
+  bgGlow1: {
+    position: 'absolute', top: -60, right: -60,
+    width: 300, height: 300, borderRadius: 150,
+    backgroundColor: 'rgba(139,92,246,0.18)',
+  },
+  bgGlow2: {
+    position: 'absolute', bottom: 120, left: -80,
+    width: 280, height: 280, borderRadius: 140,
+    backgroundColor: 'rgba(88,28,135,0.22)',
+  },
   header: {
     height: 120,
     overflow: 'hidden',
@@ -1066,12 +1084,12 @@ const pageStyles = StyleSheet.create({
   },
   headerSubtitle: {
     fontSize: fontSize.xs,
-    color: colors.primary,
-    fontWeight: '700',
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: '600',
     letterSpacing: 0.5,
-    textShadowColor: 'rgba(139,92,246,0.6)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   tabsWrapper: { paddingTop: spacing.lg },
   section: { flex: 1 },

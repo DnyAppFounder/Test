@@ -1062,6 +1062,13 @@ export default function LaunchpadScreen() {
 
   return (
     <View style={styles.container}>
+      <LinearGradient
+        colors={['#09060f', '#12091f', '#08050d']}
+        locations={[0, 0.55, 1]}
+        style={styles.bgGradient}
+      />
+      <View style={styles.bgGlow1} />
+      <View style={styles.bgGlow2} />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
@@ -1288,7 +1295,19 @@ export default function LaunchpadScreen() {
 
 // ─── Main Page Styles ─────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0A0F' },
+  container: { flex: 1, backgroundColor: '#09060f' },
+  bgGradient: { ...StyleSheet.absoluteFillObject },
+  bgGlow1: {
+    position: 'absolute', top: -60, right: -60,
+    width: 300, height: 300, borderRadius: 150,
+    backgroundColor: 'rgba(139,92,246,0.18)',
+    // React Native doesn't support CSS blur, so we use a semi-transparent circle
+  },
+  bgGlow2: {
+    position: 'absolute', bottom: 120, left: -80,
+    width: 280, height: 280, borderRadius: 140,
+    backgroundColor: 'rgba(88,28,135,0.22)',
+  },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 32 },
 

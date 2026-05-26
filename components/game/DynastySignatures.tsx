@@ -299,6 +299,16 @@ export function DynastySignatures({ walletAddress }: Props) {
         throw insertErr;
       }
 
+      // Grant 1000 DAWORLD signature reward (idempotent — ignored if already exists)
+      await supabase.from('user_rewards').upsert({
+        user_id: profile.id,
+        wallet_address: walletAddress,
+        reward_token_mint: 'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump',
+        reward_amount: 1000,
+        reason: 'dynasty_signature',
+        status: 'ready',
+      }, { onConflict: 'wallet_address,reason', ignoreDuplicates: true });
+
       await loadMySignature();
       await loadWall();
     } catch (err: any) {

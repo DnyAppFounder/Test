@@ -1384,12 +1384,12 @@ const styles = StyleSheet.create({
   },
   headerSub: {
     fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: colors.primary,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
     letterSpacing: 0.5,
-    textShadowColor: 'rgba(139,92,246,0.6)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   content: {
     flex: 1,

@@ -89,6 +89,7 @@ export function formatRewardReason(reason: string): string {
     case 'game_reward':              return 'Game Reward';
     case 'community_reward':         return 'Community Reward';
     case 'decode_first_completion':  return 'Decode the 7 Fragments Reward';
+    case 'dynasty_signature':        return 'Dynasty Signature Reward';
     default: return reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 }
