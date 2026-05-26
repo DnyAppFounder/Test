@@ -524,29 +524,48 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <ImageBackground
-        source={require('../../Dawensetting.png')}
-        style={styles.header}
-        imageStyle={styles.headerImage}
-        resizeMode="cover"
-      >
-        <View style={styles.headerTint} />
-        <LinearGradient
-          colors={['rgba(30,5,60,0.55)', 'rgba(10,2,30,0.88)']}
-          style={StyleSheet.absoluteFill}
-        />
-        <View style={styles.headerContent}>
-          <View style={styles.headerLogoRow}>
-            <View style={styles.headerLogoBadge}>
-              <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
-            </View>
-            <View>
-              <Text style={styles.headerTitle}>{t.settings.title}</Text>
-              <Text style={styles.headerSub}>Wallet & Preferences</Text>
+      {Platform.OS === 'web' ? (
+        <View style={[styles.header, {
+          backgroundImage: 'linear-gradient(rgba(5,0,15,0.30), rgba(5,0,15,0.55)), url(/Dawensetting.png)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        } as any]}>
+          <View style={styles.headerContent}>
+            <View style={styles.headerLogoRow}>
+              <View style={styles.headerLogoBadge}>
+                <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
+              </View>
+              <View>
+                <Text style={styles.headerTitle}>{t.settings.title}</Text>
+                <Text style={styles.headerSub}>Wallet & Preferences</Text>
+              </View>
             </View>
           </View>
         </View>
-      </ImageBackground>
+      ) : (
+        <ImageBackground
+          source={require('../../Dawensetting.png')}
+          style={styles.header}
+          imageStyle={styles.headerImage}
+          resizeMode="cover"
+        >
+          <LinearGradient
+            colors={['rgba(5,0,15,0.30)', 'rgba(5,0,15,0.55)']}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.headerContent}>
+            <View style={styles.headerLogoRow}>
+              <View style={styles.headerLogoBadge}>
+                <Image source={require('../../dawenlogo.jpeg')} style={styles.headerLogoImg} resizeMode="cover" />
+              </View>
+              <View>
+                <Text style={styles.headerTitle}>{t.settings.title}</Text>
+                <Text style={styles.headerSub}>Wallet & Preferences</Text>
+              </View>
+            </View>
+          </View>
+        </ImageBackground>
+      )}
 
       <ScrollView
         style={styles.content}
@@ -1349,11 +1368,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0D0520',
   },
   headerImage: {
-    opacity: 0.55,
-  },
-  headerTint: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(88,20,160,0.50)',
+    opacity: 1,
   },
   headerContent: {
     position: 'absolute',
