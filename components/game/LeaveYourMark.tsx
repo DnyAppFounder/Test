@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ActivityIndicator, ScrollView, Platform, SafeAreaView,
@@ -64,7 +64,7 @@ const ANIMATION_OPTIONS: string[] = [
   'Glitch', 'Cyber Glitch', 'Fire Glow', 'Electric Shock', 'Lightning',
   'Pulse Beat', 'Soft Bounce', 'Rotate Shine', 'Typing Effect', 'Matrix Rain',
   'Hologram', 'Stardust', 'Comet Trail', 'Plasma Glow', 'Rainbow Flow',
-  'Chrome Shine', 'Smoke Fade', 'Energy Aura', 'Crown Shine',
+  'Chrome Shine', 'Smoke Fade', 'Energy Aura', 'Crown Shine', 'TypeScript',
 ];
 
 const SAFE_TEXT_RE = /^[A-Za-z0-9_\-]+$/;
@@ -89,36 +89,115 @@ function formatDate(iso: string): string {
 
 function getAnimStyle(anim: string, colorHex: string): object {
   if (Platform.OS !== 'web') return {};
+  // 'TypeScript' is handled by the TypeScriptSig component, not via CSS
+  if (anim === 'TypeScript') return {};
   const col = resolveColor(colorHex);
   switch (anim) {
-    case 'Glow Pulse': case 'Plasma Glow': case 'Energy Aura':
-      return { textShadow: `0 0 8px ${col}, 0 0 16px ${col}55`, animation: 'lym-pulse 2s ease-in-out infinite' };
-    case 'Neon Flicker': case 'Lightning': case 'Electric Shock':
-      return { textShadow: `0 0 6px ${col}`, animation: 'lym-flicker 1.5s step-end infinite' };
-    case 'Floating': case 'Soft Bounce':
-      return { animation: 'lym-float 3s ease-in-out infinite' };
+    case 'Glow Pulse':
+    case 'Plasma Glow':
+    case 'Pulse Beat':
+      return { textShadow: `0 0 8px ${col}, 0 0 16px ${col}55`, animation: 'lym-pulse 2s ease-in-out infinite', color: col };
+    case 'Energy Aura':
+      return { textShadow: `0 0 12px ${col}, 0 0 24px ${col}88, 0 0 40px ${col}33`, animation: 'lym-pulse 1.8s ease-in-out infinite', color: col };
+    case 'Neon Flicker':
+    case 'Lightning':
+    case 'Electric Shock':
+      return { textShadow: `0 0 6px ${col}, 0 0 12px ${col}99`, animation: 'lym-flicker 1.5s step-end infinite', color: col };
+    case 'Floating':
+    case 'Soft Bounce':
+      return { animation: 'lym-float 3s ease-in-out infinite', color: col };
+    case 'Wave':
+      return { animation: 'lym-wave 2s ease-in-out infinite', color: col };
     case 'Fire Glow':
-      return { textShadow: '0 0 10px #FF6B00, 0 0 20px #FF4500', animation: 'lym-pulse 1.2s ease-in-out infinite' };
-    case 'Crown Shine': case 'Chrome Shine': case 'Rotate Shine':
-      return { animation: 'lym-shine 2s linear infinite', background: `linear-gradient(90deg,${col},#fff,${col})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' };
-    default: return {};
+      return { textShadow: '0 0 10px #FF6B00, 0 0 20px #FF4500, 0 0 30px #FF2200', animation: 'lym-pulse 1.2s ease-in-out infinite', color: '#FF8C00' };
+    case 'Crown Shine':
+    case 'Chrome Shine':
+    case 'Rotate Shine':
+      return { animation: 'lym-shine 2.5s linear infinite', backgroundSize: '300% auto', background: `linear-gradient(90deg,${col},#ffffff,${col},#ffffff,${col})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' };
+    case 'Rainbow Flow':
+      return { animation: 'lym-rainbow 3s linear infinite', backgroundSize: '400% auto', background: 'linear-gradient(90deg,#ff0080,#ff8c00,#ffed00,#00ff80,#00bfff,#8000ff,#ff0080)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' };
+    case 'Sparkle':
+    case 'Stardust':
+      return { animation: 'lym-sparkle 1.5s ease-in-out infinite', color: col };
+    case 'Glitch':
+      return { animation: 'lym-glitch 2s step-end infinite', color: col };
+    case 'Cyber Glitch':
+      return { animation: 'lym-cyberglitch 1.8s step-end infinite', color: col, textShadow: `2px 0 #ff00ff, -2px 0 #00ffff` };
+    case 'Hologram':
+      return { animation: 'lym-hologram 3s ease-in-out infinite', color: '#00FFEE', textShadow: '0 0 8px #00FFEE, 0 0 20px #00FFEE44' };
+    case 'Matrix Rain':
+      return { animation: 'lym-matrix 1.2s step-end infinite', color: '#00FF41', textShadow: '0 0 8px #00FF41, 0 0 16px #00FF4188' };
+    case 'Comet Trail':
+      return { animation: 'lym-comet 2s ease-in-out infinite', color: col, textShadow: `0 0 10px ${col}, 4px 0 ${col}44` };
+    case 'Smoke Fade':
+      return { animation: 'lym-smoke 3s ease-in-out infinite', color: col };
+    case 'Typing Effect':
+      return { animation: 'lym-typing 0.5s steps(1) infinite', color: col };
+    default:
+      return { color: col };
   }
 }
 
 const WEB_CSS = `
-@keyframes lym-pulse{0%,100%{opacity:1}50%{opacity:.7;filter:brightness(1.4)}}
-@keyframes lym-flicker{0%,19%,21%,23%,25%,54%,56%,100%{opacity:1}20%,24%,55%{opacity:.2}}
-@keyframes lym-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-@keyframes lym-shine{0%{background-position:-200% center}100%{background-position:200% center}}
+@keyframes lym-pulse{0%,100%{opacity:1;filter:brightness(1)}50%{opacity:.75;filter:brightness(1.5)}}
+@keyframes lym-flicker{0%,19%,21%,23%,25%,54%,56%,100%{opacity:1}20%,24%,55%{opacity:.15}}
+@keyframes lym-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes lym-wave{0%,100%{transform:translateY(0) scaleX(1)}25%{transform:translateY(-4px) scaleX(1.02)}75%{transform:translateY(4px) scaleX(0.98)}}
+@keyframes lym-shine{0%{background-position:-300% center}100%{background-position:300% center}}
+@keyframes lym-rainbow{0%{background-position:0% center}100%{background-position:400% center}}
+@keyframes lym-sparkle{0%,100%{opacity:1;transform:scale(1)}33%{opacity:.5;transform:scale(1.05)}66%{opacity:.8;transform:scale(0.97)}}
+@keyframes lym-glitch{0%,100%{transform:translate(0)}10%{transform:translate(-2px,1px)}20%{transform:translate(2px,-1px)}30%{transform:translate(0)}40%{transform:translate(1px,2px)}50%{transform:translate(-1px,-1px)}60%,80%{transform:translate(0)}}
+@keyframes lym-cyberglitch{0%,100%{transform:translate(0);text-shadow:2px 0 #ff00ff,-2px 0 #00ffff}15%{transform:translate(-3px,0);text-shadow:3px 0 #ff00ff,-3px 0 #00ffff}30%{transform:translate(3px,0);text-shadow:-3px 0 #ff00ff,3px 0 #00ffff}45%,80%{transform:translate(0);text-shadow:2px 0 #ff00ff,-2px 0 #00ffff}}
+@keyframes lym-hologram{0%,100%{opacity:1;filter:brightness(1)}30%{opacity:.6;filter:brightness(1.3)}60%{opacity:.85;filter:brightness(0.9)}}
+@keyframes lym-matrix{0%,100%{opacity:1}25%{opacity:.4}50%{opacity:1}75%{opacity:.7}}
+@keyframes lym-comet{0%{transform:translateX(-4px);opacity:.6}50%{transform:translateX(2px);opacity:1}100%{transform:translateX(-4px);opacity:.6}}
+@keyframes lym-smoke{0%,100%{opacity:1;filter:blur(0px)}50%{opacity:.55;filter:blur(1px)}}
+@keyframes lym-typing{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes lym-ts-cursor{0%,100%{opacity:1}50%{opacity:0}}
 `;
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+function TypeScriptSig({ text, colorHex, size }: { text: string; colorHex: string; size: number }) {
+  const col = resolveColor(colorHex);
+  const [displayed, setDisplayed] = useState('');
+  const [cursorOn, setCursorOn] = useState(true);
+
+  useEffect(() => {
+    setDisplayed('');
+    let i = 0;
+    const interval = setInterval(() => {
+      i += 1;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) clearInterval(interval);
+    }, 80);
+    return () => clearInterval(interval);
+  }, [text]);
+
+  useEffect(() => {
+    const blink = setInterval(() => setCursorOn(v => !v), 530);
+    return () => clearInterval(blink);
+  }, []);
+
+  const glowStyle = Platform.OS === 'web'
+    ? { textShadow: `0 0 8px ${col}99, 0 0 2px ${col}` } as any
+    : {};
+
+  return (
+    <Text style={[sigS.text, { fontSize: size, color: col, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined }, glowStyle]} numberOfLines={1} adjustsFontSizeToFit>
+      {displayed}<Text style={{ opacity: cursorOn ? 1 : 0, color: col }}>|</Text>
+    </Text>
+  );
+}
+
 function SigText({ text, colorHex, anim, size = 20 }: {
   text: string; colorHex: string; anim: string; size?: number;
 }) {
+  if (anim === 'TypeScript') {
+    return <TypeScriptSig text={text} colorHex={colorHex} size={size} />;
+  }
   const col = resolveColor(colorHex);
-  const extra = Platform.OS === 'web' ? getAnimStyle(anim, colorHex) : {};
+  const extra = Platform.OS === 'web' ? getAnimStyle(anim, colorHex) : { color: col };
   return (
     <Text
       style={[sigS.text, { fontSize: size, color: col }, extra as any]}
@@ -885,3 +964,6 @@ const sigS = StyleSheet.create({
   meta: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
   sep: { fontSize: 11, color: 'rgba(255,255,255,0.15)' },
 });
+
+
+export { LeaveYourMarkCard, LeaveYourMarkScreen }

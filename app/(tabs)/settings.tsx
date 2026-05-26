@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Alert,
   ImageBackground,
+  Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera, Delete } from 'lucide-react-native';
@@ -497,11 +498,11 @@ export default function SettingsScreen() {
   ];
 
   const faqItems = [
-    { q: 'What is Dawen?', a: 'Dawen is a non-custodial crypto super app. Your private keys never leave your device. Trade, post, play, and earn all in one place.' },
-    { q: 'Is my wallet safe?', a: 'Yes. Dawen is non-custodial, meaning only you hold your private keys. Your seed phrase is encrypted and stored locally on your device.' },
-    { q: 'How do I recover my wallet?', a: 'Go to Settings > Security > Recovery Phrase to view your seed phrase. Write it down and store it safely. You can import it on any device.' },
-    { q: 'What chains are supported?', a: 'Currently Solana, Ethereum, Polygon, and Base. More chains are coming soon.' },
-    { q: 'How does the Community work?', a: 'Post updates, share images, like and comment. You can promote posts for visibility with various duration tiers.' },
+    { q: 'What is Dawen?', a: 'DAWEN is a Solana-focused non-custodial app for trading, social features, rewards, and Dawen World. Your private keys never leave your device.' },
+    { q: 'Is my wallet safe?', a: 'DAWEN is non-custodial. You control your wallet, PIN, and recovery phrase. Never share your seed phrase or private keys with anyone.' },
+    { q: 'How do I recover my wallet?', a: 'Use your original recovery phrase (seed phrase). Go to Settings > Security > Recovery Phrase to view it. Write it down and store it safely. DAWEN cannot recover a lost seed phrase for you.' },
+    { q: 'What chains are supported?', a: 'Currently Solana only. DAWEN is focused on Solana. More features may be added in the future.' },
+    { q: 'How does the Community work?', a: 'Users can interact through Dawen Pulse — post updates, follow traders, like and comment. You can also earn through ranks, rewards, referrals, and game/social features.' },
   ];
 
   const selectedPremiumTier = PREMIUM_TIERS.find(t => t.key === premiumTierKey);
@@ -593,6 +594,31 @@ export default function SettingsScreen() {
           <LogOut size={20} color={colors.error} />
           <Text style={styles.logoutText}>{t.settings.logout}</Text>
         </TouchableOpacity>
+
+        {/* Legal & Support section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal & Support</Text>
+          <View style={styles.sectionCard}>
+            {[
+              { label: 'Privacy Policy', onPress: () => router.push('/privacy' as any) },
+              { label: 'Terms of Service', onPress: () => router.push('/terms' as any) },
+              { label: 'Help & Support', onPress: () => setActiveModal('help') },
+              { label: 'Contact Support', onPress: () => Linking.openURL('mailto:support@dawen.app').catch(() => {}) },
+            ].map((item, idx, arr) => (
+              <TouchableOpacity
+                key={item.label}
+                style={[styles.settingRow, idx < arr.length - 1 && styles.settingRowBorder]}
+                onPress={item.onPress}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.settingLabel}>{item.label}</Text>
+                <ChevronRight size={18} color={colors.textMuted} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        <Text style={styles.copyrightText}>© 2026 DAWEN. All rights reserved.</Text>
       </ScrollView>
 
       <Modal visible={activeModal === 'language'} animationType="slide" transparent>
@@ -909,7 +935,7 @@ export default function SettingsScreen() {
               <View style={styles.contactSection}>
                 <MessageCircle size={24} color={colors.primary} />
                 <Text style={styles.contactTitle}>Need more help?</Text>
-                <Text style={styles.contactText}>Reach us at support@dny.app</Text>
+                <Text style={styles.contactText}>Reach us at support@dawen.app</Text>
               </View>
             </ScrollView>
           </View>
@@ -1493,6 +1519,14 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '600',
     color: colors.error,
+  },
+  copyrightText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.2)',
+    textAlign: 'center',
+    marginTop: spacing.lg,
+    marginBottom: spacing.xxl,
+    letterSpacing: 0.3,
   },
   modalOverlay: {
     flex: 1,
