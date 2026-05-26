@@ -11,7 +11,6 @@ import {
   ScrollView,
   PanResponder,
   Platform,
-  Modal,
 } from 'react-native';
 import Svg, {
   Path,
@@ -2313,19 +2312,21 @@ export function TradingViewChart({
         </View>
       </View>
 
-      <Modal visible={showProChart} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setShowProChart(false)}>
-        <DawenProChart
-          tokenInfo={resolvedInfo}
-          symbol={sym}
-          currentPrice={displayPriceVal}
-          pairAddress={resolvedPairAddr ?? pairAddress}
-          tokenMint={tokenMint}
-          valueMode={valueMode}
-          initialTimeframe={timeframe}
-          onClose={() => setShowProChart(false)}
-          onTradePress={() => setShowProChart(false)}
-        />
-      </Modal>
+      {showProChart && (
+        <View style={styles.proChartOverlay} pointerEvents="auto">
+          <DawenProChart
+            tokenInfo={resolvedInfo}
+            symbol={sym}
+            currentPrice={displayPriceVal}
+            pairAddress={resolvedPairAddr ?? pairAddress}
+            tokenMint={tokenMint}
+            valueMode={valueMode}
+            initialTimeframe={timeframe}
+            onClose={() => setShowProChart(false)}
+            onTradePress={() => setShowProChart(false)}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -2338,6 +2339,12 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(139,92,246,0.18)',
+  },
+  proChartOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    elevation: 9999,
+    backgroundColor: '#06060B',
   },
   chartHeader: {
     paddingHorizontal: spacing.md,
