@@ -67,6 +67,8 @@ async function ensureATA(
   const ata = deriveATA(ownerPubkey, mintPubkey, tokenProgram);
   const info = await rpc.rpcCall('getAccountInfo', [ata.toBase58(), { commitment: 'confirmed' }]);
   if (!info?.value) {
+    // CreateIdempotent discriminator = 1. Using empty data (alloc(0)) makes this
+    // instruction unrecognizable to Phantom's simulator and triggers the unsafe warning.
     tx.add(new TransactionInstruction({
       programId: ASSOCIATED_TOKEN_PROGRAM_ID,
       keys: [
@@ -77,7 +79,7 @@ async function ensureATA(
         { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: tokenProgram, isSigner: false, isWritable: false },
       ],
-      data: Buffer.alloc(0),
+      data: Buffer.from([1]),
     }));
   }
   return ata;
@@ -200,6 +202,31 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
     tx.recentBlockhash = blockhash;
     tx.feePayer = fromPubkey;
 
+    // Simulate before sending to Phantom — catches invalid instructions, missing accounts,
+    // and insufficient balance before the wallet opens, preventing the unsafe-tx warning.
+    const simResult = await rpc.rpcCall('simulateTransaction', [
+      Buffer.from(tx.serialize({ verifySignatures: false })).toString('base64'),
+      { encoding: 'base64', commitment: 'confirmed', sigVerify: false },
+    ]);
+    const simErr = simResult?.value?.err;
+    if (simErr) {
+      const logs: string[] = simResult?.value?.logs ?? [];
+      const logStr = logs.slice(0, 4).join(' | ');
+      if (typeof simErr === 'object' && 'InstructionError' in (simErr as any)) {
+        const ie = (simErr as any).InstructionError;
+        const idx = Array.isArray(ie) ? ie[0] : '?';
+        const reason = Array.isArray(ie) ? JSON.stringify(ie[1]) : String(ie);
+        if (reason.includes('InsufficientFunds') || reason.includes('0x1')) {
+          throw new Error('Insufficient SOL for network fees');
+        }
+        if (reason.includes('Custom') || reason.includes('insufficient funds')) {
+          throw new Error('Insufficient token balance');
+        }
+        throw new Error(`Transaction simulation failed at instruction ${idx}: ${reason}`);
+      }
+      throw new Error(`Transaction simulation failed: ${JSON.stringify(simErr)}${logStr ? ' — ' + logStr : ''}`);
+    }
+
     onStatus?.('signing');
     let signature: string;
 
@@ -279,6 +306,16 @@ export async function burnSplToken(params: {
     if (!blockhash) throw new Error('Could not fetch recent blockhash');
     tx.recentBlockhash = blockhash;
     tx.feePayer = fromPubkey;
+
+    // Simulate before Phantom to prevent unsafe-tx warning
+    const simResult = await rpc.rpcCall('simulateTransaction', [
+      Buffer.from(tx.serialize({ verifySignatures: false })).toString('base64'),
+      { encoding: 'base64', commitment: 'confirmed', sigVerify: false },
+    ]);
+    const simErr = simResult?.value?.err;
+    if (simErr) {
+      throw new Error(`Transaction simulation failed: ${JSON.stringify(simErr)}`);
+    }
 
     onStatus?.('signing');
     let signature: string;
