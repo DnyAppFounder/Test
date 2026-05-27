@@ -20,8 +20,12 @@ const TOKEN_2022_PROGRAM_ID   = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnB
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const SYSTEM_PROGRAM_ID       = new PublicKey('11111111111111111111111111111111');
 
-function tokenProgramForMint(mintStr: string): PublicKey {
-  return mintStr === DWORLD_MINT ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+function tokenProgramForMint(_mintStr: string): PublicKey {
+  // DWORLD_MINT (BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump) is a standard
+  // Pump.fun SPL token minted under the original Token Program, NOT Token-2022.
+  // Using TOKEN_2022_PROGRAM_ID for ATA derivation produces a wrong PDA and
+  // causes AccountNotFound during simulation. Always use the standard Token Program.
+  return TOKEN_PROGRAM_ID;
 }
 
 export type PayStatus =
@@ -157,37 +161,20 @@ export async function payToTreasury(params: TreasuryPayParams): Promise<Treasury
       const fromATA = await ensureATA(rpc, fromPubkey, fromPubkey, mintPubkey, tx, tokenProgram);
       const toATA = await ensureATA(rpc, fromPubkey, treasuryPubkey, mintPubkey, tx, tokenProgram);
 
-      if (tokenMint === DWORLD_MINT) {
-        // Token-2022: TransferChecked (opcode 12), includes mint + decimals
-        const data = Buffer.alloc(10);
-        data.writeUInt8(12, 0);
-        data.writeBigUInt64LE(rawAmount, 1);
-        data.writeUInt8(decimals, 9);
-        tx.add(new TransactionInstruction({
-          programId: TOKEN_2022_PROGRAM_ID,
-          keys: [
-            { pubkey: fromATA, isSigner: false, isWritable: true },
-            { pubkey: mintPubkey, isSigner: false, isWritable: false },
-            { pubkey: toATA, isSigner: false, isWritable: true },
-            { pubkey: fromPubkey, isSigner: true, isWritable: false },
-          ],
-          data,
-        }));
-      } else {
-        // Standard SPL: Transfer (opcode 3)
-        const data = Buffer.alloc(9);
-        data.writeUInt8(3, 0);
-        data.writeBigUInt64LE(rawAmount, 1);
-        tx.add(new TransactionInstruction({
-          programId: TOKEN_PROGRAM_ID,
-          keys: [
-            { pubkey: fromATA, isSigner: false, isWritable: true },
-            { pubkey: toATA, isSigner: false, isWritable: true },
-            { pubkey: fromPubkey, isSigner: true, isWritable: false },
-          ],
-          data,
-        }));
-      }
+      // Standard SPL Transfer (opcode 3) — works for all standard Token Program mints
+      // including DWORLD (Pump.fun tokens use the original Token Program, not Token-2022)
+      const transferData = Buffer.alloc(9);
+      transferData.writeUInt8(3, 0);
+      transferData.writeBigUInt64LE(rawAmount, 1);
+      tx.add(new TransactionInstruction({
+        programId: TOKEN_PROGRAM_ID,
+        keys: [
+          { pubkey: fromATA, isSigner: false, isWritable: true },
+          { pubkey: toATA, isSigner: false, isWritable: true },
+          { pubkey: fromPubkey, isSigner: true, isWritable: false },
+        ],
+        data: transferData,
+      }));
     } else if (amountSol && amountSol > 0) {
       const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
       if (lamports < 1) throw new Error('SOL amount too small');

@@ -61,6 +61,11 @@ export default function SwapScreen() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [fromTokenPrice, setFromTokenPrice] = useState(0);
+  const [toTokenPrice, setToTokenPrice] = useState(0);
+  // Slippage: stored as bps (50 = 0.5%)
+  const [slippageBps, setSlippageBps] = useState(50);
+  const [showSlippagePanel, setShowSlippagePanel] = useState(false);
+  const [customSlippage, setCustomSlippage] = useState('');
 
   const isMobile = Platform.OS !== 'web';
   const hasWallet = !!activeAddress;
@@ -142,6 +147,15 @@ export default function SwapScreen() {
   }, [fromToken?.address]);
 
   useEffect(() => {
+    if (!toToken) { setToTokenPrice(0); return; }
+    if (toToken.address === SOL_MINT) {
+      getSolPrice().then(p => setToTokenPrice(p)).catch(() => {});
+    } else {
+      priceService.getTokenPrice(toToken.address).then(p => setToTokenPrice(p?.price || 0)).catch(() => {});
+    }
+  }, [toToken?.address]);
+
+  useEffect(() => {
     const amount = parseFloat(fromAmount);
     if (!fromToken || !toToken || !fromAmount || isNaN(amount) || amount <= 0) {
       setQuote(null); setErrorMsg(null); setStatus('idle');
@@ -169,7 +183,7 @@ export default function SwapScreen() {
         setStatus('error');
         return;
       }
-      const q = await jupiterSwapService.getQuote(fromToken.address, toToken.address, amountInSmallest, 50);
+      const q = await jupiterSwapService.getQuote(fromToken.address, toToken.address, amountInSmallest, slippageBps);
       if (q) {
         setQuote(q); setStatus('idle'); setErrorMsg(null);
       } else {
@@ -251,13 +265,13 @@ export default function SwapScreen() {
   const canSwap = !!quote && hasWallet && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
 
   const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
-    { label: 'Action', value: `Swap ${fromToken.symbol} → ${toToken.symbol}` },
-    { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}`, accent: true },
-    { label: 'You Receive', value: `${outputAmount || '?'} ${toToken.symbol}`, accent: true },
+    { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}${fromAmountUsd ? ` (${fromAmountUsd})` : ''}`, accent: true },
+    { label: 'You Receive', value: `${outputAmount || '?'} ${toToken.symbol}${toAmountUsd ? ` (${toAmountUsd})` : ''}`, accent: true },
+    { label: 'Min Received', value: minReceived ? `${minReceived} ${toToken.symbol}` : '—' },
+    { label: 'Slippage', value: `${slippagePct}%` },
     { label: 'Price Impact', value: `${priceImpact.toFixed(2)}%` },
     { label: 'Network Fee', value: '~0.000005 SOL' },
-    { label: 'Slippage', value: '0.5%' },
-    { label: 'Total', value: `${fromAmount} ${fromToken.symbol} + fee`, total: true },
+    { label: 'Total', value: fromToken.address === SOL_MINT ? `${(parseFloat(fromAmount) + 0.000005).toFixed(6)} SOL` : `${fromAmount} ${fromToken.symbol} + fee`, total: true },
   ] : [];
 
   const executeSwapTx = async (): Promise<string> => {
@@ -346,7 +360,16 @@ export default function SwapScreen() {
 
   const fromAmountUsd = fromToken && fromAmount && fromTokenPrice > 0
     ? `≈ $${(parseFloat(fromAmount) * fromTokenPrice).toFixed(2)}`
-    : '';
+    : null;
+
+  const toAmountUsd = outputAmount && toTokenPrice > 0
+    ? `≈ $${(parseFloat(outputAmount) * toTokenPrice).toFixed(2)}`
+    : null;
+
+  const slippagePct = (slippageBps / 100).toFixed(slippageBps % 100 === 0 ? 0 : slippageBps % 10 === 0 ? 1 : 2);
+  const minReceived = quote && outputAmount
+    ? (parseFloat(outputAmount) * (1 - slippageBps / 10000)).toFixed(6)
+    : null;
 
   const rateText = quote && fromToken && toToken
     ? `1 ${fromToken.symbol} ≈ ${(parseFloat(outputAmount) / parseFloat(fromAmount || '1')).toFixed(4)} ${toToken.symbol}`
@@ -481,9 +504,7 @@ export default function SwapScreen() {
               </View>
             </View>
 
-            {fromAmountUsd ? (
-              <Text style={styles.usdText}>{fromAmountUsd}</Text>
-            ) : null}
+            <Text style={styles.usdText}>{fromAmountUsd ?? '≈ --'}</Text>
           </View>
 
           {/* Swap direction button */}
@@ -518,19 +539,82 @@ export default function SwapScreen() {
                 {status === 'quoting' ? (
                   <ActivityIndicator size="small" color={colors.primary} />
                 ) : (
-                  <Text style={[styles.outputText, outputAmount ? styles.outputTextActive : null]}>
+                  <Text
+                    style={[styles.outputText, outputAmount ? styles.outputTextActive : null]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.5}
+                  >
                     {outputAmount || '0.00'}
                   </Text>
                 )}
               </View>
             </View>
 
-            {quote && (
-              <Text style={[styles.usdText, styles.changeText]}>
-                {priceImpact > 0 ? `-${priceImpact.toFixed(2)}%` : '0.00%'}
-              </Text>
-            )}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+              {toAmountUsd ? (
+                <Text style={styles.usdText}>{toAmountUsd}</Text>
+              ) : <View />}
+              {quote && (
+                <Text style={[styles.usdText, styles.changeText]}>
+                  {priceImpact > 0 ? `-${priceImpact.toFixed(2)}%` : '0.00%'}
+                </Text>
+              )}
+            </View>
           </View>
+        </View>
+
+        {/* Slippage settings */}
+        <View style={styles.infoCard}>
+          <TouchableOpacity
+            style={styles.infoRow}
+            onPress={() => setShowSlippagePanel(p => !p)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.infoLabel}>Slippage Tolerance</Text>
+            <Text style={[styles.infoValue, { color: colors.primary }]}>{slippagePct}% {showSlippagePanel ? '▲' : '▼'}</Text>
+          </TouchableOpacity>
+          {showSlippagePanel && (
+            <View style={{ paddingTop: spacing.sm, gap: spacing.sm }}>
+              <View style={{ flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' }}>
+                {([10, 50, 100, 300] as const).map(bps => (
+                  <TouchableOpacity
+                    key={bps}
+                    style={[styles.slippageBtn, slippageBps === bps && styles.slippageBtnActive]}
+                    onPress={() => { setSlippageBps(bps); setCustomSlippage(''); setQuote(null); }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.slippageBtnText, slippageBps === bps && styles.slippageBtnTextActive]}>
+                      {bps / 100}%
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                <Text style={[styles.infoLabel, { flex: 1 }]}>Custom %</Text>
+                <TextInput
+                  style={[styles.amountInput, { flex: 2, fontSize: fontSize.sm, height: 36 }]}
+                  value={customSlippage}
+                  onChangeText={v => {
+                    setCustomSlippage(v);
+                    const pct = parseFloat(v);
+                    if (!isNaN(pct) && pct > 0 && pct <= 50) {
+                      setSlippageBps(Math.round(pct * 100));
+                      setQuote(null);
+                    }
+                  }}
+                  placeholder="e.g. 1.5"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+              {slippageBps > 300 && (
+                <Text style={{ color: colors.warning, fontSize: fontSize.xs }}>
+                  High slippage — your swap may be front-run.
+                </Text>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Info rows */}
@@ -541,6 +625,15 @@ export default function SwapScreen() {
               <Text style={styles.infoValue}>{rateText}</Text>
             </View>
             <View style={styles.infoDivider} />
+            {minReceived && (
+              <>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Min Received</Text>
+                  <Text style={styles.infoValue}>{minReceived} {toToken?.symbol}</Text>
+                </View>
+                <View style={styles.infoDivider} />
+              </>
+            )}
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Price Impact</Text>
               <Text style={[
@@ -1101,5 +1194,25 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '500',
     color: colors.textMuted,
+  },
+  slippageBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  slippageBtnActive: {
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderColor: colors.primary,
+  },
+  slippageBtnText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  slippageBtnTextActive: {
+    color: colors.primary,
   },
 });

@@ -102,6 +102,20 @@ export default function CreatePostScreen() {
   // Tenor demo key — works without configuration
   const TENOR_KEY = process.env.EXPO_PUBLIC_TENOR_API_KEY || 'LIVDSRZULELA';
 
+  // Text color (premium only)
+  const DAWEN_TEXT_COLORS = [
+    { label: 'Default', value: null },
+    { label: 'Blue', value: '#60A5FA' },
+    { label: 'Teal', value: '#2DD4BF' },
+    { label: 'Green', value: '#34D399' },
+    { label: 'Gold', value: '#FBBF24' },
+    { label: 'Orange', value: '#FB923C' },
+    { label: 'Pink', value: '#F472B6' },
+    { label: 'Red', value: '#F87171' },
+  ] as const;
+  const [selectedTextColor, setSelectedTextColor] = useState<string | null>(null);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+
   // Poll
   const [showPoll, setShowPoll] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
@@ -386,6 +400,7 @@ export default function CreatePostScreen() {
         promoteTier,
         gifUrl: gifUrl ?? undefined,
         pollOptions: validPollOptions.length >= 2 ? validPollOptions : undefined,
+        textColor: isPremium && selectedTextColor ? selectedTextColor : null,
       });
 
       // Consume promotion credit after post is submitted
@@ -531,7 +546,7 @@ export default function CreatePostScreen() {
           {/* Text input with animated dashed border */}
           <Animated.View style={[styles.inputWrapper, { borderColor }]}>
             <TextInput
-              style={styles.contentInput}
+              style={[styles.contentInput, isPremium && selectedTextColor ? { color: selectedTextColor } : null]}
               placeholder={"What's happening in the market?\nShare your thoughts with the DAWEN community."}
               placeholderTextColor={colors.textMuted}
               value={content}
@@ -718,7 +733,59 @@ export default function CreatePostScreen() {
               </View>
               <Text style={[styles.qaLabel, gifUrl && { color: '#10b981' }]}>GIF</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.qaItem}
+              activeOpacity={0.8}
+              onPress={() => {
+                if (!isPremium) {
+                  setPremiumUpsellNote('Text color is a Premium feature.');
+                  setShowPremiumUpsell(true);
+                } else {
+                  setShowColorPicker(p => !p);
+                }
+              }}
+            >
+              <View style={[styles.qaIconWrap, {
+                backgroundColor: selectedTextColor ? `${selectedTextColor}30` : '#60A5FA22',
+                borderWidth: selectedTextColor ? 1 : 0,
+                borderColor: selectedTextColor ?? '#60A5FA',
+              }]}>
+                <Text style={{ fontSize: 16, fontWeight: '900', color: selectedTextColor ?? '#60A5FA' }}>A</Text>
+              </View>
+              <Text style={[styles.qaLabel, selectedTextColor ? { color: selectedTextColor } : null]}>Color</Text>
+            </TouchableOpacity>
           </View>
+
+          {/* Text color picker (premium only) */}
+          {showColorPicker && isPremium && (
+            <View style={{ marginTop: 8, padding: 12, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Text Color</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {DAWEN_TEXT_COLORS.map(c => (
+                  <TouchableOpacity
+                    key={c.label}
+                    activeOpacity={0.8}
+                    onPress={() => { setSelectedTextColor(c.value); }}
+                    style={{
+                      paddingHorizontal: 12, paddingVertical: 6,
+                      borderRadius: 20,
+                      backgroundColor: c.value ? `${c.value}20` : 'rgba(255,255,255,0.08)',
+                      borderWidth: selectedTextColor === c.value ? 1.5 : 1,
+                      borderColor: c.value ? (selectedTextColor === c.value ? c.value : `${c.value}60`) : (selectedTextColor === null ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)'),
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: c.value ?? 'rgba(255,255,255,0.85)' }}>{c.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {selectedTextColor && (
+                <Text style={{ marginTop: 8, fontSize: 14, color: selectedTextColor, fontWeight: '600' }}>
+                  Preview: This is how your post text will look.
+                </Text>
+              )}
+            </View>
+          )}
 
           {/* Post settings */}
           <Text style={styles.settingsHeader}>POST SETTINGS</Text>

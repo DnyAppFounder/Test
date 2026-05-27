@@ -486,6 +486,7 @@ export class SocialService {
       gifUrl?: string;
       pollOptions?: string[];
       pollExpiresAt?: string;
+      textColor?: string | null;
     }
   ): Promise<Post | null> {
     let mediaUrl: string | null = options?.mediaUrl || null;
@@ -545,6 +546,7 @@ export class SocialService {
         promoted_until: promotedUntil,
         promoted_tier: promoteTier ?? null,
         gif_url: options?.gifUrl ?? null,
+        text_color: options?.textColor ?? null,
         poll_options: options?.pollOptions && options.pollOptions.length >= 2 ? options.pollOptions : null,
         poll_expires_at: options?.pollOptions && options.pollOptions.length >= 2
           ? (options.pollExpiresAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())

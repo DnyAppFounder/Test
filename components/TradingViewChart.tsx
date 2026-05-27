@@ -1837,12 +1837,43 @@ export function TradingViewChart({
   const isLineVisualMode = mode === 'area' || mode === 'line' || mode === 'mountain' || mode === 'bonding';
 
   type LinePoint = { x: number; y: number; ts: number; price: number };
-  const baseLinePoints: LinePoint[] = displayCandles.map((c, i) => ({
+  const rawLinePoints: LinePoint[] = displayCandles.map((c, i) => ({
     x: xOf(i),
     y: yOf(c.close),
     ts: c.timestamp + bucketMs / 2,
     price: c.close,
   }));
+
+  // Carry-forward for line/area modes on short timeframes (1m, 5m):
+  // When there are no trades in a bucket, instead of lifting the pen and creating a
+  // visual gap, keep the last known price flat until the next real trade.
+  // This is render-only — no candle data is mutated.
+  const baseLinePoints: LinePoint[] = (() => {
+    if (!isLineVisualMode || rawLinePoints.length < 2) return rawLinePoints;
+    // Only apply on timeframes where empty buckets are common
+    if (bucketMs > 5 * 60_000) return rawLinePoints; // only 1m and 5m
+    const filled: LinePoint[] = [];
+    for (let i = 0; i < rawLinePoints.length; i++) {
+      filled.push(rawLinePoints[i]);
+      if (i < rawLinePoints.length - 1) {
+        const curr = rawLinePoints[i];
+        const next = rawLinePoints[i + 1];
+        const gapMs = next.ts - curr.ts;
+        // If gap > 1.5× bucketMs, insert carry-forward points at each missing bucket
+        if (gapMs > bucketMs * 1.5) {
+          const steps = Math.min(Math.floor(gapMs / bucketMs) - 1, 120);
+          for (let k = 1; k <= steps; k++) {
+            const fillTs = curr.ts + k * bucketMs;
+            if (fillTs >= next.ts) break;
+            // x position derived from timestamp interpolation
+            const fillX = curr.x + (next.x - curr.x) * (k * bucketMs / gapMs);
+            filled.push({ x: fillX, y: curr.y, ts: fillTs, price: curr.price });
+          }
+        }
+      }
+    }
+    return filled;
+  })();
 
   const fallbackGuideValue = valueMode === 'mcap'
     ? (quoteAnchorPrice > 0 ? quoteAnchorPrice * mcapScale : minP)
