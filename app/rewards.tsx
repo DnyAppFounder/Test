@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Share,
   Platform,
   Linking,
+  Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -50,8 +51,14 @@ export default function RewardsScreen() {
   const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
+  const prevRewardIdsRef = useRef<Set<string>>(new Set());
 
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const scrollViewRef = useRef<ScrollView>(null);
+  const rewardsSectionY = useRef<number>(0);
+  const highlightAnim = useRef(new Animated.Value(0)).current;
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ text, type });
@@ -102,6 +109,27 @@ export default function RewardsScreen() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // After rewards reload, detect newly added reward IDs and scroll to highlight them
+  useEffect(() => {
+    if (prevRewardIdsRef.current.size === 0) return;
+    const freshIds = new Set(
+      rewards.filter(r => !prevRewardIdsRef.current.has(r.id)).map(r => r.id)
+    );
+    if (freshIds.size === 0) return;
+    prevRewardIdsRef.current = new Set();
+    setNewRewardIds(freshIds);
+    // Scroll to rewards section
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: rewardsSectionY.current, animated: true });
+    }, 150);
+    // Pulse animation: fade highlight in then out
+    Animated.sequence([
+      Animated.timing(highlightAnim, { toValue: 1, duration: 350, useNativeDriver: false }),
+      Animated.delay(1800),
+      Animated.timing(highlightAnim, { toValue: 0, duration: 600, useNativeDriver: false }),
+    ]).start(() => setNewRewardIds(new Set()));
+  }, [rewards]);
 
   // Pre-fill referral code from URL ?ref= param on web
   useEffect(() => {
@@ -174,6 +202,8 @@ export default function RewardsScreen() {
     if (result.success) {
       setApplySuccess(true);
       setInputCode('');
+      // Snapshot current IDs before reload so we can identify new ones after
+      prevRewardIdsRef.current = new Set(rewards.map(r => r.id));
       await loadData();
       setTimeout(() => setApplySuccess(false), 4000);
     } else {
@@ -287,7 +317,7 @@ export default function RewardsScreen() {
         <Text style={styles.headerTitle}>Rewards & Referrals</Text>
       </LinearGradient>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+      <ScrollView ref={scrollViewRef} style={styles.content} contentContainerStyle={styles.contentContainer}>
         {/* Load error banner */}
         {!!loadError && (
           <View style={[styles.statusBanner, styles.bannerError]}>
@@ -461,7 +491,10 @@ export default function RewardsScreen() {
 
         {/* Regular reward cards */}
         {rewards.length > 0 && (
-          <View style={styles.section}>
+          <View
+            style={styles.section}
+            onLayout={e => { rewardsSectionY.current = e.nativeEvent.layout.y; }}
+          >
             <Text style={styles.sectionTitle}>Your Rewards</Text>
             {rewards.map((reward) => (
               <RewardCard
@@ -469,6 +502,8 @@ export default function RewardsScreen() {
                 reward={reward}
                 claimingId={claimingId}
                 onClaim={handleClaimReward}
+                isNew={newRewardIds.has(reward.id)}
+                highlightAnim={highlightAnim}
               />
             ))}
           </View>
@@ -646,9 +681,11 @@ interface RewardCardProps {
   reward: UserReward;
   claimingId: string | null;
   onClaim: (reward: UserReward) => void;
+  isNew?: boolean;
+  highlightAnim?: Animated.Value;
 }
 
-function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
+function RewardCard({ reward, claimingId, onClaim, isNew, highlightAnim }: RewardCardProps) {
   const isActivelyClaiming = claimingId === reward.id;
 
   const action = (() => {
@@ -696,8 +733,19 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
     );
   })();
 
+  const highlightBorder = isNew && highlightAnim
+    ? highlightAnim.interpolate({ inputRange: [0, 1], outputRange: ['rgba(16,185,129,0)', 'rgba(16,185,129,0.6)'] })
+    : undefined;
+  const highlightBg = isNew && highlightAnim
+    ? highlightAnim.interpolate({ inputRange: [0, 1], outputRange: [colors.surface, 'rgba(16,185,129,0.08)'] })
+    : undefined;
+
   return (
-    <View style={styles.rewardCard}>
+    <Animated.View style={[
+      styles.rewardCard,
+      highlightBg ? { backgroundColor: highlightBg } : undefined,
+      highlightBorder ? { borderColor: highlightBorder } : undefined,
+    ]}>
       <View style={styles.rewardIcon}>
         <Star size={20} color={colors.warning} fill={colors.warning} />
       </View>
@@ -730,7 +778,7 @@ function RewardCard({ reward, claimingId, onClaim }: RewardCardProps) {
         )}
       </View>
       {action}
-    </View>
+    </Animated.View>
   );
 }
 

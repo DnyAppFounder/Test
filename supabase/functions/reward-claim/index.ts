@@ -99,7 +99,7 @@ interface SendResult {
   debug: Record<string, unknown>;
 }
 
-async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<SendResult> {
+async function sendRewardTokens(toWallet: string, mintAddress: string, rewardAmount: number): Promise<SendResult> {
   if (!SOLANA_RPC_URL) throw new ClaimError("SOLANA_RPC_URL is not configured");
   if (!TREASURY_PRIVATE_KEY_B58) throw new ClaimError("TREASURY_PRIVATE_KEY_BASE58 is not configured");
 
@@ -339,9 +339,9 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     );
   }
 
-  if (treasuryDworldBalance < CLAIM_DISPLAY_AMOUNT) {
+  if (treasuryDworldBalance < rewardAmount) {
     throw new ClaimError(
-      `Treasury has insufficient DWORLD: has ${treasuryDworldBalance}, needs ${CLAIM_DISPLAY_AMOUNT}`,
+      `Treasury has insufficient DWORLD: has ${treasuryDworldBalance}, needs ${rewardAmount}`,
     );
   }
 
@@ -353,8 +353,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   const userATAExists = !!userAtaInfo?.value;
 
   // ── 8. Raw amount from on-chain decimals ──────────────────────────────────
-  // 10,000 DWORLD × 10^6 = 10,000,000,000 raw units
-  const rawAmount = BigInt(CLAIM_DISPLAY_AMOUNT) * BigInt(Math.pow(10, mintDecimals));
+  const rawAmount = BigInt(rewardAmount) * BigInt(Math.pow(10, mintDecimals));
 
   const txDebug: Record<string, unknown> = {
     ...configDebug,
@@ -577,7 +576,7 @@ Deno.serve(async (req: Request) => {
 
     let sendResult: SendResult;
     try {
-      sendResult = await sendRewardTokens(wallet_address, mintAddress);
+      sendResult = await sendRewardTokens(wallet_address, mintAddress, reward.reward_amount);
     } catch (sendErr: any) {
       const msg = String(sendErr?.message || sendErr);
       // ClaimError carries safe debug info — always include in response
