@@ -254,7 +254,7 @@ export default function SwapScreen() {
     return transaction;
   };
 
-  // Derived values — must be declared BEFORE swapConfirmDetails to avoid TDZ
+  // All derived values grouped together to avoid TDZ (declare before use)
   const outputAmount = quote && toToken
     ? jupiterSwapService.formatAmount(parseInt(quote.outAmount), toToken.decimals)
     : '';
@@ -263,16 +263,6 @@ export default function SwapScreen() {
   const parsedAmount = parseFloat(fromAmount);
   const isInsufficientBalance = !!(fromToken && fromAmount && !isNaN(parsedAmount) && parsedAmount > fromTokenBalance);
   const canSwap = !!quote && hasWallet && status !== 'quoting' && status !== 'error' && !isInsufficientBalance;
-
-  const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
-    { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}${fromAmountUsd ? ` (${fromAmountUsd})` : ''}`, accent: true },
-    { label: 'You Receive', value: `${outputAmount || '?'} ${toToken.symbol}${toAmountUsd ? ` (${toAmountUsd})` : ''}`, accent: true },
-    { label: 'Min Received', value: minReceived ? `${minReceived} ${toToken.symbol}` : '—' },
-    { label: 'Slippage', value: `${slippagePct}%` },
-    { label: 'Price Impact', value: `${priceImpact.toFixed(2)}%` },
-    { label: 'Network Fee', value: '~0.000005 SOL' },
-    { label: 'Total', value: fromToken.address === SOL_MINT ? `${(parseFloat(fromAmount) + 0.000005).toFixed(6)} SOL` : `${fromAmount} ${fromToken.symbol} + fee`, total: true },
-  ] : [];
 
   const executeSwapTx = async (): Promise<string> => {
     if (!quote || !activeAddress || !fromToken || !toToken) throw new Error('Missing swap parameters');
@@ -374,6 +364,17 @@ export default function SwapScreen() {
   const rateText = quote && fromToken && toToken
     ? `1 ${fromToken.symbol} ≈ ${(parseFloat(outputAmount) / parseFloat(fromAmount || '1')).toFixed(4)} ${toToken.symbol}`
     : '—';
+
+  // swapConfirmDetails must be declared AFTER fromAmountUsd, toAmountUsd, minReceived, slippagePct
+  const swapConfirmDetails: TxDetail[] = quote && fromToken && toToken ? [
+    { label: 'You Pay', value: `${fromAmount} ${fromToken.symbol}${fromAmountUsd ? ` (${fromAmountUsd})` : ''}`, accent: true },
+    { label: 'You Receive', value: `${outputAmount || '?'} ${toToken.symbol}${toAmountUsd ? ` (${toAmountUsd})` : ''}`, accent: true },
+    { label: 'Min Received', value: minReceived ? `${minReceived} ${toToken.symbol}` : '—' },
+    { label: 'Slippage', value: `${slippagePct}%` },
+    { label: 'Price Impact', value: `${priceImpact.toFixed(2)}%` },
+    { label: 'Network Fee', value: '~0.000005 SOL' },
+    { label: 'Total', value: fromToken.address === SOL_MINT ? `${(parseFloat(fromAmount) + 0.000005).toFixed(6)} SOL` : `${fromAmount} ${fromToken.symbol} + fee`, total: true },
+  ] : [];
 
   const getButtonLabel = () => {
     if (!hasWallet) return 'Connect Wallet';
