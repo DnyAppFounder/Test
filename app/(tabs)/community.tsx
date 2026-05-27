@@ -45,7 +45,7 @@ type PromoteStep = 'select' | 'confirm' | 'processing' | 'done';
 
 export default function CommunityScreen() {
   const router = useRouter();
-  const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio } = useWallet();
+  const { activeAddress, activeWallet, connectedWallet, selectedAccount, refreshPortfolio, nativeBalance } = useWallet();
   const { profile, loading: profileLoading, refreshProfile, clearUnreadNotifCount, clearUnreadMessageCount, unreadMessageCount } = useProfile();
   const [activeTab, setActiveTab] = useState<TopTab>('feed');
   const [posts, setPosts] = useState<Post[]>([]);
@@ -688,14 +688,20 @@ export default function CommunityScreen() {
 
     const usdPrice = (tier as any).usdPrice as number;
     const liveSolPrice = await getSolPrice();
-    if (promotePayWith === 'SOL' && liveSolPrice <= 0) throw new Error('Could not fetch SOL price. Please try again.');
-    const solAmount = liveSolPrice > 0 ? usdPrice / liveSolPrice : null;
+    if (liveSolPrice <= 0) throw new Error('Could not fetch SOL price. Please try again.');
+    const solAmount = usdPrice / liveSolPrice;
+
+    const SOL_FEE_BUFFER = 0.000025;
+    const totalRequired = solAmount + SOL_FEE_BUFFER;
+    if (nativeBalance > 0 && nativeBalance < totalRequired) {
+      throw new Error(
+        `Insufficient SOL balance. You have ${nativeBalance.toFixed(4)} SOL but need ${totalRequired.toFixed(4)} SOL (${solAmount.toFixed(4)} SOL + ~${SOL_FEE_BUFFER} SOL fee).`
+      );
+    }
 
     const result = await payToTreasury({
       fromAddress: activeAddress,
-      amountSol: promotePayWith === 'SOL' ? (solAmount ?? 0.001) : undefined,
-      amountToken: promotePayWith === 'DWORLD' ? (DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? usdPrice) : undefined,
-      tokenMint: promotePayWith === 'DWORLD' ? DWORLD_MINT : undefined,
+      amountSol: solAmount,
       connectedWalletId: connectedWallet?.id ?? null,
       internalAccountIndex: selectedAccount?.accountIndex ?? 0,
       onStatus: setPromotePayStatus,
@@ -1371,14 +1377,19 @@ export default function CommunityScreen() {
   };
 
   const promoteSolAmt = selectedTier ? usdToSol((selectedTier as any).usdPrice) : null;
+  const promoteTotalSol = promoteSolAmt != null ? promoteSolAmt + 0.000025 : null;
+  const promoteInsufficientBalance = promoteTotalSol != null && nativeBalance > 0 && nativeBalance < promoteTotalSol;
   const promoteConfirmDetails: TxDetail[] = selectedTier ? [
-    { label: 'Boost Duration', value: selectedTier.label },
+    { label: 'Action', value: 'Promote Post' },
+    { label: 'Plan', value: selectedTier.label },
     { label: 'Recipient', value: `Treasury ${TREASURY_WALLET.slice(0, 6)}…${TREASURY_WALLET.slice(-4)}` },
-    ...(promotePayWith === 'SOL'
-      ? [{ label: 'SOL', value: promoteSolAmt != null ? `${promoteSolAmt.toFixed(4)} SOL` : 'Loading price…', accent: true, total: true }]
-      : [{ label: 'DWORLD', value: `${(DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? (selectedTier as any).usdPrice).toLocaleString()} DWORLD`, accent: true, total: true }]
-    ),
+    { label: 'SOL', value: promoteSolAmt != null ? `${promoteSolAmt.toFixed(4)} SOL` : 'Loading price…', accent: true },
     { label: 'Network Fee', value: '~0.000025 SOL' },
+    { label: 'Total Required', value: promoteTotalSol != null ? `${promoteTotalSol.toFixed(4)} SOL` : '…', total: true },
+    ...(promoteInsufficientBalance
+      ? [{ label: 'Your Balance', value: `${nativeBalance.toFixed(4)} SOL` }]
+      : []
+    ),
   ] : [];
 
   return (
@@ -2024,9 +2035,7 @@ export default function CommunityScreen() {
               const activeTier = PROMOTE_TIERS.find(t => t.key === selectedTierKey) ?? PROMOTE_TIERS[0];
               const usdPrice = (activeTier as any).usdPrice as number;
               const solAmt = usdToSol(usdPrice);
-              const displayAmt = promotePayWith === 'SOL'
-                ? (solAmt !== null ? `${solAmt.toFixed(3)} SOL` : 'Loading price...')
-                : `${(DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? usdPrice).toLocaleString()} DWORLD`;
+              const displayAmt = solAmt !== null ? `${solAmt.toFixed(3)} SOL` : 'Loading price...';
               return (
                 <>
                   {/* Header */}
@@ -2037,36 +2046,11 @@ export default function CommunityScreen() {
                       </View>
                       <View>
                         <Text style={styles.pmTitle}>Promote Post</Text>
-                        <Text style={styles.pmSubtitle}>Boost your post to reach more users.{'\n'}Payment in SOL or DWORLD.</Text>
+                        <Text style={styles.pmSubtitle}>Boost your post to reach more users.{'\n'}Payment in SOL.</Text>
                       </View>
                     </View>
                     <TouchableOpacity style={styles.pmCloseBtn} onPress={closePromoteModal}>
                       <X size={18} color="rgba(255,255,255,0.7)" />
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Pay with toggle */}
-                  <Text style={styles.pmPayLabel}>PAY WITH</Text>
-                  <View style={styles.pmToggleRow}>
-                    <TouchableOpacity
-                      style={[styles.pmToggleBtn, promotePayWith === 'SOL' && styles.pmToggleBtnActive]}
-                      onPress={() => setPromotePayWith('SOL')}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.pmToggleIcon}>
-                        <Text style={styles.pmToggleIconText}>◎</Text>
-                      </View>
-                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'SOL' && styles.pmToggleBtnTextActive]}>SOL</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.pmToggleBtn, promotePayWith === 'DWORLD' && styles.pmToggleBtnActive]}
-                      onPress={() => setPromotePayWith('DWORLD')}
-                      activeOpacity={0.8}
-                    >
-                      <View style={[styles.pmToggleIcon, { backgroundColor: 'rgba(139,92,246,0.3)' }]}>
-                        <Text style={styles.pmToggleIconText}>D</Text>
-                      </View>
-                      <Text style={[styles.pmToggleBtnText, promotePayWith === 'DWORLD' && styles.pmToggleBtnTextActive]}>DWORLD</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -2076,9 +2060,7 @@ export default function CommunityScreen() {
                       const isSelected = selectedTierKey === tier.key;
                       const tUsd = (tier as any).usdPrice as number;
                       const tSolAmt = usdToSol(tUsd);
-                      const tAmt = promotePayWith === 'SOL'
-                        ? (tSolAmt !== null ? `≈ ${tSolAmt.toFixed(3)} SOL` : 'Loading...')
-                        : `≈ ${(DWORLD_PROMOTE_AMOUNTS[tier.key] ?? tUsd).toLocaleString()} DWORLD`;
+                      const tAmt = tSolAmt !== null ? `≈ ${tSolAmt.toFixed(3)} SOL` : 'Loading...';
                       const isQuick = tier.key === '1h';
                       return (
                         <TouchableOpacity
@@ -2197,6 +2179,12 @@ export default function CommunityScreen() {
           if (promoteStep !== 'done') setShowPromoteModal(false);
         }}
         isExternalWallet={activeWallet?.type === 'connected'}
+        insufficientBalance={promoteInsufficientBalance}
+        insufficientBalanceMsg={
+          promoteInsufficientBalance && promoteTotalSol != null
+            ? `Insufficient SOL balance. You have ${nativeBalance.toFixed(4)} SOL, need ${promoteTotalSol.toFixed(4)} SOL.`
+            : undefined
+        }
       />
 
       {/* Delete conversation confirmation */}
