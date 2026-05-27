@@ -24,9 +24,10 @@ const TREASURY_PUBLIC_KEY = (Deno.env.get("TREASURY_PUBLIC_KEY") ?? "")
 const DWC_MINT_ENV = (Deno.env.get("DWC_MINT") ?? "").trim().replace(/^["']|["']$/g, "");
 
 // Increment this string each deploy so the client can verify freshness
-const DEPLOYED_AT = "2026-05-18T14:00:00Z";
+const DEPLOYED_AT = "2026-05-27T12:00:00Z";
 
-// Token-2022 (Token Extensions) program — DWORLD is a Token-2022 token
+// Both SPL token programs — auto-detected from on-chain mint account owner
+const TOKEN_PROGRAM_ID_STR      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM_ID_STR = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const ASSOC_TOKEN_PROGRAM_ID_STR = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const SYSTEM_PROGRAM_ID_STR = "11111111111111111111111111111111";
@@ -263,14 +264,19 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
 
   const tokenProgramDetected: string = mintAccResult.value.owner;
 
-  if (tokenProgramDetected !== TOKEN_2022_PROGRAM_ID_STR) {
+  // Accept both standard SPL Token and Token-2022 — use whatever is on-chain
+  if (
+    tokenProgramDetected !== TOKEN_PROGRAM_ID_STR &&
+    tokenProgramDetected !== TOKEN_2022_PROGRAM_ID_STR
+  ) {
     throw new ClaimError(
-      `Token program mismatch: mint owner is ${tokenProgramDetected}, ` +
-      `expected Token-2022 (${TOKEN_2022_PROGRAM_ID_STR}). ` +
-      `Do not use classic SPL TOKEN_PROGRAM_ID for DWORLD.`,
+      `Unrecognised token program: mint owner is ${tokenProgramDetected}. ` +
+      `Expected standard SPL Token or Token-2022.`,
       transferDebug,
     );
   }
+
+  const isToken2022 = tokenProgramDetected === TOKEN_2022_PROGRAM_ID_STR;
 
   const mintDecimals: number = mintAccResult.value.data?.parsed?.info?.decimals;
   if (typeof mintDecimals !== "number") {
@@ -281,14 +287,15 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   }
 
   console.log(
-    `[reward-claim] mint ${safeMint} | program: Token-2022 | decimals: ${mintDecimals}`,
+    `[reward-claim] mint ${safeMint} | program: ${isToken2022 ? "Token-2022" : "SPL Token"} | decimals: ${mintDecimals}`,
   );
 
-  // ── 6. Derive Token-2022 ATAs ─────────────────────────────────────────────
-  // ATA seeds: [owner, TOKEN_2022_PROGRAM_ID, mint]  →  AssociatedTokenProgram
+  // ── 6. Derive ATAs using the detected token program ───────────────────────
+  const detectedTokenProgramId = isToken2022 ? token2022ProgramId : new PublicKey(TOKEN_PROGRAM_ID_STR);
+
   function deriveATA(owner: InstanceType<typeof PublicKey>): InstanceType<typeof PublicKey> {
     const [ata] = PublicKey.findProgramAddressSync(
-      [owner.toBuffer(), token2022ProgramId.toBuffer(), mintPubkey.toBuffer()],
+      [owner.toBuffer(), detectedTokenProgramId.toBuffer(), mintPubkey.toBuffer()],
       assocTokenProgramId,
     );
     return ata;
@@ -300,7 +307,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     treasuryATA = deriveATA(treasury.publicKey);
     userATA     = deriveATA(toPubkey);
   } catch (e: any) {
-    throw new ClaimError("Token-2022 ATA derivation failed.", {
+    throw new ClaimError("ATA derivation failed.", {
       ...transferDebug,
       ataError: e?.message ?? String(e),
     });
@@ -309,10 +316,10 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   transferDebug.treasuryAta = treasuryATA.toBase58();
   transferDebug.userAta     = userATA.toBase58();
 
-  console.log(`[reward-claim] treasury T22 ATA: ${treasuryATA.toBase58()}`);
-  console.log(`[reward-claim] user T22 ATA: ${userATA.toBase58()}`);
+  console.log(`[reward-claim] treasury ATA: ${treasuryATA.toBase58()}`);
+  console.log(`[reward-claim] user ATA: ${userATA.toBase58()}`);
 
-  // ── 6. Check treasury Token-2022 DWORLD balance ───────────────────────────
+  // ── 6. Check treasury DWORLD balance ─────────────────────────────────────
   let treasuryDworldBalance = 0;
   try {
     const balResult = await solanaRpc("getTokenAccountBalance", [
@@ -327,8 +334,8 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     }
   } catch (e: any) {
     throw new ClaimError(
-      `Treasury Token-2022 ATA not found: ${treasuryATA.toBase58()}. ` +
-      `Ensure treasury wallet holds DWORLD in a Token-2022 account. (${e?.message || e})`,
+      `Treasury ATA not found: ${treasuryATA.toBase58()}. ` +
+      `Ensure treasury wallet holds DWORLD tokens. (${e?.message || e})`,
     );
   }
 
@@ -377,30 +384,28 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
     );
   }
 
-  // ── 9. Build transaction with manual Token-2022 instructions ──────────────
+  // ── 9. Build transaction using auto-detected token program ───────────────
   const tx = new Transaction();
 
-  // Create user Token-2022 ATA if missing
-  // Associated Token Account Program: CreateIdempotent (discriminator = 1)
+  // Create user ATA if missing (CreateIdempotent, discriminator = 1)
   // keys: [payer, ata, owner, mint, systemProgram, tokenProgram]
   if (!userATAExists) {
     console.log("[reward-claim] user ATA missing — adding createATA instruction");
     tx.add(new TransactionInstruction({
       programId: assocTokenProgramId,
       keys: [
-        { pubkey: treasury.publicKey, isSigner: true,  isWritable: true  }, // payer
-        { pubkey: userATA,            isSigner: false, isWritable: true  }, // ATA
-        { pubkey: toPubkey,           isSigner: false, isWritable: false }, // owner
-        { pubkey: mintPubkey,         isSigner: false, isWritable: false }, // mint
-        { pubkey: systemProgramId,    isSigner: false, isWritable: false }, // system
-        { pubkey: token2022ProgramId, isSigner: false, isWritable: false }, // Token-2022
+        { pubkey: treasury.publicKey,    isSigner: true,  isWritable: true  }, // payer
+        { pubkey: userATA,               isSigner: false, isWritable: true  }, // ATA
+        { pubkey: toPubkey,              isSigner: false, isWritable: false }, // owner
+        { pubkey: mintPubkey,            isSigner: false, isWritable: false }, // mint
+        { pubkey: systemProgramId,       isSigner: false, isWritable: false }, // system
+        { pubkey: detectedTokenProgramId, isSigner: false, isWritable: false }, // token program
       ],
-      // 0x01 = CreateIdempotent
       data: new Uint8Array([1]),
     }));
   }
 
-  // Token-2022 transferChecked (discriminator = 12)
+  // transferChecked (discriminator = 12) works for both SPL Token and Token-2022
   // Layout: [12 u8][amount u64 LE][decimals u8] = 10 bytes
   // keys: [source, mint, destination, authority]
   const transferData = new Uint8Array(10);
@@ -409,7 +414,7 @@ async function sendRewardTokens(toWallet: string, mintAddress: string): Promise<
   transferData[9] = mintDecimals;
 
   tx.add(new TransactionInstruction({
-    programId: token2022ProgramId,
+    programId: detectedTokenProgramId,
     keys: [
       { pubkey: treasuryATA,        isSigner: false, isWritable: true  }, // source
       { pubkey: mintPubkey,         isSigner: false, isWritable: false }, // mint

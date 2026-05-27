@@ -10,13 +10,39 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const APP_GUIDE_SEEN_KEY = 'dawen:hasSeenAppIntro';
 
-export async function markAppGuideSeen() {
-  await AsyncStorage.setItem(APP_GUIDE_SEEN_KEY, 'true');
+// Per-wallet key so each new wallet/account sees the guide once.
+function walletGuideKey(address: string): string {
+  return `dawen:${address.toLowerCase().trim()}:hasSeenAppIntro`;
 }
 
-export async function hasSeenAppGuide(): Promise<boolean> {
-  const val = await AsyncStorage.getItem(APP_GUIDE_SEEN_KEY);
+// Mark the guide as seen for a specific wallet address.
+// Falls back to the legacy global key when no address is provided (Settings reopen).
+export async function markAppGuideSeen(address?: string): Promise<void> {
+  if (address) {
+    await AsyncStorage.setItem(walletGuideKey(address), 'true').catch(() => {});
+  }
+  // Always set the legacy global key for backward compat
+  await AsyncStorage.setItem(APP_GUIDE_SEEN_KEY, 'true').catch(() => {});
+}
+
+// Check whether the guide has been seen for this specific wallet.
+// Returns true only if the per-wallet key is set.
+export async function hasSeenAppGuide(address?: string): Promise<boolean> {
+  if (address) {
+    const perWallet = await AsyncStorage.getItem(walletGuideKey(address)).catch(() => null);
+    return perWallet === 'true';
+  }
+  // Fallback: global legacy key
+  const val = await AsyncStorage.getItem(APP_GUIDE_SEEN_KEY).catch(() => null);
   return val === 'true';
+}
+
+// Clear the per-wallet guide seen flag so the guide will show again (used by Settings).
+export async function clearAppGuideSeen(address?: string): Promise<void> {
+  if (address) {
+    await AsyncStorage.removeItem(walletGuideKey(address)).catch(() => {});
+  }
+  await AsyncStorage.removeItem(APP_GUIDE_SEEN_KEY).catch(() => {});
 }
 
 // ─── Slide definitions ───────────────────────────────────────────────────────
@@ -113,9 +139,10 @@ const SLIDE_ICONS: React.ReactNode[] = [
 interface Props {
   visible: boolean;
   onClose: () => void;
+  walletAddress?: string;
 }
 
-export function AppGuideModal({ visible, onClose }: Props) {
+export function AppGuideModal({ visible, onClose, walletAddress }: Props) {
   const [slideIndex, setSlideIndex] = useState(0);
   const { width } = useWindowDimensions();
 
@@ -125,19 +152,19 @@ export function AppGuideModal({ visible, onClose }: Props) {
 
   const handleNext = useCallback(async () => {
     if (isLast) {
-      await markAppGuideSeen();
+      await markAppGuideSeen(walletAddress);
       onClose();
       setSlideIndex(0);
     } else {
       setSlideIndex(i => i + 1);
     }
-  }, [isLast, onClose]);
+  }, [isLast, onClose, walletAddress]);
 
   const handleSkip = useCallback(async () => {
-    await markAppGuideSeen();
+    await markAppGuideSeen(walletAddress);
     onClose();
     setSlideIndex(0);
-  }, [onClose]);
+  }, [onClose, walletAddress]);
 
   return (
     <Modal

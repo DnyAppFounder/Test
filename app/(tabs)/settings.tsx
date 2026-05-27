@@ -43,7 +43,7 @@ const DWORLD_PREMIUM_AMOUNTS: Record<PremiumTierKey, number> = {
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { hashPin } from '@/lib/crypto/pinHash';
 import { ExportPrivateKeyModal } from '@/components/ExportPrivateKeyModal';
-import { AppGuideModal, APP_GUIDE_SEEN_KEY } from '@/components/AppGuideModal';
+import { AppGuideModal, clearAppGuideSeen } from '@/components/AppGuideModal';
 
 type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'verify' | 'premium' | 'pin' | null;
 
@@ -509,8 +509,7 @@ export default function SettingsScreen() {
           icon: <Info size={20} color="#60A5FA" />,
           label: 'View App Guide',
           onPress: async () => {
-            // Allow reopening by clearing the seen flag
-            await AsyncStorage.removeItem(APP_GUIDE_SEEN_KEY);
+            await clearAppGuideSeen(activeAddress ?? undefined);
             setShowAppGuide(true);
           },
         },
@@ -629,7 +628,7 @@ export default function SettingsScreen() {
         <Text style={styles.copyrightText}>© 2026 DAWEN. All rights reserved.</Text>
       </ScrollView>
 
-      <AppGuideModal visible={showAppGuide} onClose={() => setShowAppGuide(false)} />
+      <AppGuideModal visible={showAppGuide} onClose={() => setShowAppGuide(false)} walletAddress={activeAddress ?? undefined} />
 
       <Modal visible={activeModal === 'language'} animationType="slide" transparent>
         <View style={styles.modalOverlay}>

@@ -50,20 +50,23 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     }
   }, [isReady, activeWallet, nextStep, onboardingComplete, profile?.id]);
 
-  // Show app guide exactly once, only AFTER all onboarding/security steps done.
-  // Guard: isReady + onboardingComplete (or nextStep === null + activeWallet)
-  // + not already shown this session + hasn't been seen before.
+  // Reset the guide check when the active wallet address changes so each new
+  // wallet/account is evaluated independently.
+  useEffect(() => {
+    guideCheckedRef.current = false;
+    setShowGuide(false);
+  }, [activeAddress]);
+
+  // Show app guide exactly once per wallet, only AFTER all onboarding steps done.
   useEffect(() => {
     if (guideCheckedRef.current) return;
-    // Wait until fully ready and all steps complete
     if (!isReady || !activeWallet || nextStep !== null) return;
-    // Either onboardingComplete flag or we just marked it (same tick)
     guideCheckedRef.current = true;
     (async () => {
-      const seen = await hasSeenAppGuide();
+      const seen = await hasSeenAppGuide(activeAddress ?? undefined);
       if (!seen) setShowGuide(true);
     })();
-  }, [isReady, activeWallet, nextStep, onboardingComplete]);
+  }, [isReady, activeWallet, nextStep, onboardingComplete, activeAddress]);
 
   // Auto-apply pending referral code once the user is fully onboarded.
   useEffect(() => {
@@ -106,7 +109,7 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
       <ImportBackupModal visible={isReady && nextStep === 'import-backup'} />
       <ExternalWarningModal visible={isReady && nextStep === 'external-warning'} />
       <BiometricModal visible={isReady && nextStep === 'biometric'} />
-      <AppGuideModal visible={showGuide} onClose={() => setShowGuide(false)} />
+      <AppGuideModal visible={showGuide} onClose={() => setShowGuide(false)} walletAddress={activeAddress ?? undefined} />
     </>
   );
 }
