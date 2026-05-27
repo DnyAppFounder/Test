@@ -1370,10 +1370,15 @@ export default function CommunityScreen() {
     }
   };
 
+  const promoteSolAmt = selectedTier ? usdToSol((selectedTier as any).usdPrice) : null;
   const promoteConfirmDetails: TxDetail[] = selectedTier ? [
     { label: 'Boost Duration', value: selectedTier.label },
-    { label: 'Payment Method', value: promotePayWith },
-    { label: 'Amount', value: `$${(selectedTier as any).usdPrice} USD`, accent: true, total: true },
+    { label: 'Recipient', value: `Treasury ${TREASURY_WALLET.slice(0, 6)}…${TREASURY_WALLET.slice(-4)}` },
+    ...(promotePayWith === 'SOL'
+      ? [{ label: 'SOL', value: promoteSolAmt != null ? `${promoteSolAmt.toFixed(4)} SOL` : 'Loading price…', accent: true, total: true }]
+      : [{ label: 'DWORLD', value: `${(DWORLD_PROMOTE_AMOUNTS[selectedTierKey!] ?? (selectedTier as any).usdPrice).toLocaleString()} DWORLD`, accent: true, total: true }]
+    ),
+    { label: 'Network Fee', value: '~0.000025 SOL' },
   ] : [];
 
   return (

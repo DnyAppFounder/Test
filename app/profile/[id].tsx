@@ -45,7 +45,8 @@ import Svg, { Path } from 'react-native-svg';
 import LinkText from '@/components/LinkText';
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
-import { payToTreasury, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { payToTreasury, TREASURY_WALLET, DTEST_MINT, PayStatus } from '@/services/treasuryService';
+import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SolanaPriceService } from '@/services/solana/priceService';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -220,6 +221,7 @@ export default function ProfileScreen() {
 
   // Premium certification modal
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [premiumConfirmVisible, setPremiumConfirmVisible] = useState(false);
   const [premiumDone, setPremiumDone] = useState(false);
   const [premiumPayStatus, setPremiumPayStatus] = useState<PayStatus>('idle');
   const [premiumTxSig, setPremiumTxSig] = useState<string | null>(null);
@@ -695,13 +697,12 @@ export default function ProfileScreen() {
 
   const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : 0;
 
-  const handlePurchasePremium = async () => {
-    if (!currentUserProfile || !isOwnProfile) return;
+  const executePremiumTx = async (): Promise<string> => {
+    if (!currentUserProfile || !isOwnProfile) throw new Error('No profile loaded.');
     const tier = PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)!;
     const solAmt = usdToSol(tier.usd);
     const fromAddr = activeAddress || selectedAccount?.address || '';
-    if (!fromAddr) return;
-    setPremiumPayStatus('preparing');
+    if (!fromAddr) throw new Error('No wallet connected.');
 
     const result = await payToTreasury({
       fromAddress: fromAddr,
@@ -713,15 +714,11 @@ export default function ProfileScreen() {
       onStatus: setPremiumPayStatus,
     });
 
-    if (!result.success) {
-      setPremiumPayStatus('idle');
-      return;
-    }
+    if (!result.success) throw new Error(result.error || 'Payment failed. Check your balance and try again.');
 
     setPremiumTxSig(result.signature ?? null);
     await VerificationService.activatePremium(currentUserProfile.id, selectedPremiumTier, result.signature ?? undefined);
-    setPremiumDone(true);
-    await loadProfile();
+    return result.signature ?? '';
   };
 
   const displayName = profile?.username
@@ -1212,27 +1209,23 @@ export default function ProfileScreen() {
                     })}
                   </View>
 
-                  {premiumPayStatus === 'preparing' || premiumPayStatus === 'signing' || premiumPayStatus === 'sending' ? (
-                    <View style={{ alignItems: 'center', paddingVertical: 16, gap: 12 }}>
-                      <ActivityIndicator size="small" color={colors.primary} />
-                      <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>
-                        {premiumPayStatus === 'signing' ? 'Confirm in wallet...' :
-                         premiumPayStatus === 'sending' ? 'Transaction pending...' :
-                         'Preparing transaction...'}
-                      </Text>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.premiumPayBtn}
-                      onPress={handlePurchasePremium}
-                      activeOpacity={0.85}
-                    >
-                      <Wallet size={15} color={colors.white} strokeWidth={2} />
-                      <Text style={styles.premiumPayBtnText}>
-                        Pay ${PREMIUM_TIERS.find(t => t.key === selectedPremiumTier)?.usd}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
+                  {(() => {
+                    const selTier = PREMIUM_TIERS.find(t => t.key === selectedPremiumTier);
+                    const solAmt = selTier ? usdToSol(selTier.usd) : 0;
+                    const dispAmt = premiumPayWith === 'SOL'
+                      ? (solAmt > 0 ? `${solAmt.toFixed(4)} SOL` : 'Loading price…')
+                      : `${selTier?.usd ?? 0} DAWORLD`;
+                    return (
+                      <TouchableOpacity
+                        style={styles.premiumPayBtn}
+                        onPress={() => setPremiumConfirmVisible(true)}
+                        activeOpacity={0.85}
+                      >
+                        <Wallet size={15} color={colors.white} strokeWidth={2} />
+                        <Text style={styles.premiumPayBtnText}>Pay {dispAmt}</Text>
+                      </TouchableOpacity>
+                    );
+                  })()}
 
                   <Text style={styles.premiumNote}>
                     Payment is processed via your Solana wallet. The transaction is verified on-chain before the badge is activated.
@@ -1265,6 +1258,39 @@ export default function ProfileScreen() {
           </ScrollView>
         </View>
       </Modal>
+
+      {/* ── Premium Certification Confirm ────────────────────────────────── */}
+      {(() => {
+        const selTier = PREMIUM_TIERS.find(t => t.key === selectedPremiumTier);
+        const solAmt = selTier ? usdToSol(selTier.usd) : 0;
+        const fromAddr = activeAddress || selectedAccount?.address || '';
+        const details: TxDetail[] = selTier ? [
+          { label: 'Plan', value: selTier.label },
+          { label: 'Recipient', value: `Treasury ${TREASURY_WALLET.slice(0, 6)}…${TREASURY_WALLET.slice(-4)}` },
+          ...(premiumPayWith === 'SOL'
+            ? [{ label: 'SOL', value: solAmt > 0 ? `${solAmt.toFixed(4)} SOL` : 'Loading price…', accent: true, total: true }]
+            : [{ label: 'DAWORLD', value: `${selTier.usd} DAWORLD`, accent: true, total: true }]
+          ),
+          { label: 'Network Fee', value: '~0.000025 SOL' },
+        ] : [];
+        return (
+          <ConfirmTransactionModal
+            visible={premiumConfirmVisible}
+            title="Confirm Premium"
+            details={details}
+            executeTransaction={executePremiumTx}
+            onSuccess={async () => {
+              setPremiumDone(true);
+              await loadProfile().catch(() => {});
+            }}
+            onDismiss={() => {
+              setPremiumConfirmVisible(false);
+              if (!premiumDone) setPremiumPayStatus('idle');
+            }}
+            isExternalWallet={!!connectedWallet}
+          />
+        );
+      })()}
 
       {/* ── Basic Verification Modal ─────────────────────────────────────── */}
       <Modal visible={showVerifyModal} animationType="slide" transparent>

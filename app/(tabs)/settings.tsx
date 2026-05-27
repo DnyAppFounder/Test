@@ -30,7 +30,7 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { useSecurity } from '@/contexts/SecurityContext';
 import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
-import { payToTreasury, DWORLD_MINT, PayStatus } from '@/services/treasuryService';
+import { payToTreasury, TREASURY_WALLET, DWORLD_MINT, PayStatus } from '@/services/treasuryService';
 import { getSolPrice } from '@/services/solana/priceService';
 import { VerificationService, PREMIUM_TIERS, PremiumTierKey } from '@/services/verificationService';
 
@@ -527,10 +527,15 @@ export default function SettingsScreen() {
   ];
 
   const selectedPremiumTier = PREMIUM_TIERS.find(t => t.key === premiumTierKey);
+  const premiumSolAmt = selectedPremiumTier ? usdToSol(selectedPremiumTier.usd) : null;
   const premiumConfirmDetails: TxDetail[] = selectedPremiumTier ? [
     { label: 'Plan', value: selectedPremiumTier.label },
-    { label: 'Payment Method', value: premiumPayWith },
-    { label: 'Amount', value: `$${selectedPremiumTier.usd} USD`, accent: true, total: true },
+    { label: 'Recipient', value: `Treasury ${TREASURY_WALLET.slice(0, 6)}…${TREASURY_WALLET.slice(-4)}` },
+    ...(premiumPayWith === 'SOL'
+      ? [{ label: 'SOL', value: premiumSolAmt != null ? `${premiumSolAmt.toFixed(4)} SOL` : 'Loading price…', accent: true, total: true }]
+      : [{ label: 'DWORLD', value: `${DWORLD_PREMIUM_AMOUNTS[premiumTierKey].toLocaleString()} DWORLD`, accent: true, total: true }]
+    ),
+    { label: 'Network Fee', value: '~0.000025 SOL' },
   ] : [];
 
   return (
