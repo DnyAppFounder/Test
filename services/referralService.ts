@@ -337,14 +337,21 @@ export class ReferralService {
 
   static async isEarlyRewardPoolExhausted(): Promise<boolean> {
     try {
-      // Count only confirmed (sent) early rewards toward the 100-slot limit
-      const { count, error } = await supabase
-        .from('user_rewards')
-        .select('id', { count: 'exact', head: true })
-        .eq('reason', 'early_user_first_100')
-        .eq('status', 'sent');
+      const [{ data: limitSetting }, { count, error }] = await Promise.all([
+        supabase
+          .from('reward_settings')
+          .select('value')
+          .eq('key', 'first_100_limit')
+          .maybeSingle(),
+        supabase
+          .from('user_rewards')
+          .select('id', { count: 'exact', head: true })
+          .eq('reason', 'early_user_first_100')
+          .eq('status', 'sent'),
+      ]);
       if (error) return false;
-      return (count ?? 0) >= 100;
+      const claimLimit = limitSetting?.value != null ? Number(limitSetting.value) : 10000;
+      return (count ?? 0) >= claimLimit;
     } catch {
       return false;
     }
