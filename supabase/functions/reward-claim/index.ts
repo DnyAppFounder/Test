@@ -537,21 +537,28 @@ Deno.serve(async (req: Request) => {
     // Mint address comes exclusively from env — never from reward record or symbol
     const mintAddress = DWC_MINT_ENV;
 
-    // Early member reward: enforce 100-user cap
+    // Early member reward: enforce cap read from reward_settings
     let totalClaimsUsed = 0;
     if (reward.reason === "early_user_first_100") {
+      const { data: limitSetting } = await db
+        .from("reward_settings")
+        .select("value")
+        .eq("key", "first_100_limit")
+        .maybeSingle();
+      const claimLimit = limitSetting?.value != null ? Number(limitSetting.value) : 10000;
+
       const { count } = await db
         .from("user_rewards")
         .select("id", { count: "exact", head: true })
         .eq("reason", "early_user_first_100")
         .eq("status", "sent");
       totalClaimsUsed = count ?? 0;
-      if (totalClaimsUsed >= 100) {
+      if (totalClaimsUsed >= claimLimit) {
         return new Response(
           JSON.stringify({
             success: false,
-            error: "Early member claim limit reached (100/100 users)",
-            debug: { totalClaimsUsed, eligibilityStatus: "limit_reached", deployedAt: DEPLOYED_AT },
+            error: `Early member claim limit reached (${totalClaimsUsed}/${claimLimit} users)`,
+            debug: { totalClaimsUsed, claimLimit, eligibilityStatus: "limit_reached", deployedAt: DEPLOYED_AT },
           }),
           { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
