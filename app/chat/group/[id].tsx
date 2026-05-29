@@ -18,7 +18,8 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut, Link } from 'lucide-react-native';
+import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut, Link, Bot } from 'lucide-react-native';
+import BotSettings from '@/components/BotSettings';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -90,6 +91,9 @@ export default function GroupChatScreen() {
 
   // Group invite
   const [generatingInvite, setGeneratingInvite] = useState(false);
+
+  // Bot settings
+  const [showBotSettings, setShowBotSettings] = useState(false);
 
   // Multiple pins & scroll-to
   const [showPinsList, setShowPinsList] = useState(false);
@@ -540,8 +544,10 @@ export default function GroupChatScreen() {
     const mine = item.sender_id === profile?.id;
     const prev = index > 0 ? visibleMessages[index - 1] : null;
     const showSenderInfo = !mine && (!prev || prev.sender_id !== item.sender_id);
-    const senderName = item.sender?.username
-      || (item.sender?.wallet_address ? `${item.sender.wallet_address.slice(0, 6)}...` : 'User');
+    const isBot = !!item.is_bot_message;
+    const senderName = isBot
+      ? (item.bot_name || item.bot_username || 'Bot')
+      : (item.sender?.username || (item.sender?.wallet_address ? `${item.sender.wallet_address.slice(0, 6)}...` : 'User'));
     const isPinned = pins.some(p => p.message_id === item.id);
     const isDeleted = item.is_deleted;
     const isHighlighted = item.id === highlightedMsgId;
@@ -575,7 +581,15 @@ export default function GroupChatScreen() {
           )}
           <View style={[styles.bubbleWrap, mine ? styles.bubbleWrapRight : styles.bubbleWrapLeft]}>
             {!mine && showSenderInfo && (
-              <Text style={styles.senderName}>{senderName}</Text>
+              <View style={styles.senderNameRow}>
+                <Text style={styles.senderName}>{senderName}</Text>
+                {isBot && (
+                  <View style={styles.botBadge}>
+                    <Bot size={9} color="#fff" strokeWidth={2.5} />
+                    <Text style={styles.botBadgeText}>BOT</Text>
+                  </View>
+                )}
+              </View>
             )}
             {isDeleted ? (
               <View style={[styles.bubble, mine ? styles.bubbleMineDeleted : styles.bubbleOtherDeleted]}>
@@ -1095,6 +1109,17 @@ export default function GroupChatScreen() {
                 </TouchableOpacity>
               )}
 
+              {isCreatorOrAdmin && (
+                <TouchableOpacity
+                  style={styles.botSettingsBtn}
+                  onPress={() => { setShowSettings(false); setShowBotSettings(true); }}
+                  activeOpacity={0.8}
+                >
+                  <Bot size={15} color="#8B5CF6" strokeWidth={2} />
+                  <Text style={styles.botSettingsBtnText}>Telegram Bot</Text>
+                </TouchableOpacity>
+              )}
+
               {myRole === 'creator' && (
                 <TouchableOpacity
                   style={styles.deleteGroupBtn}
@@ -1343,6 +1368,17 @@ export default function GroupChatScreen() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* Telegram Bot Settings */}
+      {profile?.wallet_address && (
+        <BotSettings
+          visible={showBotSettings}
+          onClose={() => setShowBotSettings(false)}
+          groupId={groupId!}
+          walletAddress={profile.wallet_address}
+          isAdmin={isCreatorOrAdmin}
+        />
+      )}
 
       {/* Leave group confirmation */}
       <Modal visible={showLeaveConfirm} transparent animationType="fade" onRequestClose={() => setShowLeaveConfirm(false)}>
@@ -1765,6 +1801,27 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(59,130,246,0.12)',
   },
   inviteLinkText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
+
+  // Bot settings button
+  botSettingsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(139,92,246,0.12)',
+  },
+  botSettingsBtnText: { fontSize: fontSize.sm, fontWeight: '700', color: '#8B5CF6' },
+
+  // BOT badge in messages
+  senderNameRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 3, marginLeft: 14 },
+  botBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    backgroundColor: '#8B5CF6',
+    borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2,
+  },
+  botBadgeText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
 
   // Pins list
   pinListRow: {
