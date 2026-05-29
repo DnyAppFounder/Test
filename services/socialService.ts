@@ -1852,4 +1852,191 @@ export class SocialService {
       .is('removed_at', null);
     return (data || []).map((r: any) => r.group_id);
   }
+
+  // ── Message Reactions ────────────────────────────────────────────────────────
+
+  static async getMessageReactions(messageId: string): Promise<{ emoji: string; count: number; userIds: string[] }[]> {
+    const { data } = await supabase
+      .from('message_reactions')
+      .select('emoji, user_id')
+      .eq('message_id', messageId);
+    if (!data) return [];
+    const map = new Map<string, string[]>();
+    for (const r of data) {
+      const arr = map.get(r.emoji) ?? [];
+      arr.push(r.user_id);
+      map.set(r.emoji, arr);
+    }
+    return Array.from(map.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
+  }
+
+  static async toggleMessageReaction(messageId: string, userId: string, emoji: string): Promise<void> {
+    const { data: existing } = await supabase
+      .from('message_reactions')
+      .select('id')
+      .eq('message_id', messageId)
+      .eq('user_id', userId)
+      .eq('emoji', emoji)
+      .maybeSingle();
+    if (existing) {
+      await supabase.from('message_reactions').delete().eq('id', existing.id);
+    } else {
+      await supabase.from('message_reactions').insert({ message_id: messageId, user_id: userId, emoji });
+    }
+  }
+
+  static async getGroupMessageReactions(messageId: string): Promise<{ emoji: string; count: number; userIds: string[] }[]> {
+    const { data } = await supabase
+      .from('group_message_reactions')
+      .select('emoji, user_id')
+      .eq('message_id', messageId);
+    if (!data) return [];
+    const map = new Map<string, string[]>();
+    for (const r of data) {
+      const arr = map.get(r.emoji) ?? [];
+      arr.push(r.user_id);
+      map.set(r.emoji, arr);
+    }
+    return Array.from(map.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
+  }
+
+  static async toggleGroupMessageReaction(messageId: string, userId: string, emoji: string): Promise<void> {
+    const { data: existing } = await supabase
+      .from('group_message_reactions')
+      .select('id')
+      .eq('message_id', messageId)
+      .eq('user_id', userId)
+      .eq('emoji', emoji)
+      .maybeSingle();
+    if (existing) {
+      await supabase.from('group_message_reactions').delete().eq('id', existing.id);
+    } else {
+      await supabase.from('group_message_reactions').insert({ message_id: messageId, user_id: userId, emoji });
+    }
+  }
+
+  // ── Batch-load reactions for a list of messages ──────────────────────────────
+
+  static async batchGetMessageReactions(messageIds: string[]): Promise<Record<string, { emoji: string; count: number; userIds: string[] }[]>> {
+    if (messageIds.length === 0) return {};
+    const { data } = await supabase
+      .from('message_reactions')
+      .select('message_id, emoji, user_id')
+      .in('message_id', messageIds);
+    const result: Record<string, Map<string, string[]>> = {};
+    for (const r of (data ?? [])) {
+      if (!result[r.message_id]) result[r.message_id] = new Map();
+      const arr = result[r.message_id].get(r.emoji) ?? [];
+      arr.push(r.user_id);
+      result[r.message_id].set(r.emoji, arr);
+    }
+    const out: Record<string, { emoji: string; count: number; userIds: string[] }[]> = {};
+    for (const [msgId, map] of Object.entries(result)) {
+      out[msgId] = Array.from(map.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
+    }
+    return out;
+  }
+
+  static async batchGetGroupMessageReactions(messageIds: string[]): Promise<Record<string, { emoji: string; count: number; userIds: string[] }[]>> {
+    if (messageIds.length === 0) return {};
+    const { data } = await supabase
+      .from('group_message_reactions')
+      .select('message_id, emoji, user_id')
+      .in('message_id', messageIds);
+    const result: Record<string, Map<string, string[]>> = {};
+    for (const r of (data ?? [])) {
+      if (!result[r.message_id]) result[r.message_id] = new Map();
+      const arr = result[r.message_id].get(r.emoji) ?? [];
+      arr.push(r.user_id);
+      result[r.message_id].set(r.emoji, arr);
+    }
+    const out: Record<string, { emoji: string; count: number; userIds: string[] }[]> = {};
+    for (const [msgId, map] of Object.entries(result)) {
+      out[msgId] = Array.from(map.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
+    }
+    return out;
+  }
+
+  // ── Shared Posts ─────────────────────────────────────────────────────────────
+
+  static async sharePostToDm(postId: string, senderId: string, receiverId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('shared_posts')
+      .insert({ post_id: postId, sender_id: senderId, receiver_id: receiverId });
+    return !error;
+  }
+
+  static async sharePostToGroup(postId: string, senderId: string, groupId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('shared_posts')
+      .insert({ post_id: postId, sender_id: senderId, group_id: groupId });
+    return !error;
+  }
+
+  // ── Group Invites ────────────────────────────────────────────────────────────
+
+  static generateInviteCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let code = '';
+    for (let i = 0; i < 10; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
+  static async createGroupInvite(groupId: string, createdBy: string): Promise<string | null> {
+    const code = SocialService.generateInviteCode();
+    const { error } = await supabase
+      .from('group_invites')
+      .insert({ group_id: groupId, invite_code: code, created_by: createdBy });
+    return error ? null : code;
+  }
+
+  static async getGroupInviteByCode(code: string): Promise<{ id: string; group_id: string; invite_code: string; uses: number; max_uses: number | null; expires_at: string | null; group?: any } | null> {
+    const { data } = await supabase
+      .from('group_invites')
+      .select('*, group:group_conversations(id, name, avatar_url)')
+      .eq('invite_code', code)
+      .maybeSingle();
+    return data ?? null;
+  }
+
+  static async useGroupInvite(inviteCode: string, userId: string): Promise<{ success: boolean; groupId?: string; error?: string }> {
+    const invite = await SocialService.getGroupInviteByCode(inviteCode);
+    if (!invite) return { success: false, error: 'Invalid invite code' };
+    if (invite.expires_at && new Date(invite.expires_at) < new Date()) return { success: false, error: 'Invite has expired' };
+    if (invite.max_uses != null && invite.uses >= invite.max_uses) return { success: false, error: 'Invite has reached its limit' };
+
+    // Add member
+    const { error: addErr } = await supabase
+      .from('group_members')
+      .upsert({ group_id: invite.group_id, user_id: userId, role: 'member' }, { onConflict: 'group_id,user_id' });
+    if (addErr) return { success: false, error: 'Failed to join group' };
+
+    // Increment uses
+    await supabase
+      .from('group_invites')
+      .update({ uses: invite.uses + 1 })
+      .eq('id', invite.id);
+
+    return { success: true, groupId: invite.group_id };
+  }
+
+  static async getGroupInvites(groupId: string): Promise<any[]> {
+    const { data } = await supabase
+      .from('group_invites')
+      .select('*')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: false });
+    return data ?? [];
+  }
+
+  static async deleteGroupInvite(inviteId: string): Promise<boolean> {
+    const { error } = await supabase.from('group_invites').delete().eq('id', inviteId);
+    return !error;
+  }
+
+  // ── Mark notification as read ────────────────────────────────────────────────
+
+  static async markNotificationRead(notificationId: string): Promise<void> {
+    await supabase.from('notifications').update({ read: true }).eq('id', notificationId);
+  }
 }

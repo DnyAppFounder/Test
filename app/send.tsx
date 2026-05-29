@@ -11,8 +11,8 @@ import {
   ActivityIndicator,
   Modal,
   Image,
-  Clipboard,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -225,7 +225,7 @@ export default function SendScreen() {
 
   const handlePaste = async () => {
     try {
-      const text = await Clipboard.getString();
+      const text = await Clipboard.getStringAsync();
       if (text?.trim()) { setRecipient(text.trim()); setError(null); }
     } catch {}
   };
@@ -289,7 +289,7 @@ export default function SendScreen() {
         // ── SPL Token / Token-2022 transfer ─────────────────────────────────
         const SPL_TOKEN_PID  = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
         const TOKEN_2022_PID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
-        const ASSO_TOKEN_PID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bv8');
+        const ASSO_TOKEN_PID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
         const SYS_PID        = new PublicKey('11111111111111111111111111111111');
 
         const mintPubkey = new PublicKey(selectedAsset.address);

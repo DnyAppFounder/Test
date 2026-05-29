@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform, ActivityIndicator, Animated } from 'react-native';
-import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Trash2, X, Megaphone, ChartBar as BarChart2 } from 'lucide-react-native';
+import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Users, Trash2, X, Megaphone, ChartBar as BarChart2, Send } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
 import LinkText, { extractUrls } from './LinkText';
@@ -101,13 +101,59 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
     if (post.author?.id) router.push(`/profile/${post.author.id}`);
   };
 
-  const handleShare = async () => {
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [dmConversations, setDmConversations] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [loadingShareTargets, setLoadingShareTargets] = useState(false);
+  const [sharingTo, setSharingTo] = useState<string | null>(null);
+
+  const handleShare = () => {
+    setShowShareModal(true);
+    if (!currentProfile) return;
+    setLoadingShareTargets(true);
+    (async () => {
+      try {
+        const [dms, grps] = await Promise.all([
+          SocialService.getConversations(currentProfile.id),
+          SocialService.getGroupConversations(currentProfile.id),
+        ]);
+        setDmConversations(dms ?? []);
+        setGroups(grps ?? []);
+      } catch {}
+      finally { setLoadingShareTargets(false); }
+    })();
+  };
+
+  const handleShareNative = async () => {
     try {
       const authorName = post.author?.username || post.author?.wallet_address?.slice(0, 8) || 'Someone';
       await Share.share({
         message: `${authorName} on Dawen Pulse: "${post.content.slice(0, 120)}${post.content.length > 120 ? '...' : ''}"`,
       });
     } catch {}
+    setShowShareModal(false);
+  };
+
+  const handleShareToDm = async (receiverId: string) => {
+    if (!currentProfile || sharingTo) return;
+    setSharingTo(receiverId);
+    try {
+      await SocialService.sharePostToDm(post.id, currentProfile.id, receiverId);
+    } finally {
+      setSharingTo(null);
+      setShowShareModal(false);
+    }
+  };
+
+  const handleShareToGroup = async (groupId: string) => {
+    if (!currentProfile || sharingTo) return;
+    setSharingTo(groupId);
+    try {
+      await SocialService.sharePostToGroup(post.id, currentProfile.id, groupId);
+    } finally {
+      setSharingTo(null);
+      setShowShareModal(false);
+    }
   };
 
   const authorName = post.author?.username
@@ -295,6 +341,91 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
           </View>
         );
       })()}
+
+      {/* Share to chat modal */}
+      <Modal visible={showShareModal} transparent animationType="slide" onRequestClose={() => setShowShareModal(false)}>
+        <Pressable style={shareStyles.overlay} onPress={() => setShowShareModal(false)}>
+          <Pressable style={shareStyles.sheet} onPress={() => {}}>
+            <View style={shareStyles.handle} />
+            <Text style={shareStyles.title}>Share Post</Text>
+
+            <TouchableOpacity style={shareStyles.nativeRow} onPress={handleShareNative} activeOpacity={0.8}>
+              <Share2 size={18} color={colors.textPrimary} strokeWidth={2} />
+              <Text style={shareStyles.nativeText}>Share externally</Text>
+            </TouchableOpacity>
+
+            {loadingShareTargets ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+            ) : (
+              <>
+                {dmConversations.length > 0 && (
+                  <>
+                    <Text style={shareStyles.section}>Direct Messages</Text>
+                    {dmConversations.map((conv: any) => {
+                      const other = conv.other_user;
+                      const name = other?.username || other?.wallet_address?.slice(0, 10) || 'User';
+                      return (
+                        <TouchableOpacity
+                          key={conv.id}
+                          style={shareStyles.targetRow}
+                          onPress={() => handleShareToDm(other?.id ?? conv.other_user_id)}
+                          activeOpacity={0.8}
+                          disabled={sharingTo === (other?.id ?? conv.other_user_id)}
+                        >
+                          <View style={shareStyles.avatar}>
+                            {other?.avatar_url ? (
+                              <Image source={{ uri: other.avatar_url }} style={shareStyles.avatarImg} />
+                            ) : (
+                              <User size={14} color={colors.textMuted} />
+                            )}
+                          </View>
+                          <Text style={shareStyles.targetName}>{name}</Text>
+                          {sharingTo === (other?.id ?? conv.other_user_id) ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <Send size={15} color={colors.primary} strokeWidth={2} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                )}
+                {groups.length > 0 && (
+                  <>
+                    <Text style={shareStyles.section}>Groups</Text>
+                    {groups.map((grp: any) => (
+                      <TouchableOpacity
+                        key={grp.id}
+                        style={shareStyles.targetRow}
+                        onPress={() => handleShareToGroup(grp.id)}
+                        activeOpacity={0.8}
+                        disabled={sharingTo === grp.id}
+                      >
+                        <View style={shareStyles.avatar}>
+                          {grp.avatar_url ? (
+                            <Image source={{ uri: grp.avatar_url }} style={shareStyles.avatarImg} />
+                          ) : (
+                            <Users size={14} color={colors.textMuted} />
+                          )}
+                        </View>
+                        <Text style={shareStyles.targetName}>{grp.name || 'Group'}</Text>
+                        {sharingTo === grp.id ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <Send size={15} color={colors.primary} strokeWidth={2} />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </>
+                )}
+                {dmConversations.length === 0 && groups.length === 0 && (
+                  <Text style={shareStyles.empty}>No conversations yet</Text>
+                )}
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Full-screen image preview modal */}
       <Modal visible={!!previewUri} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setPreviewUri(null)}>
@@ -683,5 +814,95 @@ const previewStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
+  },
+});
+
+const shareStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#12121A',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: spacing.xl,
+    paddingBottom: 40,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    maxHeight: '75%',
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignSelf: 'center',
+    marginBottom: spacing.lg,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: spacing.lg,
+  },
+  nativeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+    marginBottom: spacing.sm,
+  },
+  nativeText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  section: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  targetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1A1A28',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  targetName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  empty: {
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: 24,
   },
 });

@@ -14,10 +14,11 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Modal,
+  Share,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut } from 'lucide-react-native';
+import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut, Link } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -25,6 +26,10 @@ import { SocialService, GroupTopic, GroupPin } from '@/services/socialService';
 import { supabase } from '@/lib/supabase';
 import LinkText, { extractUrls } from '@/components/LinkText';
 import LinkPreview from '@/components/LinkPreview';
+
+const EMOJI_SET = ['👍', '😂', '🔥', '👀', '😮', '❤️'];
+type Reaction = { emoji: string; count: number; userIds: string[] };
+type ReactionsMap = Record<string, Reaction[]>;
 
 export default function GroupChatScreen() {
   const router = useRouter();
@@ -78,6 +83,14 @@ export default function GroupChatScreen() {
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leavingGroup, setLeavingGroup] = useState(false);
 
+  // Reactions
+  const [reactions, setReactions] = useState<ReactionsMap>({});
+  const [reactionTarget, setReactionTarget] = useState<any>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  // Group invite
+  const [generatingInvite, setGeneratingInvite] = useState(false);
+
   // Multiple pins & scroll-to
   const [showPinsList, setShowPinsList] = useState(false);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
@@ -114,6 +127,12 @@ export default function GroupChatScreen() {
       } else {
         const def = await SocialService.ensureDefaultTopic(groupId, profile.id);
         if (def) { setTopics([def]); setActiveTopic(def); }
+      }
+      // Load reactions
+      const realIds = msgs.filter((m: any) => !m.id.startsWith('opt')).map((m: any) => m.id);
+      if (realIds.length > 0) {
+        const rxMap = await SocialService.batchGetGroupMessageReactions(realIds);
+        setReactions(rxMap);
       }
     } catch (e) {
       console.error('[GroupChat] loadData error:', e);
@@ -156,6 +175,43 @@ export default function GroupChatScreen() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [groupId, profile?.id]);
+
+  // Realtime: group message reactions
+  useEffect(() => {
+    if (!groupId) return;
+    const channel = supabase
+      .channel(`group_reactions:${groupId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_message_reactions' }, (payload) => {
+        const r = payload.new as any;
+        setReactions(prev => {
+          const msgRx = [...(prev[r.message_id] ?? [])];
+          const idx = msgRx.findIndex(x => x.emoji === r.emoji);
+          if (idx >= 0) {
+            if (!msgRx[idx].userIds.includes(r.user_id)) {
+              msgRx[idx] = { ...msgRx[idx], count: msgRx[idx].count + 1, userIds: [...msgRx[idx].userIds, r.user_id] };
+            }
+          } else {
+            msgRx.push({ emoji: r.emoji, count: 1, userIds: [r.user_id] });
+          }
+          return { ...prev, [r.message_id]: msgRx };
+        });
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'group_message_reactions' }, (payload) => {
+        const r = payload.old as any;
+        setReactions(prev => {
+          const msgRx = [...(prev[r.message_id] ?? [])];
+          const idx = msgRx.findIndex(x => x.emoji === r.emoji);
+          if (idx >= 0) {
+            const newUserIds = msgRx[idx].userIds.filter((id: string) => id !== r.user_id);
+            if (newUserIds.length === 0) msgRx.splice(idx, 1);
+            else msgRx[idx] = { ...msgRx[idx], count: newUserIds.length, userIds: newUserIds };
+          }
+          return { ...prev, [r.message_id]: msgRx };
+        });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [groupId]);
 
   const visibleMessages = messages.filter(m => {
     if (!activeTopic) return true;
@@ -395,6 +451,43 @@ export default function GroupChatScreen() {
     setPromotingMember(null);
   };
 
+  const handleGroupReact = async (emoji: string) => {
+    if (!profile || !reactionTarget || reactionTarget.id.startsWith('opt')) return;
+    setShowEmojiPicker(false);
+    const msgId = reactionTarget.id;
+    setReactions(prev => {
+      const msgRx = [...(prev[msgId] ?? [])];
+      const idx = msgRx.findIndex(x => x.emoji === emoji);
+      const alreadyReacted = idx >= 0 && msgRx[idx].userIds.includes(profile.id);
+      if (alreadyReacted) {
+        const newUserIds = msgRx[idx].userIds.filter((id: string) => id !== profile.id);
+        if (newUserIds.length === 0) msgRx.splice(idx, 1);
+        else msgRx[idx] = { ...msgRx[idx], count: newUserIds.length, userIds: newUserIds };
+      } else if (idx >= 0) {
+        msgRx[idx] = { ...msgRx[idx], count: msgRx[idx].count + 1, userIds: [...msgRx[idx].userIds, profile.id] };
+      } else {
+        msgRx.push({ emoji, count: 1, userIds: [profile.id] });
+      }
+      return { ...prev, [msgId]: msgRx };
+    });
+    await SocialService.toggleGroupMessageReaction(msgId, profile.id, emoji);
+    setReactionTarget(null);
+  };
+
+  const handleGenerateInvite = async () => {
+    if (!groupId || !profile || generatingInvite) return;
+    setGeneratingInvite(true);
+    try {
+      const code = await SocialService.createGroupInvite(groupId, profile.id);
+      if (code) {
+        const inviteLink = `dawen://chat/group/invite/${code}`;
+        await Share.share({ message: `Join ${groupDetails?.name || 'our group'} on DAWEN: ${inviteLink}` });
+      }
+    } finally {
+      setGeneratingInvite(false);
+    }
+  };
+
   const formatTime = (iso: string) => {
     const d = new Date(iso);
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -416,6 +509,33 @@ export default function GroupChatScreen() {
   const canManageMembers = () => myRole === 'creator' || myRole === 'admin';
   const canManageTopics = () => myRole === 'creator' || myRole === 'admin';
 
+  const renderReactions = (msgId: string, mine: boolean) => {
+    const rx = reactions[msgId];
+    if (!rx || rx.length === 0) return null;
+    return (
+      <View style={[styles.reactionsRow, mine ? styles.reactionsRowRight : styles.reactionsRowLeft]}>
+        {rx.map((r: Reaction) => {
+          const isMine = profile && r.userIds.includes(profile.id);
+          return (
+            <TouchableOpacity
+              key={r.emoji}
+              style={[styles.reactionChip, isMine && styles.reactionChipMine]}
+              onPress={() => {
+                if (!profile || msgId.startsWith('opt')) return;
+                setReactionTarget({ id: msgId });
+                handleGroupReact(r.emoji);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.reactionEmoji}>{r.emoji}</Text>
+              {r.count > 1 && <Text style={styles.reactionCount}>{r.count}</Text>}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
   const renderMessage = ({ item, index }: { item: any; index: number }) => {
     const mine = item.sender_id === profile?.id;
     const prev = index > 0 ? visibleMessages[index - 1] : null;
@@ -430,7 +550,9 @@ export default function GroupChatScreen() {
     return (
       <TouchableOpacity
         onLongPress={() => {
+          setReactionTarget(item);
           if (canLongPress(item)) { setLongPressMsg(item); setShowMsgActions(true); }
+          else { setShowEmojiPicker(true); }
         }}
         activeOpacity={0.95}
         delayLongPress={400}
@@ -501,6 +623,7 @@ export default function GroupChatScreen() {
                 {msgUrls.length > 0 && <LinkPreview url={msgUrls[0]} />}
               </>
             )}
+            {renderReactions(item.id, mine)}
           </View>
         </View>
       </TouchableOpacity>
@@ -672,6 +795,17 @@ export default function GroupChatScreen() {
                 <Text style={styles.actionTitle} numberOfLines={1}>
                   {longPressMsg?.is_deleted ? 'Deleted message' : (longPressMsg?.content?.slice(0, 40) || 'Message')}
                 </Text>
+
+                {longPressMsg && !longPressMsg.is_deleted && (
+                  <TouchableOpacity
+                    style={styles.actionRow}
+                    onPress={() => { setShowMsgActions(false); setShowEmojiPicker(true); }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ fontSize: 18 }}>😀</Text>
+                    <Text style={styles.actionText}>Add Reaction</Text>
+                  </TouchableOpacity>
+                )}
 
                 {longPressMsg && !longPressMsg.is_deleted && canPinMsg() && (
                   pins.some(p => p.message_id === longPressMsg.id) ? (
@@ -945,6 +1079,22 @@ export default function GroupChatScreen() {
                 );
               })}
 
+              {isCreatorOrAdmin && (
+                <TouchableOpacity
+                  style={styles.inviteLinkBtn}
+                  onPress={() => { setShowSettings(false); handleGenerateInvite(); }}
+                  activeOpacity={0.8}
+                  disabled={generatingInvite}
+                >
+                  {generatingInvite ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Link size={15} color={colors.primary} strokeWidth={2} />
+                  )}
+                  <Text style={styles.inviteLinkText}>Generate Invite Link</Text>
+                </TouchableOpacity>
+              )}
+
               {myRole === 'creator' && (
                 <TouchableOpacity
                   style={styles.deleteGroupBtn}
@@ -1162,6 +1312,36 @@ export default function GroupChatScreen() {
             </ScrollView>
           </View>
         </View>
+      </Modal>
+
+      {/* Emoji reaction picker */}
+      <Modal
+        visible={showEmojiPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setShowEmojiPicker(false); setReactionTarget(null); }}
+      >
+        <TouchableWithoutFeedback onPress={() => { setShowEmojiPicker(false); setReactionTarget(null); }}>
+          <View style={styles.emojiOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.emojiSheet}>
+                <Text style={styles.emojiSheetTitle}>React</Text>
+                <View style={styles.emojiGrid}>
+                  {EMOJI_SET.map(emoji => (
+                    <TouchableOpacity
+                      key={emoji}
+                      style={styles.emojiBtn2}
+                      onPress={() => handleGroupReact(emoji)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.emojiChar}>{emoji}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* Leave group confirmation */}
@@ -1505,6 +1685,86 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: 'rgba(245,158,11,0.12)',
   },
   leaveGroupText: { fontSize: fontSize.sm, fontWeight: '700', color: '#F59E0B' },
+
+  // Reactions
+  reactionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
+  },
+  reactionsRowLeft: { justifyContent: 'flex-start' },
+  reactionsRowRight: { justifyContent: 'flex-end' },
+  reactionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  reactionChipMine: {
+    backgroundColor: 'rgba(59,130,246,0.18)',
+    borderColor: 'rgba(59,130,246,0.4)',
+  },
+  reactionEmoji: { fontSize: 14 },
+  reactionCount: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+
+  // Emoji picker
+  emojiOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emojiSheet: {
+    backgroundColor: '#1A1A28',
+    borderRadius: 20,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  emojiSheetTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  emojiGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  emojiBtn2: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emojiChar: { fontSize: 24 },
+
+  // Invite link
+  inviteLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(59,130,246,0.12)',
+  },
+  inviteLinkText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
 
   // Pins list
   pinListRow: {

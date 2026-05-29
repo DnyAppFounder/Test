@@ -20,7 +20,7 @@ import {
   User,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
-import { Notification, UserProfile } from '@/services/socialService';
+import { Notification, UserProfile, SocialService } from '@/services/socialService';
 import {
   TrendingTokenNotification,
   trendingNotificationService,
@@ -455,14 +455,18 @@ export function NotificationBanner({ userId, walletAddress }: { userId: string |
     } else {
       const notif  = item.notification;
       const actorId = item.actorProfile?.id ?? notif.actor_id;
+      SocialService.markNotificationRead(notif.id).catch(() => {});
       if (notif.type === 'message' && actorId) {
         console.log('[NotificationBanner] navigate to chat:', actorId);
         router.push(`/chat/${actorId}` as any);
       } else if (notif.type === 'follow' && actorId) {
         console.log('[NotificationBanner] navigate to profile:', actorId);
         router.push(`/profile/${actorId}` as any);
+      } else if ((notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention') && notif.post_id) {
+        router.push(`/token/${notif.post_id}` as any);
+      } else if (actorId) {
+        router.push(`/profile/${actorId}` as any);
       }
-      // like/comment/repost/mention: toast is informational; user checks notifications tab
     }
 
     setItem(null);
