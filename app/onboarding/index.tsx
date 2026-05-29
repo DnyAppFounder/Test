@@ -100,8 +100,6 @@ export default function OnboardingWelcome() {
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showEnterModal, setShowEnterModal] = useState(false);
   const [hasWallet, setHasWallet] = useState<boolean | null>(null);
-  const [discordTooltip, setDiscordTooltip] = useState(false);
-
   const logoOpacity = useSharedValue(0);
   const logoScale = useSharedValue(0.85);
   const headlineOpacity = useSharedValue(0);
@@ -313,16 +311,12 @@ export default function OnboardingWelcome() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.socialBtn, styles.socialBtnDisabled]}
-              onPress={() => setDiscordTooltip(v => !v)}
-              activeOpacity={0.7}
+              style={styles.socialBtn}
+              onPress={() => openExternal('https://discord.gg/AvNV9mDy3')}
+              activeOpacity={0.75}
+              accessibilityLabel="Join DAWEN Discord"
             >
-              <DiscordSVG muted />
-              {discordTooltip && (
-                <View style={styles.tooltip}>
-                  <Text style={styles.tooltipText}>Discord coming soon</Text>
-                </View>
-              )}
+              <DiscordSVG />
             </TouchableOpacity>
           </View>
 

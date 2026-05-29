@@ -362,25 +362,38 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
                   <>
                     <Text style={shareStyles.section}>Direct Messages</Text>
                     {dmConversations.map((conv: any) => {
-                      const other = conv.other_user;
-                      const name = other?.username || other?.wallet_address?.slice(0, 10) || 'User';
+                      const other = conv.otherUser ?? conv.other_user;
+                      const otherId = other?.id ?? conv.other_user_id;
+                      const name = other?.username
+                        || (other?.wallet_address ? `${other.wallet_address.slice(0, 6)}...${other.wallet_address.slice(-4)}` : null)
+                        || 'Unknown';
                       return (
                         <TouchableOpacity
-                          key={conv.id}
+                          key={conv.id ?? otherId}
                           style={shareStyles.targetRow}
-                          onPress={() => handleShareToDm(other?.id ?? conv.other_user_id)}
+                          onPress={() => handleShareToDm(otherId)}
                           activeOpacity={0.8}
-                          disabled={sharingTo === (other?.id ?? conv.other_user_id)}
+                          disabled={sharingTo === otherId}
                         >
                           <View style={shareStyles.avatar}>
                             {other?.avatar_url ? (
                               <Image source={{ uri: other.avatar_url }} style={shareStyles.avatarImg} />
                             ) : (
-                              <User size={14} color={colors.textMuted} />
+                              <User size={16} color={colors.textMuted} />
                             )}
                           </View>
-                          <Text style={shareStyles.targetName}>{name}</Text>
-                          {sharingTo === (other?.id ?? conv.other_user_id) ? (
+                          <View style={shareStyles.targetInfo}>
+                            <View style={shareStyles.targetNameRow}>
+                              <Text style={shareStyles.targetName} numberOfLines={1}>{name}</Text>
+                              {other && <VerificationBadge profile={other} size="sm" />}
+                            </View>
+                            {other?.wallet_address && (
+                              <Text style={shareStyles.targetSub} numberOfLines={1}>
+                                {other.wallet_address.slice(0, 6)}...{other.wallet_address.slice(-4)}
+                              </Text>
+                            )}
+                          </View>
+                          {sharingTo === otherId ? (
                             <ActivityIndicator size="small" color={colors.primary} />
                           ) : (
                             <Send size={15} color={colors.primary} strokeWidth={2} />
@@ -893,11 +906,25 @@ const shareStyles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
   },
-  targetName: {
+  targetInfo: {
     flex: 1,
+    gap: 2,
+  },
+  targetNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  targetName: {
     fontSize: 14,
     fontWeight: '600',
     color: colors.textPrimary,
+    flexShrink: 1,
+  },
+  targetSub: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontFamily: 'SpaceMono-Regular',
   },
   empty: {
     fontSize: 14,

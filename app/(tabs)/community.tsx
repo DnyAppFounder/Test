@@ -176,6 +176,65 @@ export default function CommunityScreen() {
   const [mentionResults, setMentionResults] = useState<any[]>([]);
   const [mentionLoading, setMentionLoading] = useState(false);
 
+  // App user stats (total users + online now via Supabase Presence)
+  const [totalUsers, setTotalUsers] = useState<number | null>(null);
+  const [onlineNow, setOnlineNow] = useState<number>(0);
+  const presenceChannelRef = useRef<any>(null);
+  const lastSeenIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Fetch total users once
+    supabase.rpc('get_user_stats').then(({ data }) => {
+      if (data) {
+        setTotalUsers(data.total_users ?? null);
+        setOnlineNow(data.online_now ?? 0);
+      }
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!profile?.wallet_address) return;
+
+    // Supabase Realtime Presence channel
+    const presenceData = {
+      user_id: profile.id,
+      wallet: profile.wallet_address,
+      username: profile.username ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      online_at: new Date().toISOString(),
+    };
+
+    const channel = supabase.channel('app_presence', { config: { presence: { key: profile.id } } })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        setOnlineNow(Object.keys(state).length);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track(presenceData);
+        }
+      });
+
+    presenceChannelRef.current = channel;
+
+    // Also update last_seen_at in DB every 45s as fallback
+    const updateLastSeen = async () => {
+      await supabase.from('user_profiles')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('wallet_address', profile.wallet_address)
+        .catch(() => {});
+    };
+    updateLastSeen();
+    lastSeenIntervalRef.current = setInterval(updateLastSeen, 45000);
+
+    return () => {
+      channel.untrack().catch(() => {});
+      supabase.removeChannel(channel);
+      presenceChannelRef.current = null;
+      if (lastSeenIntervalRef.current) clearInterval(lastSeenIntervalRef.current);
+    };
+  }, [profile?.id, profile?.wallet_address]);
+
   // Merges fresh feed data while preserving any optimistic liked/reposted state
   // that may not yet be reflected in the DB (sub-second race window).
   const mergeFeedState = (fresh: Post[], existing: Post[]): Post[] => {
@@ -953,6 +1012,22 @@ export default function CommunityScreen() {
       );
     }
 
+    const userStatsBar = totalUsers !== null ? (
+      <View style={styles.userStatsBar}>
+        <View style={styles.userStatItem}>
+          <Users size={13} color={colors.primary} strokeWidth={2.5} />
+          <Text style={styles.userStatValue}>{totalUsers.toLocaleString()}</Text>
+          <Text style={styles.userStatLabel}>Total Users</Text>
+        </View>
+        <View style={styles.userStatDivider} />
+        <View style={styles.userStatItem}>
+          <View style={styles.onlineDot} />
+          <Text style={[styles.userStatValue, { color: '#10B981' }]}>{onlineNow}</Text>
+          <Text style={styles.userStatLabel}>Online Now</Text>
+        </View>
+      </View>
+    ) : null;
+
     // Normal feed
     return (
       <View style={{ flex: 1 }}>
@@ -967,6 +1042,7 @@ export default function CommunityScreen() {
           ref={feedListRef}
           data={posts}
           keyExtractor={item => item.id}
+          ListHeaderComponent={userStatsBar}
           renderItem={({ item }) => (
             <PostCard
               post={item}
@@ -2464,6 +2540,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+
+  // User stats bar
+  userStatsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.xl,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    gap: 20,
+  },
+  userStatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  userStatValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  userStatLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
+  userStatDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  onlineDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
+  },
+
   emptyList: {
     flexGrow: 1,
     paddingBottom: 100,
