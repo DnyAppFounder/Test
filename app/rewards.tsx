@@ -205,7 +205,11 @@ export default function RewardsScreen() {
       // Snapshot current IDs before reload so we can identify new ones after
       prevRewardIdsRef.current = new Set(rewards.map(r => r.id));
       await loadData();
-      setTimeout(() => setApplySuccess(false), 4000);
+      if (result.payoutPending) {
+        setApplyError('Referral saved! Reward payout is pending — you can claim it from the rewards list once it processes.');
+      } else {
+        setTimeout(() => setApplySuccess(false), 4000);
+      }
     } else {
       switch (result.reason) {
         case 'already_applied':

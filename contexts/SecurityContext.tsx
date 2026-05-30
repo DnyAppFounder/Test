@@ -293,6 +293,9 @@ export function SecurityProvider({ children }: { children: ReactNode }) {
   const completeOnboarding = useCallback(async (profileId?: string) => {
     console.log(`[Security] completeOnboarding for ${addr.slice(0, 8)}`);
     await writeKeyWalletOnly(addr, 'onboarding_complete', 'true');
+    // Also write the legacy key checked by app/index.tsx so external-wallet
+    // users and create/import users are both routed to /(tabs) on next launch.
+    AsyncStorage.setItem('onboarding_completed', 'true').catch(() => {});
     setState(s => ({ ...s, onboardingComplete: true }));
     if (profileId) {
       supabase.from('user_profiles').update({ onboarding_complete: true }).eq('id', profileId).then(() => {});

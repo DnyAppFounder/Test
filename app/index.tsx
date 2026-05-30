@@ -35,6 +35,26 @@ export default function Index() {
           setTarget('/(tabs)');
           return;
         }
+        // Second fallback: check per-wallet onboarding_complete key for users
+        // who completed onboarding before the legacy key write was added.
+        try {
+          const externalStr = await AsyncStorage.getItem('external_wallet_connected');
+          if (externalStr) {
+            const externalWallet = JSON.parse(externalStr);
+            const extAddr = (externalWallet?.address ?? '').toLowerCase().trim();
+            if (extAddr) {
+              const perWalletComplete = await AsyncStorage.getItem(`security:${extAddr}:onboarding_complete`);
+              if (perWalletComplete === 'true') {
+                console.log('[App] per-wallet onboarding_complete = true (external) → /(tabs)');
+                // Repair the legacy key for future loads
+                AsyncStorage.setItem('onboarding_completed', 'true').catch(() => {});
+                redirected.current = true;
+                setTarget('/(tabs)');
+                return;
+              }
+            }
+          }
+        } catch {}
         console.log('[App] No wallet found → /onboarding');
         redirected.current = true;
         setTarget('/onboarding');

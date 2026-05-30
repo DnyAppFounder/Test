@@ -48,7 +48,7 @@ export interface UserReward {
 export type ReferralReward = UserReward;
 
 export type ApplyResult =
-  | { success: true;  reason: 'success' }
+  | { success: true;  reason: 'success'; payoutPending?: boolean }
   | { success: false; reason: 'already_applied' | 'invalid_code' | 'self_referral' | 'error' };
 
 // AsyncStorage key used to persist a referral code captured from the URL
@@ -218,17 +218,43 @@ export class ReferralService {
         p_referrer_wallet: referrerProfile?.wallet_address || '',
         p_referred_user_id: referredProfile.id,
         p_referred_wallet: referredWalletAddress,
+        p_referral_id: referralRow?.id ?? null,
       });
 
       if (rewardErr) {
         console.error('[ReferralService] create_referral_rewards error:', rewardErr);
-        // Referral row was saved — still a success for the user; rewards will be
-        // back-filled or can be manually triggered. Don't fail the whole apply.
       } else {
-        console.log('[ReferralService] referral rewards created (referrer 300 DWC + referred 150 DWC)');
+        console.log('[ReferralService] referral rewards created (referrer 3000 DWC + referred 5000 DWC)');
       }
 
-      return { success: true, reason: 'success' };
+      // Trigger on-chain payout automatically
+      let payoutPending = false;
+      if (referralRow?.id) {
+        try {
+          const payoutUrl = `${SUPABASE_URL}/functions/v1/referral-payout`;
+          const payoutResp = await fetch(payoutUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${ANON_KEY}`,
+              Apikey: ANON_KEY,
+            },
+            body: JSON.stringify({ referral_id: referralRow.id }),
+          });
+          const payoutResult = await payoutResp.json();
+          if (payoutResult?.success) {
+            console.log('[ReferralService] referral payout sent on-chain:', payoutResult.signature);
+          } else {
+            console.warn('[ReferralService] referral payout deferred:', payoutResult?.error);
+            payoutPending = true;
+          }
+        } catch (payoutErr: any) {
+          console.warn('[ReferralService] referral payout call failed:', payoutErr?.message);
+          payoutPending = true;
+        }
+      }
+
+      return { success: true, reason: 'success', payoutPending };
     } catch (err) {
       console.error('[ReferralService] applyReferralCode unexpected error:', err);
       return { success: false, reason: 'error' };
