@@ -319,7 +319,7 @@ export const CrewService = {
       .from('crew_members')
       .select(`
         *,
-        user_profiles (
+        user_profiles!user_id (
           username, display_name, avatar_url, wallet_address, bio,
           is_verified, verified_basic, is_premium, premium_expires_at, is_founder
         ),
@@ -384,7 +384,7 @@ export const CrewService = {
       .from('crew_applications')
       .select(`
         *,
-        user_profiles (
+        user_profiles!user_id (
           username, display_name, avatar_url, wallet_address,
           is_verified, verified_basic, is_premium, premium_expires_at
         )
@@ -418,7 +418,7 @@ export const CrewService = {
         .from('crew_applications')
         .select(`
           *,
-          user_profiles (
+          user_profiles!user_id (
             username, display_name, avatar_url, wallet_address,
             is_verified, verified_basic, is_premium, premium_expires_at
           )
@@ -587,7 +587,7 @@ export const CrewService = {
         .from('crew_applications')
         .select(`
           *,
-          user_profiles (
+          user_profiles!user_id (
             username, display_name, avatar_url, wallet_address,
             is_verified, verified_basic, is_premium, premium_expires_at
           )
@@ -624,8 +624,8 @@ export const CrewService = {
       .from('crew_internal_notes')
       .select(`
         *,
-        creator:created_by(username, display_name, avatar_url),
-        crew_applications(role_key, user_profiles(username, display_name, avatar_url))
+        creator:user_profiles!created_by(username, display_name, avatar_url),
+        crew_applications!application_id(role_key, user_profiles!user_id(username, display_name, avatar_url))
       `)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -639,8 +639,8 @@ export const CrewService = {
       .from('crew_application_tasks')
       .select(`
         *,
-        user_profiles:user_id(username, display_name, avatar_url),
-        crew_applications:application_id(role_key)
+        user_profiles!user_id(username, display_name, avatar_url),
+        crew_applications!application_id(role_key)
       `)
       .order('updated_at', { ascending: false })
       .limit(300);

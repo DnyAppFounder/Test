@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   TextInput, ActivityIndicator, Modal, Image, Platform,
-  RefreshControl, KeyboardAvoidingView,
+  RefreshControl, KeyboardAvoidingView, Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX, StickyNote, ListChecks, MessageSquare } from 'lucide-react-native';
+import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX, StickyNote, ListChecks, MessageSquare, ExternalLink } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius, fontWeight } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -953,10 +954,36 @@ function ActionBtn({ label, color, onPress, loading }: { label: string; color: s
 
 // ── Official DAWEN social links ────────────────────────────────────────────────
 const DAWEN_SOCIALS = {
-  x: 'https://x.com/DawenApp',
-  telegram: 'https://t.me/DawenApp',
-  discord: 'https://discord.gg/DawenApp',
+  x: 'https://x.com/willoffd_?s=21',
+  telegram: 'https://t.me/WillOfDCrew',
+  discord: 'https://discord.gg/By6zNmwbc',
 };
+
+// ── Social platform SVG icons ─────────────────────────────────────────────────
+
+function XIcon({ size = 18, color = '#E7E9EA' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.259 5.63zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </Svg>
+  );
+}
+
+function TelegramIcon({ size = 18, color = '#27A7E7' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </Svg>
+  );
+}
+
+function DiscordIcon({ size = 18, color = '#5865F2' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963.021-.04.001-.088-.041-.104a13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z" />
+    </Svg>
+  );
+}
 
 // ── Task-specific form per task_key ───────────────────────────────────────────
 
@@ -981,12 +1008,12 @@ function TaskForm({ task, onSubmit, onCancel }: {
   const [discordUser, setDiscordUser] = useState('');
 
   const isValid = () => {
-    if (task.task_key === 'test_app') return testFeatures.length > 0 && proofText.trim().length > 10;
-    if (task.task_key === 'submit_feedback' || task.task_key === 'bug_report') return bugTitle.trim().length > 3 && bugDesc.trim().length > 10;
+    if (task.task_key === 'test_app') return testFeatures.length > 0;
+    if (task.task_key === 'submit_feedback' || task.task_key === 'bug_report') return bugTitle.trim().length > 0 && bugDesc.trim().length > 3;
     if (task.task_key === 'join_socials') return xUser.trim().length > 0 || teleUser.trim().length > 0 || discordUser.trim().length > 0;
     if (task.task_key === 'signature_wall') return true;
     if (!task.proof_required) return true;
-    return proofText.trim().length > 10;
+    return proofText.trim().length > 2;
   };
 
   const handleSubmit = async () => {
@@ -1020,27 +1047,56 @@ function TaskForm({ task, onSubmit, onCancel }: {
       {task.task_key === 'signature_wall' && (
         <>
           <Text style={styles.taskFormHint}>Sign the DAWEN Signature Wall to prove you are part of the early community.</Text>
-          <TouchableOpacity style={styles.taskFormLinkBtn} onPress={() => router.push('/gaming' as any)} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.taskFormLinkBtn} onPress={() => router.push('/signature-wall' as any)} activeOpacity={0.8}>
             <Rocket size={14} color="#8B5CF6" strokeWidth={2} />
-            <Text style={styles.taskFormLinkBtnText}>Go to Signature Wall (Gaming)</Text>
+            <Text style={styles.taskFormLinkBtnText}>Go to Signature Wall</Text>
             <ChevronRight size={14} color="#8B5CF6" strokeWidth={2} />
           </TouchableOpacity>
-          <Text style={styles.taskFormHint}>After signing, tap Submit below.</Text>
+          <Text style={styles.taskFormHint}>After signing, tap Submit below to confirm.</Text>
         </>
       )}
 
       {task.task_key === 'join_socials' && (
         <>
-          <Text style={styles.taskFormHint}>Join/follow the official DAWEN channels, then submit your usernames.</Text>
+          <Text style={styles.taskFormHint}>Follow/join all official DAWEN channels, then submit your usernames as proof.</Text>
+
           <View style={styles.socialLinksRow}>
-            <Text style={[styles.socialLinkBtnText, { color: '#E7E9EA' }]}>X: {DAWEN_SOCIALS.x}</Text>
-            <Text style={[styles.socialLinkBtnText, { color: '#27A7E7' }]}>Telegram: {DAWEN_SOCIALS.telegram}</Text>
-            <Text style={[styles.socialLinkBtnText, { color: '#5865F2' }]}>Discord: {DAWEN_SOCIALS.discord}</Text>
+            <TouchableOpacity
+              style={[styles.socialLinkBtn, { backgroundColor: 'rgba(231,233,234,0.08)', borderColor: 'rgba(231,233,234,0.2)' }]}
+              onPress={() => Linking.openURL(DAWEN_SOCIALS.x)}
+              activeOpacity={0.8}
+            >
+              <XIcon size={15} color="#E7E9EA" />
+              <Text style={[styles.socialLinkBtnText, { color: '#E7E9EA' }]}>Follow on X</Text>
+              <ExternalLink size={12} color="#E7E9EA" strokeWidth={2} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.socialLinkBtn, { backgroundColor: 'rgba(39,167,231,0.08)', borderColor: 'rgba(39,167,231,0.2)' }]}
+              onPress={() => Linking.openURL(DAWEN_SOCIALS.telegram)}
+              activeOpacity={0.8}
+            >
+              <TelegramIcon size={15} color="#27A7E7" />
+              <Text style={[styles.socialLinkBtnText, { color: '#27A7E7' }]}>Join Telegram</Text>
+              <ExternalLink size={12} color="#27A7E7" strokeWidth={2} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.socialLinkBtn, { backgroundColor: 'rgba(88,101,242,0.08)', borderColor: 'rgba(88,101,242,0.2)' }]}
+              onPress={() => Linking.openURL(DAWEN_SOCIALS.discord)}
+              activeOpacity={0.8}
+            >
+              <DiscordIcon size={15} color="#5865F2" />
+              <Text style={[styles.socialLinkBtnText, { color: '#5865F2' }]}>Join Discord</Text>
+              <ExternalLink size={12} color="#5865F2" strokeWidth={2} />
+            </TouchableOpacity>
           </View>
-          <FormField label="Your X (Twitter) username *" value={xUser} onChange={setXUser} placeholder="@yourhandle" />
-          <FormField label="Your Telegram username" value={teleUser} onChange={setTeleUser} placeholder="@yourhandle" />
-          <FormField label="Your Discord username" value={discordUser} onChange={setDiscordUser} placeholder="username" />
-          <FormField label="Proof screenshot link (optional)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
+
+          <FormField label="Your X (Twitter) username *" value={xUser} onChange={setXUser} placeholder="e.g. @yourhandle" />
+          <FormField label="Your Telegram username" value={teleUser} onChange={setTeleUser} placeholder="e.g. @yourhandle" />
+          <FormField label="Your Discord username" value={discordUser} onChange={setDiscordUser} placeholder="e.g. username" />
+          <FormField label="Optional proof link (screenshot, post...)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
+          {xUser.trim().length === 0 && teleUser.trim().length === 0 && discordUser.trim().length === 0 && (
+            <Text style={styles.taskFormHint}>Enter at least one username to submit.</Text>
+          )}
         </>
       )}
 
@@ -1091,6 +1147,10 @@ function TaskForm({ task, onSubmit, onCancel }: {
           <FormField label="Your answer / proof *" value={proofText} onChange={setProofText} multiline placeholder="Type your answer here..." />
           <FormField label="Proof link (optional)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
         </>
+      )}
+
+      {!['signature_wall', 'join_socials', 'test_app', 'submit_feedback', 'bug_report'].includes(task.task_key) && !task.proof_required && (
+        <Text style={styles.taskFormHint}>Tap Submit to mark this task as done.</Text>
       )}
 
       <View style={styles.taskFormActions}>
@@ -1912,7 +1972,7 @@ export default function CrewPage() {
                 )}
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-                {['', 'submitted', 'under_review', 'shortlisted', 'trial', 'accepted', 'rejected'].map(s => (
+                {['', 'submitted', 'under_review', 'shortlisted', 'trial', 'accepted', 'rejected', 'needs_changes'].map(s => (
                   <TouchableOpacity
                     key={s}
                     style={[styles.filterChip, adminStatusFilter === s && styles.filterChipActive]}
@@ -2720,8 +2780,9 @@ const styles = StyleSheet.create({
   taskFormActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
   taskFormCancelBtn: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   taskFormCancelBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
-  socialLinksRow: { gap: 4, marginBottom: 8 },
-  socialLinkBtnText: { fontSize: 12, fontWeight: '500' },
+  socialLinksRow: { gap: 6, marginBottom: 10 },
+  socialLinkBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, marginBottom: 2 },
+  socialLinkBtnText: { fontSize: 13, fontWeight: '600', flex: 1 },
 
   // Checkbox grid (test_app task)
   checkboxGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
