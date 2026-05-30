@@ -244,6 +244,84 @@ Deno.serve(async (req: Request) => {
       return json({ success: true });
     }
 
+    // ── generate_code — secure server-side link code generation ────────────
+    if (action === "generate_code") {
+      const { group_id, wallet_address } = await req.json();
+      if (!wallet_address) {
+        return json({ success: false, error: "wallet_address required" }, 400);
+      }
+
+      const supabase = db();
+
+      // Call the SECURITY DEFINER RPC that validates ownership and generates
+      // a cryptographically-random DAWEN-XXXXXX code with 15-min expiry.
+      const { data: code, error: rpcErr } = await supabase
+        .rpc("generate_telegram_link_code", {
+          p_wallet_address: wallet_address,
+          p_group_id: group_id ?? null,
+        });
+
+      if (rpcErr || !code) {
+        console.error("[connect-telegram-bot] generate_code error:", rpcErr);
+        return json({
+          success: false,
+          error: rpcErr?.message || "Could not generate Telegram link code. Please try again.",
+        }, 500);
+      }
+
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      return json({ success: true, code, expires_at: expiresAt });
+    }
+
+    // ── update_settings — save admin bot config ─────────────────────────────
+    if (action === "update_settings") {
+      const { group_id, wallet_address, settings } = await req.json();
+      if (!group_id || !wallet_address || !settings) {
+        return json({ success: false, error: "group_id, wallet_address, and settings required" }, 400);
+      }
+
+      const supabase = db();
+
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("id")
+        .eq("wallet_address", wallet_address)
+        .maybeSingle();
+      if (!profile) return json({ success: false, error: "Profile not found" }, 403);
+
+      const { data: memberRow } = await supabase
+        .from("group_members")
+        .select("role")
+        .eq("group_id", group_id)
+        .eq("user_id", profile.id)
+        .is("removed_at", null)
+        .maybeSingle();
+
+      const { data: groupRow } = await supabase
+        .from("group_conversations")
+        .select("creator_id")
+        .eq("id", group_id)
+        .maybeSingle();
+
+      const isCreator = groupRow?.creator_id === profile.id;
+      const isAdmin = memberRow?.role === "admin" || memberRow?.role === "creator" || isCreator;
+
+      if (!isAdmin) {
+        return json({ success: false, error: "Only group admins can update bot settings" }, 403);
+      }
+
+      const { error: updateErr } = await supabase
+        .from("group_telegram_bots")
+        .update({ settings, updated_at: new Date().toISOString() })
+        .eq("group_id", group_id);
+
+      if (updateErr) {
+        return json({ success: false, error: updateErr.message }, 500);
+      }
+
+      return json({ success: true });
+    }
+
     return json({ success: false, error: "Unknown action" }, 400);
   } catch (err: any) {
     console.error("[connect-telegram-bot] unexpected error:", err);
