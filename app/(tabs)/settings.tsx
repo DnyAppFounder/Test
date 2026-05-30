@@ -16,7 +16,7 @@ import {
   Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera, Delete } from 'lucide-react-native';
+import { Globe, Shield, User, ChevronRight, Key, LogOut, X, Check, Bell, Info, UserPlus, Circle as CircleHelp, Bot, Wallet, Plus, Eye, EyeOff, Copy, MessageCircle, ChevronDown, ChevronUp, BellRing, Lock, Gift, Camera, Delete, Crown } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
@@ -394,6 +394,17 @@ export default function SettingsScreen() {
   };
 
   const settingsSections = [
+    {
+      title: 'Community',
+      items: [
+        {
+          icon: <Crown size={20} color="#F59E0B" />,
+          label: 'DAWEN Crew',
+          value: 'Apply for a role',
+          onPress: () => router.push('/crew' as any),
+        },
+      ],
+    },
     {
       title: 'Earn',
       items: [
