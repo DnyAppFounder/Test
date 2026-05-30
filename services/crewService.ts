@@ -62,6 +62,8 @@ export type CrewAppStatus =
   | 'draft' | 'submitted' | 'under_review' | 'shortlisted'
   | 'trial' | 'accepted' | 'rejected' | 'paused' | 'removed' | 'blacklisted';
 
+export type CrewTaskStatus = 'not_started' | 'submitted' | 'pending_review' | 'needs_changes' | 'approved' | 'rejected';
+
 export interface CrewApplicationTask {
   id: string;
   application_id: string;
@@ -73,11 +75,14 @@ export interface CrewApplicationTask {
   proof_required: boolean;
   proof_text?: string;
   proof_links: string[];
-  status: 'not_started' | 'submitted' | 'approved' | 'rejected';
+  status: CrewTaskStatus;
   reviewed_by?: string;
   reviewed_at?: string;
   created_at: string;
   updated_at: string;
+  // joined
+  user_profiles?: { username?: string; display_name?: string; avatar_url?: string };
+  crew_applications?: { role_key?: string };
 }
 
 export interface CrewMember {
@@ -137,6 +142,11 @@ export interface CrewInternalNote {
     username?: string;
     display_name?: string;
     avatar_url?: string;
+  };
+  // joined via adminGetAllNotes
+  crew_applications?: {
+    role_key?: string;
+    user_profiles?: { username?: string; display_name?: string; avatar_url?: string };
   };
 }
 
@@ -517,19 +527,97 @@ export const CrewService = {
 
   async adminReviewTask(
     taskId: string,
-    status: 'approved' | 'rejected',
-    reviewerId: string
+    status: 'approved' | 'rejected' | 'needs_changes',
+    reviewerId: string,
+    userMessage?: string
   ): Promise<{ error: string | null }> {
+    const updates: Record<string, unknown> = {
+      status,
+      reviewed_by: reviewerId,
+      reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    if (userMessage) updates.proof_text = userMessage; // reuse proof_text as admin message for needs_changes
     const { error } = await supabase
       .from('crew_application_tasks')
-      .update({
-        status,
-        reviewed_by: reviewerId,
-        reviewed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .update(updates)
       .eq('id', taskId);
     return { error: error?.message ?? null };
+  },
+
+  // ── Admin: Fetch all notes with applicant context ─────────────────────────
+
+  async adminGetAllNotes(limit = 100): Promise<CrewInternalNote[]> {
+    const { data } = await supabase
+      .from('crew_internal_notes')
+      .select(`
+        *,
+        creator:created_by(username, display_name, avatar_url),
+        crew_applications(role_key, user_profiles(username, display_name, avatar_url))
+      `)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    return (data ?? []) as CrewInternalNote[];
+  },
+
+  // ── Admin: Fetch all tasks for review ─────────────────────────────────────
+
+  async adminGetAllTasksForReview(statusFilter?: string): Promise<CrewApplicationTask[]> {
+    let q = supabase
+      .from('crew_application_tasks')
+      .select(`
+        *,
+        user_profiles:user_id(username, display_name, avatar_url),
+        crew_applications:application_id(role_key)
+      `)
+      .order('updated_at', { ascending: false })
+      .limit(300);
+    if (statusFilter && statusFilter !== '') {
+      q = q.eq('status', statusFilter);
+    }
+    const { data } = await q;
+    return (data ?? []) as CrewApplicationTask[];
+  },
+
+  // ── Admin: Get task counts for a set of application IDs ──────────────────
+
+  async adminGetTaskCounts(applicationIds: string[]): Promise<Record<string, { total: number; done: number }>> {
+    if (!applicationIds.length) return {};
+    const { data } = await supabase
+      .from('crew_application_tasks')
+      .select('application_id, status')
+      .in('application_id', applicationIds);
+    const counts: Record<string, { total: number; done: number }> = {};
+    for (const t of (data ?? [])) {
+      if (!counts[t.application_id]) counts[t.application_id] = { total: 0, done: 0 };
+      counts[t.application_id].total++;
+      if (t.status === 'approved') counts[t.application_id].done++;
+    }
+    return counts;
+  },
+
+  getTaskStatusLabel(status: CrewTaskStatus): string {
+    const map: Record<CrewTaskStatus, string> = {
+      not_started: 'Not Started',
+      submitted: 'Submitted',
+      pending_review: 'Pending Review',
+      needs_changes: 'Needs Changes',
+      approved: 'Approved',
+      rejected: 'Rejected',
+    };
+    return map[status] ?? status;
+  },
+
+  getTaskStatusColor(status: CrewTaskStatus): string {
+    const map: Record<CrewTaskStatus, string> = {
+      not_started: '#6B7280',
+      submitted: '#3B82F6',
+      pending_review: '#F59E0B',
+      needs_changes: '#F97316',
+      approved: '#10B981',
+      rejected: '#EF4444',
+    };
+    return map[status] ?? '#6B7280';
   },
 
   // ── Notifications ─────────────────────────────────────────────────────────

@@ -1,16 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   TextInput, ActivityIndicator, Modal, Image, Platform,
   RefreshControl, KeyboardAvoidingView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX } from 'lucide-react-native';
+import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX, StickyNote, ListChecks, MessageSquare } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius, fontWeight } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useWallet } from '@/contexts/WalletContext';
-import { CrewService, CrewRole, CrewApplication, CrewApplicationTask, CrewMember, CrewAppStatus, CrewInternalNote, UserProfileSearch } from '@/services/crewService';
+import { CrewService, CrewRole, CrewApplication, CrewApplicationTask, CrewTaskStatus, CrewMember, CrewAppStatus, CrewInternalNote, UserProfileSearch } from '@/services/crewService';
+import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService } from '@/services/verificationService';
 
 // ── Tab types ─────────────────────────────────────────────────────────────────
@@ -52,9 +53,15 @@ function RoleBadge({ roleKey, roleName, color, icon, small = false }: {
   );
 }
 
-function StatusChip({ status }: { status: CrewAppStatus | 'trial' | 'active' | 'paused' }) {
-  const color = CrewService.getStatusColor(status as CrewAppStatus);
-  const label = status === 'active' ? 'Active' : status === 'trial' ? 'Trial' : status === 'paused' ? 'Paused' : CrewService.getStatusLabel(status as CrewAppStatus);
+function StatusChip({ status }: { status: CrewAppStatus | CrewTaskStatus | 'trial' | 'active' | 'paused' }) {
+  const taskStatuses: Record<string, string> = {
+    not_started: '#6B7280', submitted: '#3B82F6', pending_review: '#F59E0B',
+    needs_changes: '#F97316', approved: '#10B981', rejected: '#EF4444',
+  };
+  const color = taskStatuses[status] ?? CrewService.getStatusColor(status as CrewAppStatus);
+  const label = taskStatuses[status]
+    ? CrewService.getTaskStatusLabel(status as CrewTaskStatus)
+    : (status === 'active' ? 'Active' : status === 'trial' ? 'Trial' : status === 'paused' ? 'Paused' : CrewService.getStatusLabel(status as CrewAppStatus));
   return (
     <View style={[styles.statusChip, { backgroundColor: color + '22', borderColor: color + '44' }]}>
       <View style={[styles.statusDot, { backgroundColor: color }]} />
@@ -195,7 +202,12 @@ function FounderMemberCard({ profile }: { profile: UserProfileSearch }) {
   );
 }
 
-function ApplicationCard({ app, roles, onPress }: { app: CrewApplication; roles: CrewRole[]; onPress: () => void }) {
+function ApplicationCard({ app, roles, taskCounts, onPress }: {
+  app: CrewApplication;
+  roles: CrewRole[];
+  taskCounts?: { total: number; done: number };
+  onPress: () => void;
+}) {
   const p = app.user_profiles;
   const role = roles.find(r => r.role_key === app.role_key);
   const displayName = p?.display_name || p?.username || 'Unknown';
@@ -218,17 +230,22 @@ function ApplicationCard({ app, roles, onPress }: { app: CrewApplication; roles:
           {isVerified && !isPremium && <View style={[styles.miniDot, { backgroundColor: '#3B82F6' }]} />}
         </View>
         <View style={styles.appCardInfo}>
-          <Text style={styles.appCardName} numberOfLines={1}>{displayName}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            <Text style={styles.appCardName} numberOfLines={1}>{displayName}</Text>
+            {p && <VerificationBadge profile={p as any} size="sm" />}
+          </View>
           {p?.username && <Text style={styles.appCardUsername}>@{p.username}</Text>}
         </View>
         <StatusChip status={app.status as CrewAppStatus} />
       </View>
-      {role && (
-        <View style={styles.appCardRole}>
-          <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} />
-          {date ? <Text style={styles.appCardDate}>{date}</Text> : null}
-        </View>
-      )}
+      <View style={styles.appCardRole}>
+        {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} />}
+        <View style={{ flex: 1 }} />
+        {taskCounts && taskCounts.total > 0 && (
+          <Text style={styles.appTaskProgress}>{taskCounts.done}/{taskCounts.total} tasks</Text>
+        )}
+        {date ? <Text style={styles.appCardDate}>{date}</Text> : null}
+      </View>
       <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} style={styles.appCardChevron} />
     </TouchableOpacity>
   );
@@ -508,6 +525,41 @@ function FormField({ label, value, onChange, multiline, placeholder }: {
   );
 }
 
+// ── Hierarchy compact user row ────────────────────────────────────────────────
+
+function HierarchyMemberRow({ member }: { member: CrewMember }) {
+  const router = useRouter();
+  const p = member.user_profiles;
+  const displayName = p?.display_name || p?.username || '?';
+  const profileId = p?.wallet_address || member.user_id;
+  const isTrial = member.status === 'trial';
+  return (
+    <TouchableOpacity
+      style={styles.hierarchyUserPill}
+      onPress={() => router.push(`/profile/${profileId}` as any)}
+      activeOpacity={0.8}
+    >
+      {p?.avatar_url ? (
+        <Image source={{ uri: p.avatar_url }} style={styles.hierarchyUserAvatar} />
+      ) : (
+        <View style={styles.hierarchyUserAvatarFallback}>
+          <Text style={styles.hierarchyUserAvatarInitial}>{displayName[0]?.toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.hierarchyUserName} numberOfLines={1}>{displayName}</Text>
+        {p?.username ? <Text style={styles.hierarchyUserUsername} numberOfLines={1}>@{p.username}</Text> : null}
+      </View>
+      {p && <VerificationBadge profile={p as any} size="sm" />}
+      {isTrial && (
+        <View style={styles.hierarchyTrialBadge}>
+          <Text style={styles.hierarchyTrialText}>Trial</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 // ── Hierarchy display ─────────────────────────────────────────────────────────
 
 function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; members: CrewMember[]; founderProfile: UserProfileSearch | null }) {
@@ -518,7 +570,7 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
     <View style={styles.hierarchyWrap}>
       <Text style={styles.sectionTitle}>DAWEN Crew Hierarchy</Text>
 
-      {/* Founder / Owner — always at top, shown from user_profiles */}
+      {/* Founder / Owner */}
       <View style={styles.hierarchyLevel}>
         <View style={[styles.hierarchyRoleBlock, styles.hierarchyRoleBlockTop]}>
           <LinearGradient colors={['#F59E0B22', '#F59E0B11']} style={[styles.founderCard]}>
@@ -537,16 +589,7 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
             <View style={styles.founderInfo}>
               <View style={styles.founderNameRow}>
                 <Text style={styles.founderName}>{founderDisplayName}</Text>
-                {founderProfile?.is_verified && (
-                  <View style={[styles.founderBadgePill, { backgroundColor: '#3B82F622', borderColor: '#3B82F644' }]}>
-                    <Check size={8} color="#3B82F6" strokeWidth={3} />
-                  </View>
-                )}
-                {founderProfile?.is_premium && (
-                  <View style={[styles.founderBadgePill, { backgroundColor: '#A855F722', borderColor: '#A855F744' }]}>
-                    <Star size={8} color="#A855F7" strokeWidth={2.5} />
-                  </View>
-                )}
+                {founderProfile && <VerificationBadge profile={founderProfile as any} size="sm" />}
               </View>
               {founderProfile?.username && (
                 <Text style={styles.founderUsername}>@{founderProfile.username}</Text>
@@ -560,10 +603,8 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
         </View>
       </View>
 
-      {/* Connector arrow down to Community Manager */}
       <View style={styles.hierarchyConnector} />
 
-      {/* Community Manager + all other roles */}
       {roleOrder.map((rk, idx) => {
         const role = roles.find(r => r.role_key === rk);
         if (!role) return null;
@@ -597,6 +638,11 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
                 </View>
               )}
             </View>
+            {roleMembers.length > 0 && (
+              <View style={styles.hierarchyUsersWrap}>
+                {roleMembers.map(m => <HierarchyMemberRow key={m.id} member={m} />)}
+              </View>
+            )}
           </View>
         );
       })}
@@ -875,7 +921,7 @@ function ActionBtn({ label, color, onPress, loading }: { label: string; color: s
 
 // ── My Application view ───────────────────────────────────────────────────────
 
-function MyApplicationView({ app, tasks, roles }: { app: CrewApplication; tasks: CrewApplicationTask[]; roles: CrewRole[] }) {
+function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplication; tasks: CrewApplicationTask[]; roles: CrewRole[]; onRefresh?: () => void }) {
   const role = roles.find(r => r.role_key === app.role_key);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [proofText, setProofText] = useState('');
@@ -889,12 +935,13 @@ function MyApplicationView({ app, tasks, roles }: { app: CrewApplication; tasks:
     await CrewService.updateTask(taskId, {
       proof_text: proofText.trim() || undefined,
       proof_links: links,
-      status: 'submitted',
+      status: 'pending_review',
     });
     setTaskId(null);
     setProofText('');
     setProofLink('');
     setSaving(false);
+    onRefresh?.();
   };
 
   return (
@@ -918,70 +965,81 @@ function MyApplicationView({ app, tasks, roles }: { app: CrewApplication; tasks:
         <>
           <Text style={styles.sectionTitle}>Starter Tasks</Text>
           <Text style={styles.sectionHint}>Complete these tasks to strengthen your application.</Text>
-          {tasks.map(task => (
-            <View key={task.id} style={styles.taskCard}>
-              <View style={styles.taskCardHeader}>
-                <View style={styles.taskCardLeft}>
-                  {task.status === 'approved' ? (
-                    <CheckCircle size={16} color="#10B981" strokeWidth={2} />
-                  ) : task.status === 'rejected' ? (
-                    <X size={16} color="#EF4444" strokeWidth={2} />
-                  ) : task.status === 'submitted' ? (
-                    <Clock size={16} color="#F59E0B" strokeWidth={2} />
-                  ) : (
-                    <View style={styles.taskCircle} />
-                  )}
-                  <View>
-                    <Text style={styles.taskTitle}>{task.title}</Text>
-                    {task.is_required && <Text style={styles.taskRequired}>Required</Text>}
+          {tasks.map(task => {
+            const canSubmit = task.status === 'not_started' || task.status === 'needs_changes';
+            const isOpen = taskId === task.id;
+            return (
+              <View key={task.id} style={[styles.taskCard, task.status === 'needs_changes' && { borderColor: '#F9731633' }]}>
+                <View style={styles.taskCardTitleRow}>
+                  <View style={styles.taskCardTitleLeft}>
+                    {task.status === 'approved' ? (
+                      <CheckCircle size={16} color="#10B981" strokeWidth={2} />
+                    ) : task.status === 'rejected' ? (
+                      <X size={16} color="#EF4444" strokeWidth={2} />
+                    ) : task.status === 'pending_review' ? (
+                      <Clock size={16} color="#F59E0B" strokeWidth={2} />
+                    ) : task.status === 'needs_changes' ? (
+                      <AlertTriangle size={16} color="#F97316" strokeWidth={2} />
+                    ) : (
+                      <View style={styles.taskCircle} />
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.taskTitle}>{task.title}</Text>
+                      {task.is_required && <Text style={styles.taskRequired}>Required</Text>}
+                    </View>
                   </View>
+                  <StatusChip status={task.status as any} />
                 </View>
-                {task.status === 'not_started' && (
+                <Text style={styles.taskDesc}>{task.description}</Text>
+                {task.status === 'needs_changes' && (
+                  <Text style={styles.taskNeedsChangesNote}>Admin requested changes. Please resubmit.</Text>
+                )}
+                {canSubmit && (
                   <TouchableOpacity
-                    style={styles.taskSubmitBtn}
-                    onPress={() => setTaskId(taskId === task.id ? null : task.id)}
+                    style={[styles.taskSubmitBtn, { alignSelf: 'flex-start', marginTop: 8 }]}
+                    onPress={() => {
+                      if (isOpen) { setTaskId(null); } else { setTaskId(task.id); setProofText(''); setProofLink(''); }
+                    }}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.taskSubmitBtnText}>{taskId === task.id ? 'Cancel' : 'Submit'}</Text>
+                    <Text style={styles.taskSubmitBtnText}>{isOpen ? 'Cancel' : task.status === 'needs_changes' ? 'Resubmit' : 'Submit'}</Text>
                   </TouchableOpacity>
                 )}
+                {isOpen && (
+                  <View style={styles.taskProofWrap}>
+                    {task.proof_required && (
+                      <>
+                        <TextInput
+                          style={styles.taskProofInput}
+                          value={proofText}
+                          onChangeText={setProofText}
+                          placeholder="Describe what you did..."
+                          placeholderTextColor={colors.textMuted}
+                          multiline
+                        />
+                        <TextInput
+                          style={[styles.taskProofInput, { minHeight: 44 }]}
+                          value={proofLink}
+                          onChangeText={setProofLink}
+                          placeholder="Proof link (optional)"
+                          placeholderTextColor={colors.textMuted}
+                        />
+                      </>
+                    )}
+                    <TouchableOpacity
+                      style={[styles.taskConfirmBtn, saving && styles.btnDisabled]}
+                      onPress={submitTask}
+                      activeOpacity={0.8}
+                      disabled={saving}
+                    >
+                      {saving ? <ActivityIndicator size="small" color="#fff" /> : <Send size={14} color="#fff" strokeWidth={2} />}
+                      <Text style={styles.taskConfirmBtnText}>Submit for Review</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
-              <Text style={styles.taskDesc}>{task.description}</Text>
-
-              {taskId === task.id && (
-                <View style={styles.taskProofWrap}>
-                  {task.proof_required && (
-                    <>
-                      <TextInput
-                        style={styles.taskProofInput}
-                        value={proofText}
-                        onChangeText={setProofText}
-                        placeholder="Describe your proof..."
-                        placeholderTextColor={colors.textMuted}
-                        multiline
-                      />
-                      <TextInput
-                        style={[styles.taskProofInput, { marginTop: 6 }]}
-                        value={proofLink}
-                        onChangeText={setProofLink}
-                        placeholder="Proof link (optional)"
-                        placeholderTextColor={colors.textMuted}
-                      />
-                    </>
-                  )}
-                  <TouchableOpacity
-                    style={[styles.taskConfirmBtn, saving && styles.btnDisabled]}
-                    onPress={submitTask}
-                    activeOpacity={0.8}
-                    disabled={saving}
-                  >
-                    {saving ? <ActivityIndicator size="small" color="#fff" /> : <Check size={14} color="#fff" strokeWidth={2} />}
-                    <Text style={styles.taskConfirmBtnText}>Mark as Submitted</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          ))}
+            );
+          })}
         </>
       )}
     </View>
@@ -1266,12 +1324,16 @@ export default function CrewPage() {
 
   // Admin state
   const [adminApps, setAdminApps] = useState<CrewApplication[]>([]);
-  const [adminStatusFilter, setAdminStatusFilter] = useState<string>('submitted');
+  const [adminStatusFilter, setAdminStatusFilter] = useState<string>('');
   const [adminRoleFilter, setAdminRoleFilter] = useState<string>('');
   const [adminSearch, setAdminSearch] = useState('');
   const [selectedApp, setSelectedApp] = useState<CrewApplication | null>(null);
   const [selectedAppTasks, setSelectedAppTasks] = useState<CrewApplicationTask[]>([]);
   const [selectedAppNotes, setSelectedAppNotes] = useState<CrewInternalNote[]>([]);
+  const [allNotes, setAllNotes] = useState<CrewInternalNote[]>([]);
+  const [allAdminTasks, setAllAdminTasks] = useState<CrewApplicationTask[]>([]);
+  const [taskStatusFilter, setTaskStatusFilter] = useState<string>('pending_review');
+  const [adminTaskCounts, setAdminTaskCounts] = useState<Record<string, { total: number; done: number }>>({});
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1329,12 +1391,18 @@ export default function CrewPage() {
 
           // Load admin apps if admin
           if (isAdminUser) {
-            const apps = await CrewService.adminGetApplications({
-              status: adminStatusFilter,
-              role_key: adminRoleFilter || undefined,
-              search: adminSearch || undefined,
-            });
+            const apps = await CrewService.adminGetApplications({});
             setAdminApps(apps);
+            if (apps.length > 0) {
+              const counts = await CrewService.adminGetTaskCounts(apps.map(a => a.id));
+              setAdminTaskCounts(counts);
+            }
+            const [notes, adminTasks] = await Promise.all([
+              CrewService.adminGetAllNotes(),
+              CrewService.adminGetAllTasksForReview(),
+            ]);
+            setAllNotes(notes);
+            setAllAdminTasks(adminTasks);
           }
         }
       }
@@ -1342,7 +1410,7 @@ export default function CrewPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [activeAddress, adminStatusFilter, adminRoleFilter, adminSearch]);
+  }, [activeAddress]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1355,19 +1423,43 @@ export default function CrewPage() {
 
   const reloadAdminApps = async () => {
     if (!myUserId) return;
-    const apps = await CrewService.adminGetApplications({
-      status: adminStatusFilter,
-      role_key: adminRoleFilter || undefined,
-      search: adminSearch || undefined,
-    });
+    const apps = await CrewService.adminGetApplications({});
     setAdminApps(apps);
+    if (apps.length > 0) {
+      const counts = await CrewService.adminGetTaskCounts(apps.map(a => a.id));
+      setAdminTaskCounts(counts);
+    }
+    const [notes, adminTasks] = await Promise.all([
+      CrewService.adminGetAllNotes(),
+      CrewService.adminGetAllTasksForReview(),
+    ]);
+    setAllNotes(notes);
+    setAllAdminTasks(adminTasks);
     if (selectedApp) {
-      const { application, tasks, notes } = await CrewService.adminGetApplicationWithTasks(selectedApp.id);
+      const { application, tasks, notes: appNotes } = await CrewService.adminGetApplicationWithTasks(selectedApp.id);
       if (application) setSelectedApp(application);
       setSelectedAppTasks(tasks);
-      setSelectedAppNotes(notes);
+      setSelectedAppNotes(appNotes);
     }
   };
+
+  const filteredAdminApps = useMemo(() => {
+    let result = adminApps;
+    if (adminStatusFilter) result = result.filter(a => a.status === adminStatusFilter);
+    if (adminRoleFilter) result = result.filter(a => a.role_key === adminRoleFilter);
+    if (adminSearch.trim()) {
+      const q = adminSearch.trim().toLowerCase();
+      result = result.filter(a => {
+        const p = a.user_profiles;
+        return (
+          p?.username?.toLowerCase().includes(q) ||
+          p?.display_name?.toLowerCase().includes(q) ||
+          a.role_key.toLowerCase().includes(q)
+        );
+      });
+    }
+    return result;
+  }, [adminApps, adminStatusFilter, adminRoleFilter, adminSearch]);
 
   const userTabs: { key: UserTab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
@@ -1577,7 +1669,7 @@ export default function CrewPage() {
         }
         return (
           <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor={colors.primary} />}>
-            <MyApplicationView app={myApp} tasks={myTasks} roles={roles} />
+            <MyApplicationView app={myApp} tasks={myTasks} roles={roles} onRefresh={() => loadData(true)} />
             <View style={{ height: 40 }} />
           </ScrollView>
         );
@@ -1636,13 +1728,21 @@ export default function CrewPage() {
         return (
           <View style={{ flex: 1 }}>
             <View style={styles.adminFilters}>
-              <TextInput
-                style={styles.adminSearch}
-                value={adminSearch}
-                onChangeText={setAdminSearch}
-                placeholder="Search..."
-                placeholderTextColor={colors.textMuted}
-              />
+              <View style={styles.adminSearchWrap}>
+                <Search size={14} color={colors.textMuted} strokeWidth={2} />
+                <TextInput
+                  style={styles.adminSearchInput}
+                  value={adminSearch}
+                  onChangeText={setAdminSearch}
+                  placeholder="Search by name or role..."
+                  placeholderTextColor={colors.textMuted}
+                />
+                {adminSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setAdminSearch('')} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <X size={13} color={colors.textMuted} strokeWidth={2} />
+                  </TouchableOpacity>
+                )}
+              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
                 {['', 'submitted', 'under_review', 'shortlisted', 'trial', 'accepted', 'rejected'].map(s => (
                   <TouchableOpacity
@@ -1659,14 +1759,22 @@ export default function CrewPage() {
               </ScrollView>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
-              {adminApps.length === 0 ? (
+              {filteredAdminApps.length === 0 ? (
                 <View style={styles.emptyState}>
                   <FileText size={36} color={colors.textMuted} strokeWidth={1.5} />
-                  <Text style={styles.emptyStateText}>No applications found.</Text>
+                  <Text style={styles.emptyStateText}>
+                    {adminApps.length === 0 ? 'No applications yet.' : 'No applications match filter.'}
+                  </Text>
                 </View>
               ) : (
-                adminApps.map(app => (
-                  <ApplicationCard key={app.id} app={app} roles={roles} onPress={() => loadSelectedApp(app)} />
+                filteredAdminApps.map(app => (
+                  <ApplicationCard
+                    key={app.id}
+                    app={app}
+                    roles={roles}
+                    taskCounts={adminTaskCounts[app.id]}
+                    onPress={() => loadSelectedApp(app)}
+                  />
                 ))
               )}
               <View style={{ height: 40 }} />
@@ -1694,18 +1802,100 @@ export default function CrewPage() {
       }
 
       // ── Admin: Task Review ─────────────────────────────────────────────────
-      case 'task_review':
+      case 'task_review': {
+        const filteredTasks = taskStatusFilter
+          ? allAdminTasks.filter(t => t.status === taskStatusFilter)
+          : allAdminTasks;
         return (
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <Text style={styles.sectionTitle}>Task Review</Text>
-            <Text style={styles.sectionHint}>Review task submissions from applicants via their application detail.</Text>
-            <TouchableOpacity style={styles.seeAllBtn} onPress={() => setActiveTab('applications' as AdminTab)} activeOpacity={0.8}>
-              <Text style={styles.seeAllBtnText}>Go to Applications</Text>
-              <ChevronRight size={14} color={colors.primary} strokeWidth={2} />
-            </TouchableOpacity>
-            <View style={{ height: 40 }} />
-          </ScrollView>
+          <View style={{ flex: 1 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterScroll, { marginBottom: 10 }]}>
+              {['pending_review', 'submitted', 'needs_changes', 'approved', 'rejected', ''].map(s => (
+                <TouchableOpacity
+                  key={s || 'all'}
+                  style={[styles.filterChip, taskStatusFilter === s && styles.filterChipActive]}
+                  onPress={() => setTaskStatusFilter(s)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.filterChipText, taskStatusFilter === s && styles.filterChipTextActive]}>
+                    {s ? CrewService.getTaskStatusLabel(s as CrewTaskStatus) : 'All'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor={colors.primary} />}>
+              {filteredTasks.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <ListChecks size={36} color={colors.textMuted} strokeWidth={1.5} />
+                  <Text style={styles.emptyStateText}>No tasks to review.</Text>
+                </View>
+              ) : (
+                filteredTasks.map(task => {
+                  const applicant = task.user_profiles;
+                  const applicantName = applicant?.display_name || applicant?.username || 'Unknown';
+                  const roleKey = task.crew_applications?.role_key;
+                  const role = roleKey ? roles.find(r => r.role_key === roleKey) : null;
+                  return (
+                    <View key={task.id} style={styles.adminTaskCard}>
+                      <View style={styles.adminTaskHeader}>
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text style={styles.adminTaskTitle}>{task.title}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <Text style={styles.adminTaskApplicant}>{applicantName}</Text>
+                            {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />}
+                          </View>
+                        </View>
+                        <StatusChip status={task.status as any} />
+                      </View>
+                      {task.proof_text ? (
+                        <Text style={styles.adminTaskProof}>{task.proof_text}</Text>
+                      ) : null}
+                      {task.proof_links?.length > 0 && task.proof_links.map((l, i) => (
+                        <Text key={i} style={styles.proofLink}>{l}</Text>
+                      ))}
+                      <View style={styles.taskReviewActions}>
+                        <TouchableOpacity
+                          style={styles.taskApproveBtn}
+                          onPress={async () => {
+                            await CrewService.adminReviewTask(task.id, 'approved', myUserId ?? '');
+                            reloadAdminApps();
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <Check size={12} color="#10B981" strokeWidth={2} />
+                          <Text style={styles.taskApproveBtnText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.taskRejectBtn}
+                          onPress={async () => {
+                            await CrewService.adminReviewTask(task.id, 'rejected', myUserId ?? '');
+                            reloadAdminApps();
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <X size={12} color="#EF4444" strokeWidth={2} />
+                          <Text style={styles.taskRejectBtnText}>Reject</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.taskNeedsChangesBtn}
+                          onPress={async () => {
+                            await CrewService.adminReviewTask(task.id, 'needs_changes', myUserId ?? '');
+                            reloadAdminApps();
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <AlertTriangle size={12} color="#F97316" strokeWidth={2} />
+                          <Text style={styles.taskNeedsChangesBtnText}>Needs Changes</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+              <View style={{ height: 40 }} />
+            </ScrollView>
+          </View>
         );
+      }
 
       // ── Admin: Role Management ─────────────────────────────────────────────
       case 'role_management':
@@ -1722,13 +1912,44 @@ export default function CrewPage() {
       // ── Admin: Notes ───────────────────────────────────────────────────────
       case 'notes':
         return (
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor={colors.primary} />}>
             <Text style={styles.sectionTitle}>Internal Notes</Text>
-            <Text style={styles.sectionHint}>Notes are visible here per application. Open an application to add or view notes.</Text>
-            <TouchableOpacity style={styles.seeAllBtn} onPress={() => setActiveTab('applications' as AdminTab)} activeOpacity={0.8}>
-              <Text style={styles.seeAllBtnText}>Go to Applications</Text>
-              <ChevronRight size={14} color={colors.primary} strokeWidth={2} />
-            </TouchableOpacity>
+            <Text style={styles.sectionHint}>All internal notes across all applications.</Text>
+            {allNotes.length === 0 ? (
+              <View style={styles.emptyState}>
+                <StickyNote size={36} color={colors.textMuted} strokeWidth={1.5} />
+                <Text style={styles.emptyStateText}>No notes yet.</Text>
+              </View>
+            ) : (
+              allNotes.map(n => {
+                const applicant = n.crew_applications?.user_profiles;
+                const applicantName = applicant?.display_name || applicant?.username || 'Unknown applicant';
+                const roleKey = n.crew_applications?.role_key;
+                const role = roleKey ? roles.find(r => r.role_key === roleKey) : null;
+                const authorName = n.creator?.display_name || n.creator?.username || 'Admin';
+                return (
+                  <TouchableOpacity
+                    key={n.id}
+                    style={styles.globalNoteCard}
+                    onPress={() => {
+                      const app = adminApps.find(a => a.id === n.application_id);
+                      if (app) { loadSelectedApp(app); setActiveTab('applications' as AdminTab); }
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.globalNoteHeader}>
+                      <View style={styles.globalNoteApplicantRow}>
+                        <Text style={styles.globalNoteApplicant}>{applicantName}</Text>
+                        {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />}
+                      </View>
+                      <Text style={styles.globalNoteDate}>{new Date(n.created_at).toLocaleDateString()}</Text>
+                    </View>
+                    <Text style={styles.globalNoteText} numberOfLines={3}>{n.note}</Text>
+                    <Text style={styles.globalNoteAuthor}>by {authorName}</Text>
+                  </TouchableOpacity>
+                );
+              })
+            )}
             <View style={{ height: 40 }} />
           </ScrollView>
         );
@@ -2133,5 +2354,70 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12,
   },
-  rmAssignBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  // Admin search (stable, no re-fetch)
+  adminSearchWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
+  adminSearchInput: { flex: 1, color: colors.textPrimary, fontSize: 14 },
+
+  // Application task progress
+  appTaskProgress: { fontSize: 11, fontWeight: '700', color: colors.primary, marginRight: 8 },
+
+  // Hierarchy users section
+  hierarchyUsersWrap: {
+    width: '100%', paddingLeft: 16, paddingRight: 4, gap: 4, marginBottom: 4,
+  },
+  hierarchyUserPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)',
+  },
+  hierarchyUserAvatar: { width: 30, height: 30, borderRadius: 15 },
+  hierarchyUserAvatarFallback: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center',
+  },
+  hierarchyUserAvatarInitial: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  hierarchyUserName: { fontSize: 12, fontWeight: '600', color: colors.textPrimary },
+  hierarchyUserUsername: { fontSize: 11, color: colors.textMuted },
+  hierarchyTrialBadge: {
+    backgroundColor: 'rgba(6,182,212,0.15)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: 'rgba(6,182,212,0.3)',
+  },
+  hierarchyTrialText: { fontSize: 10, fontWeight: '700', color: '#06B6D4' },
+
+  // Global notes tab
+  globalNoteCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
+  },
+  globalNoteHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 },
+  globalNoteApplicantRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' },
+  globalNoteApplicant: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
+  globalNoteDate: { fontSize: 11, color: colors.textMuted },
+  globalNoteText: { fontSize: 13, color: colors.textSecondary, lineHeight: 18, marginBottom: 4 },
+  globalNoteAuthor: { fontSize: 11, color: colors.textMuted },
+
+  // Admin task cards
+  adminTaskCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
+  },
+  adminTaskHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  adminTaskTitle: { fontSize: 13, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
+  adminTaskApplicant: { fontSize: 12, color: colors.textMuted },
+  adminTaskProof: { fontSize: 12, color: colors.textSecondary, lineHeight: 17, marginBottom: 6 },
+  taskNeedsChangesBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: 'rgba(249,115,22,0.08)', borderRadius: 8, paddingVertical: 7,
+    borderWidth: 1, borderColor: 'rgba(249,115,22,0.2)',
+  },
+  taskNeedsChangesBtnText: { fontSize: 12, fontWeight: '700', color: '#F97316' },
+
+  // My App task layout fixes
+  taskCardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6, gap: 8 },
+  taskCardTitleLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1 },
+  taskNeedsChangesNote: { fontSize: 12, color: '#F97316', fontWeight: '600', marginTop: 4, marginBottom: 2 },
 });
