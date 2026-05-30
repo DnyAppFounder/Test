@@ -16,7 +16,7 @@ import { VerificationService } from '@/services/verificationService';
 // ── Tab types ─────────────────────────────────────────────────────────────────
 
 type UserTab = 'overview' | 'roles' | 'apply' | 'my_application' | 'hierarchy' | 'members';
-type AdminTab = 'overview' | 'applications' | 'trial' | 'members' | 'task_review' | 'permissions' | 'badges' | 'notes' | 'role_management';
+type AdminTab = 'overview' | 'applications' | 'trial' | 'members' | 'hierarchy' | 'task_review' | 'permissions' | 'badges' | 'notes' | 'role_management';
 
 // ── Icon map ──────────────────────────────────────────────────────────────────
 
@@ -64,41 +64,134 @@ function StatusChip({ status }: { status: CrewAppStatus | 'trial' | 'active' | '
 }
 
 function MemberCard({ member, roles }: { member: CrewMember; roles: CrewRole[] }) {
+  const router = useRouter();
   const p = member.user_profiles;
   const role = roles.find(r => r.role_key === member.role_key);
   const isPremium = p ? VerificationService.isPremiumActive(p as any) : false;
   const isVerified = p?.is_verified || p?.verified_basic;
+  const isFounderMember = p?.is_founder;
   const displayName = p?.display_name || p?.username || 'Unknown';
   const username = p?.username ? `@${p.username}` : '';
+  const bio = p?.bio || '';
+  const profileId = p?.wallet_address || member.user_id;
+
+  const handlePress = () => {
+    if (profileId) router.push(`/profile/${profileId}` as any);
+  };
 
   return (
-    <View style={styles.memberCard}>
-      <View style={styles.memberCardAvatar}>
-        {p?.avatar_url ? (
-          <Image source={{ uri: p.avatar_url }} style={styles.memberAvatar} />
-        ) : (
-          <LinearGradient colors={[role?.badge_color + '66' ?? '#8B5CF666', role?.badge_color + '33' ?? '#8B5CF633']} style={styles.memberAvatarPlaceholder}>
-            <Text style={[styles.memberAvatarInitial, { color: role?.badge_color ?? '#8B5CF6' }]}>
-              {displayName[0]?.toUpperCase() ?? '?'}
-            </Text>
-          </LinearGradient>
-        )}
-        <View style={styles.memberCardBadges}>
-          {isPremium && <View style={styles.premiumDot} />}
-          {isVerified && !isPremium && <View style={styles.verifiedDot} />}
+    <TouchableOpacity style={styles.memberCard} onPress={handlePress} activeOpacity={0.8}>
+      <View style={styles.memberCardTop}>
+        <View style={styles.memberCardAvatarWrap}>
+          {p?.avatar_url ? (
+            <Image source={{ uri: p.avatar_url }} style={styles.memberAvatar} />
+          ) : (
+            <LinearGradient
+              colors={[role?.badge_color ? role.badge_color + '66' : '#8B5CF666', role?.badge_color ? role.badge_color + '22' : '#8B5CF622']}
+              style={styles.memberAvatarPlaceholder}
+            >
+              <Text style={[styles.memberAvatarInitial, { color: role?.badge_color ?? '#8B5CF6' }]}>
+                {displayName[0]?.toUpperCase() ?? '?'}
+              </Text>
+            </LinearGradient>
+          )}
+          {/* Badge dots */}
+          {(isPremium || isVerified || isFounderMember) && (
+            <View style={[
+              styles.memberBadgeDot,
+              isFounderMember
+                ? { backgroundColor: '#F59E0B' }
+                : isPremium
+                  ? { backgroundColor: '#7C3AED' }
+                  : { backgroundColor: '#2563EB' }
+            ]} />
+          )}
         </View>
-      </View>
-      <View style={styles.memberCardInfo}>
-        <Text style={styles.memberCardName} numberOfLines={1}>{displayName}</Text>
-        {username ? <Text style={styles.memberCardUsername} numberOfLines={1}>{username}</Text> : null}
-        {role ? (
-          <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />
-        ) : null}
-      </View>
-      <View style={styles.memberCardRight}>
+        <View style={styles.memberCardInfo}>
+          <View style={styles.memberCardNameRow}>
+            <Text style={styles.memberCardName} numberOfLines={1}>{displayName}</Text>
+            {isFounderMember && <Crown size={11} color="#F59E0B" strokeWidth={2} />}
+            {isPremium && !isFounderMember && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#7C3AED', borderColor: '#A855F7' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+            {isVerified && !isPremium && !isFounderMember && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#2563EB', borderColor: '#3B82F6' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+          </View>
+          {username ? <Text style={styles.memberCardUsername} numberOfLines={1}>{username}</Text> : null}
+          {role ? (
+            <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />
+          ) : null}
+        </View>
         <StatusChip status={member.status as any} />
       </View>
-    </View>
+      {bio ? <Text style={styles.memberCardBio} numberOfLines={2}>{bio}</Text> : null}
+      <View style={styles.memberCardFooter}>
+        <ChevronRight size={12} color={colors.textMuted} strokeWidth={2} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function FounderMemberCard({ profile }: { profile: UserProfileSearch }) {
+  const router = useRouter();
+  const isPremium = VerificationService.isPremiumActive(profile as any);
+  const isVerified = profile.is_verified || profile.verified_basic;
+  const displayName = profile.display_name || profile.username || 'DAWEN Founder';
+  const profileId = profile.wallet_address || profile.id;
+
+  return (
+    <TouchableOpacity
+      style={[styles.memberCard, { borderColor: '#F59E0B33', backgroundColor: '#F59E0B08' }]}
+      onPress={() => router.push(`/profile/${profileId}` as any)}
+      activeOpacity={0.8}
+    >
+      <View style={styles.memberCardTop}>
+        <View style={styles.memberCardAvatarWrap}>
+          {profile.avatar_url ? (
+            <Image source={{ uri: profile.avatar_url }} style={styles.memberAvatar} />
+          ) : (
+            <LinearGradient colors={['#F59E0B66', '#F59E0B22']} style={styles.memberAvatarPlaceholder}>
+              <Crown size={18} color="#F59E0B" strokeWidth={1.5} />
+            </LinearGradient>
+          )}
+          <View style={[styles.memberBadgeDot, { backgroundColor: '#F59E0B' }]} />
+        </View>
+        <View style={styles.memberCardInfo}>
+          <View style={styles.memberCardNameRow}>
+            <Text style={[styles.memberCardName, { color: '#F59E0B' }]} numberOfLines={1}>{displayName}</Text>
+            <Crown size={11} color="#F59E0B" strokeWidth={2} />
+            {isPremium && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#7C3AED', borderColor: '#A855F7' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+            {isVerified && !isPremium && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#2563EB', borderColor: '#3B82F6' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+          </View>
+          {profile.username ? <Text style={styles.memberCardUsername}>@{profile.username}</Text> : null}
+          <View style={[styles.roleBadge, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B55' }]}>
+            <Crown size={10} color="#F59E0B" strokeWidth={2} />
+            <Text style={[styles.roleBadgeText, { color: '#F59E0B' }]}>Founder / Owner</Text>
+          </View>
+        </View>
+        <View style={[styles.statusChip, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B44' }]}>
+          <View style={[styles.statusDot, { backgroundColor: '#F59E0B' }]} />
+          <Text style={[styles.statusChipText, { color: '#F59E0B' }]}>Owner</Text>
+        </View>
+      </View>
+      {profile.bio ? <Text style={styles.memberCardBio} numberOfLines={2}>{profile.bio}</Text> : null}
+      <View style={styles.memberCardFooter}>
+        <ChevronRight size={12} color={colors.textMuted} strokeWidth={2} />
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -1289,8 +1382,9 @@ export default function CrewPage() {
     { key: 'overview', label: 'Overview' },
     { key: 'applications', label: 'Applications' },
     { key: 'role_management', label: 'Assign Roles' },
-    { key: 'trial', label: 'Trial' },
+    { key: 'hierarchy', label: 'Hierarchy' },
     { key: 'members', label: 'Members' },
+    { key: 'trial', label: 'Trial' },
     { key: 'task_review', label: 'Tasks' },
     { key: 'notes', label: 'Notes' },
   ];
@@ -1502,8 +1596,19 @@ export default function CrewPage() {
         return (
           <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor={colors.primary} />}>
             <Text style={styles.sectionTitle}>Active Crew Members</Text>
+            {/* Founder always shown at top */}
+            {founderProfile && (
+              <View style={styles.memberGroup}>
+                <View style={styles.memberGroupHeader}>
+                  <Crown size={14} color="#F59E0B" strokeWidth={2} />
+                  <Text style={[styles.memberGroupTitle, { color: '#F59E0B' }]}>Founder / Owner</Text>
+                  <Text style={styles.memberGroupCount}>1</Text>
+                </View>
+                <FounderMemberCard profile={founderProfile} />
+              </View>
+            )}
             {roles.map(role => {
-              const roleMembers = members.filter(m => m.role_key === role.role_key);
+              const roleMembers = members.filter(m => m.role_key === role.role_key && m.status !== 'removed');
               if (!roleMembers.length) return null;
               return (
                 <View key={role.role_key} style={styles.memberGroup}>
@@ -1516,7 +1621,7 @@ export default function CrewPage() {
                 </View>
               );
             })}
-            {members.length === 0 && (
+            {!founderProfile && members.length === 0 && (
               <View style={styles.emptyState}>
                 <Users size={36} color={colors.textMuted} strokeWidth={1.5} />
                 <Text style={styles.emptyStateText}>No crew members yet.</Text>
@@ -1750,21 +1855,28 @@ const styles = StyleSheet.create({
 
   // Member card
   memberCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: colors.surface, borderRadius: 14, padding: 12, marginBottom: 8,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
   },
-  memberCardAvatar: { position: 'relative' },
+  memberCardTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  memberCardAvatarWrap: { position: 'relative', width: 44, height: 44 },
   memberAvatar: { width: 44, height: 44, borderRadius: 22 },
   memberAvatarPlaceholder: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
   memberAvatarInitial: { fontSize: 18, fontWeight: '800' },
-  memberCardBadges: { position: 'absolute', bottom: 0, right: 0 },
-  premiumDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#A855F7', borderWidth: 2, borderColor: colors.surface },
-  verifiedDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#3B82F6', borderWidth: 2, borderColor: colors.surface },
-  memberCardInfo: { flex: 1, gap: 3 },
+  memberBadgeDot: {
+    position: 'absolute', bottom: 0, right: 0, width: 13, height: 13,
+    borderRadius: 6.5, borderWidth: 2, borderColor: colors.surface,
+  },
+  memberCardInfo: { flex: 1, gap: 2 },
+  memberCardNameRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
   memberCardName: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  memberInlineBadge: {
+    width: 14, height: 14, borderRadius: 7, justifyContent: 'center',
+    alignItems: 'center', borderWidth: 1,
+  },
   memberCardUsername: { fontSize: 12, color: colors.textMuted },
-  memberCardRight: {},
+  memberCardBio: { fontSize: 12, color: colors.textSecondary, lineHeight: 17, marginTop: 7, paddingLeft: 56 },
+  memberCardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 4 },
 
   // Application card
   appCard: {

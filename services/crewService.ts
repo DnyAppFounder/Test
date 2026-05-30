@@ -98,6 +98,7 @@ export interface CrewMember {
     display_name?: string;
     avatar_url?: string;
     wallet_address?: string;
+    bio?: string;
     is_verified?: boolean;
     verified_basic?: boolean;
     is_premium?: boolean;
@@ -118,6 +119,7 @@ export interface UserProfileSearch {
   display_name?: string;
   avatar_url?: string;
   wallet_address?: string;
+  bio?: string;
   is_verified?: boolean;
   verified_basic?: boolean;
   is_premium?: boolean;
@@ -305,7 +307,7 @@ export const CrewService = {
       .select(`
         *,
         user_profiles (
-          username, display_name, avatar_url, wallet_address,
+          username, display_name, avatar_url, wallet_address, bio,
           is_verified, verified_basic, is_premium, premium_expires_at, is_founder
         ),
         crew_roles (role_name, badge_color, badge_icon, description)
@@ -318,7 +320,7 @@ export const CrewService = {
   async getFounderProfile(): Promise<UserProfileSearch | null> {
     const { data } = await supabase
       .from('user_profiles')
-      .select('id, username, display_name, avatar_url, wallet_address, is_verified, verified_basic, is_premium, is_founder')
+      .select('id, username, display_name, avatar_url, wallet_address, bio, is_verified, verified_basic, is_premium, is_founder')
       .eq('is_founder', true)
       .maybeSingle();
     return data as UserProfileSearch | null;
@@ -331,7 +333,7 @@ export const CrewService = {
     const q = query.trim().toLowerCase();
     const { data } = await supabase
       .from('user_profiles')
-      .select('id, username, display_name, avatar_url, wallet_address, is_verified, verified_basic, is_premium, is_founder')
+      .select('id, username, display_name, avatar_url, wallet_address, bio, is_verified, verified_basic, is_premium, is_founder')
       .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
       .limit(20);
     return (data ?? []) as UserProfileSearch[];
