@@ -89,6 +89,7 @@ export interface CrewMember {
   assigned_at: string;
   trial_ends_at?: string;
   public_note?: string;
+  internal_note?: string;
   application_id?: string;
   created_at: string;
   updated_at: string;
@@ -101,6 +102,7 @@ export interface CrewMember {
     verified_basic?: boolean;
     is_premium?: boolean;
     premium_expires_at?: string;
+    is_founder?: boolean;
   };
   crew_roles?: {
     role_name: string;
@@ -108,6 +110,18 @@ export interface CrewMember {
     badge_icon: string;
     description: string;
   };
+}
+
+export interface UserProfileSearch {
+  id: string;
+  username?: string;
+  display_name?: string;
+  avatar_url?: string;
+  wallet_address?: string;
+  is_verified?: boolean;
+  verified_basic?: boolean;
+  is_premium?: boolean;
+  is_founder?: boolean;
 }
 
 export interface CrewInternalNote {
@@ -292,13 +306,56 @@ export const CrewService = {
         *,
         user_profiles (
           username, display_name, avatar_url, wallet_address,
-          is_verified, verified_basic, is_premium, premium_expires_at
+          is_verified, verified_basic, is_premium, premium_expires_at, is_founder
         ),
         crew_roles (role_name, badge_color, badge_icon, description)
       `)
       .in('status', ['active', 'trial'])
       .order('assigned_at');
     return (data ?? []) as CrewMember[];
+  },
+
+  async getFounderProfile(): Promise<UserProfileSearch | null> {
+    const { data } = await supabase
+      .from('user_profiles')
+      .select('id, username, display_name, avatar_url, wallet_address, is_verified, verified_basic, is_premium, is_founder')
+      .eq('is_founder', true)
+      .maybeSingle();
+    return data as UserProfileSearch | null;
+  },
+
+  // ── User search (admin) ───────────────────────────────────────────────────
+
+  async searchUsers(query: string): Promise<UserProfileSearch[]> {
+    if (!query.trim()) return [];
+    const q = query.trim().toLowerCase();
+    const { data } = await supabase
+      .from('user_profiles')
+      .select('id, username, display_name, avatar_url, wallet_address, is_verified, verified_basic, is_premium, is_founder')
+      .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
+      .limit(20);
+    return (data ?? []) as UserProfileSearch[];
+  },
+
+  async getUserMemberships(userId: string): Promise<CrewMember[]> {
+    const { data } = await supabase
+      .from('crew_members')
+      .select(`
+        *,
+        crew_roles (role_name, badge_color, badge_icon, description)
+      `)
+      .eq('user_id', userId)
+      .neq('status', 'removed')
+      .order('assigned_at');
+    return (data ?? []) as CrewMember[];
+  },
+
+  async adminRemoveMember(memberId: string): Promise<{ error: string | null }> {
+    const { error } = await supabase
+      .from('crew_members')
+      .update({ status: 'removed', updated_at: new Date().toISOString() })
+      .eq('id', memberId);
+    return { error: error?.message ?? null };
   },
 
   // ── Admin: Applications ───────────────────────────────────────────────────
@@ -554,5 +611,22 @@ export const CrewService = {
 
   isAdminRole(roleKey: string): boolean {
     return roleKey === 'founder' || roleKey === 'community_manager';
+  },
+
+  isFounderRole(roleKey: string): boolean {
+    return roleKey === 'founder';
+  },
+
+  canManageFounderRole(myRoleKeys: string[], isFounder: boolean): boolean {
+    return isFounder;
+  },
+
+  canAssignRole(targetRoleKey: string, myRoleKeys: string[], isFounder: boolean): boolean {
+    if (isFounder) return true;
+    if (myRoleKeys.includes('community_manager')) {
+      // Community Manager cannot assign founder or community_manager
+      return targetRoleKey !== 'founder' && targetRoleKey !== 'community_manager';
+    }
+    return false;
   },
 };

@@ -253,23 +253,48 @@ Deno.serve(async (req: Request) => {
 
       const supabase = db();
 
-      // Call the SECURITY DEFINER RPC that validates ownership and generates
-      // a cryptographically-random DAWEN-XXXXXX code with 15-min expiry.
-      const { data: code, error: rpcErr } = await supabase
-        .rpc("generate_telegram_link_code", {
-          p_wallet_address: wallet_address,
-          p_group_id: group_id ?? null,
-        });
+      // Resolve wallet → profile id
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("id")
+        .eq("wallet_address", wallet_address)
+        .maybeSingle();
 
-      if (rpcErr || !code) {
-        console.error("[connect-telegram-bot] generate_code error:", rpcErr);
-        return json({
-          success: false,
-          error: rpcErr?.message || "Could not generate Telegram link code. Please try again.",
-        }, 500);
+      if (!profile) {
+        return json({ success: false, error: "Profile not found" }, 403);
       }
 
+      // Generate DAWEN-XXXXXX using Deno's secure crypto (no PG extension needed)
+      const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const bytes = new Uint8Array(6);
+      crypto.getRandomValues(bytes);
+      const suffix = Array.from(bytes).map(b => ALPHABET[b % ALPHABET.length]).join("");
+      const code = `DAWEN-${suffix}`;
+
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+      // Invalidate any previous unused code for this user+group, then insert new one
+      await supabase
+        .from("telegram_link_codes")
+        .update({ used_at: new Date().toISOString() })
+        .eq("user_id", profile.id)
+        .is("used_at", null)
+        .eq("group_id", group_id ?? null);
+
+      const { error: insertErr } = await supabase
+        .from("telegram_link_codes")
+        .insert({
+          user_id: profile.id,
+          group_id: group_id ?? null,
+          code,
+          expires_at: expiresAt,
+        });
+
+      if (insertErr) {
+        console.error("[connect-telegram-bot] insert code error:", insertErr);
+        return json({ success: false, error: "Could not generate Telegram link code. Please try again." }, 500);
+      }
+
       return json({ success: true, code, expires_at: expiresAt });
     }
 

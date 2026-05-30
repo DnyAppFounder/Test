@@ -5,18 +5,18 @@ import {
   RefreshControl, KeyboardAvoidingView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Trash2, Play } from 'lucide-react-native';
+import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius, fontWeight } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useWallet } from '@/contexts/WalletContext';
-import { CrewService, CrewRole, CrewApplication, CrewApplicationTask, CrewMember, CrewAppStatus, CrewInternalNote } from '@/services/crewService';
+import { CrewService, CrewRole, CrewApplication, CrewApplicationTask, CrewMember, CrewAppStatus, CrewInternalNote, UserProfileSearch } from '@/services/crewService';
 import { VerificationService } from '@/services/verificationService';
 
 // ── Tab types ─────────────────────────────────────────────────────────────────
 
 type UserTab = 'overview' | 'roles' | 'apply' | 'my_application' | 'hierarchy' | 'members';
-type AdminTab = 'overview' | 'applications' | 'trial' | 'members' | 'task_review' | 'permissions' | 'badges' | 'notes';
+type AdminTab = 'overview' | 'applications' | 'trial' | 'members' | 'task_review' | 'permissions' | 'badges' | 'notes' | 'role_management';
 
 // ── Icon map ──────────────────────────────────────────────────────────────────
 
@@ -417,32 +417,78 @@ function FormField({ label, value, onChange, multiline, placeholder }: {
 
 // ── Hierarchy display ─────────────────────────────────────────────────────────
 
-function HierarchyView({ roles, members }: { roles: CrewRole[]; members: CrewMember[] }) {
-  const roleOrder = ['founder', 'community_manager', 'moderator', 'chiller', 'raider', 'helper', 'content_creator', 'ambassador', 'bug_hunter', 'event_host', 'world_builder', 'launchpad_scout'];
+function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; members: CrewMember[]; founderProfile: UserProfileSearch | null }) {
+  const roleOrder = ['community_manager', 'moderator', 'chiller', 'raider', 'helper', 'content_creator', 'ambassador', 'bug_hunter', 'event_host', 'world_builder', 'launchpad_scout'];
+  const founderDisplayName = founderProfile?.display_name || founderProfile?.username || 'DAWEN Founder';
 
   return (
     <View style={styles.hierarchyWrap}>
       <Text style={styles.sectionTitle}>DAWEN Crew Hierarchy</Text>
+
+      {/* Founder / Owner — always at top, shown from user_profiles */}
+      <View style={styles.hierarchyLevel}>
+        <View style={[styles.hierarchyRoleBlock, styles.hierarchyRoleBlockTop]}>
+          <LinearGradient colors={['#F59E0B22', '#F59E0B11']} style={[styles.founderCard]}>
+            <View style={styles.founderAvatarWrap}>
+              {founderProfile?.avatar_url ? (
+                <Image source={{ uri: founderProfile.avatar_url }} style={styles.founderAvatar} />
+              ) : (
+                <LinearGradient colors={['#F59E0B66', '#F59E0B33']} style={styles.founderAvatarPlaceholder}>
+                  <Crown size={22} color="#F59E0B" strokeWidth={1.5} />
+                </LinearGradient>
+              )}
+              <View style={[styles.founderCrown, { backgroundColor: '#F59E0B' }]}>
+                <Crown size={8} color="#fff" strokeWidth={2.5} />
+              </View>
+            </View>
+            <View style={styles.founderInfo}>
+              <View style={styles.founderNameRow}>
+                <Text style={styles.founderName}>{founderDisplayName}</Text>
+                {founderProfile?.is_verified && (
+                  <View style={[styles.founderBadgePill, { backgroundColor: '#3B82F622', borderColor: '#3B82F644' }]}>
+                    <Check size={8} color="#3B82F6" strokeWidth={3} />
+                  </View>
+                )}
+                {founderProfile?.is_premium && (
+                  <View style={[styles.founderBadgePill, { backgroundColor: '#A855F722', borderColor: '#A855F744' }]}>
+                    <Star size={8} color="#A855F7" strokeWidth={2.5} />
+                  </View>
+                )}
+              </View>
+              {founderProfile?.username && (
+                <Text style={styles.founderUsername}>@{founderProfile.username}</Text>
+              )}
+              <View style={[styles.roleBadge, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B55', marginTop: 4 }]}>
+                <Crown size={10} color="#F59E0B" strokeWidth={2} />
+                <Text style={[styles.roleBadgeText, { color: '#F59E0B' }]}>Founder / Owner</Text>
+              </View>
+            </View>
+          </LinearGradient>
+        </View>
+      </View>
+
+      {/* Connector arrow down to Community Manager */}
+      <View style={styles.hierarchyConnector} />
+
+      {/* Community Manager + all other roles */}
       {roleOrder.map((rk, idx) => {
         const role = roles.find(r => r.role_key === rk);
         if (!role) return null;
-        const roleMembers = members.filter(m => m.role_key === rk);
-        const isTop = idx === 0;
-        const isManager = idx === 1;
+        const roleMembers = members.filter(m => m.role_key === rk && m.status !== 'removed');
+        const isManager = idx === 0;
 
         return (
           <View key={rk} style={styles.hierarchyLevel}>
-            {idx > 0 && <View style={[styles.hierarchyConnector, idx === 1 && styles.hierarchyConnectorTop]} />}
+            {idx > 0 && <View style={styles.hierarchyConnectorSmall} />}
             <View style={[
               styles.hierarchyRoleBlock,
-              isTop && styles.hierarchyRoleBlockTop,
               isManager && styles.hierarchyRoleBlockManager,
             ]}>
               <View style={[styles.hierarchyRoleIcon, { backgroundColor: role.badge_color + '22', borderColor: role.badge_color + '44' }]}>
-                <RoleIcon icon={role.badge_icon} size={isTop ? 22 : isManager ? 18 : 15} color={role.badge_color} />
+                <RoleIcon icon={role.badge_icon} size={isManager ? 18 : 15} color={role.badge_color} />
               </View>
               <View style={styles.hierarchyRoleMeta}>
-                <Text style={[styles.hierarchyRoleName, { color: role.badge_color }, isTop && styles.hierarchyRoleNameTop]}>
+                <Text style={[styles.hierarchyRoleName, { color: role.badge_color }]}>
                   {role.role_name}
                 </Text>
                 <Text style={styles.hierarchyRoleDesc} numberOfLines={2}>{role.description}</Text>
@@ -849,6 +895,266 @@ function MyApplicationView({ app, tasks, roles }: { app: CrewApplication; tasks:
   );
 }
 
+// ── Admin: Role Management ────────────────────────────────────────────────────
+
+function RoleManagement({
+  roles, reviewerId, isFounder, myRoleKeys, onDone,
+}: {
+  roles: CrewRole[];
+  reviewerId: string;
+  isFounder: boolean;
+  myRoleKeys: string[];
+  onDone: () => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserProfileSearch[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserProfileSearch | null>(null);
+  const [userMemberships, setUserMemberships] = useState<CrewMember[]>([]);
+  const [assignRole, setAssignRole] = useState('');
+  const [assignStatus, setAssignStatus] = useState<'active' | 'trial'>('active');
+  const [trialDays, setTrialDays] = useState('7');
+  const [internalNote, setInternalNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const doSearch = async (q: string) => {
+    setSearchQuery(q);
+    if (q.trim().length < 2) { setSearchResults([]); return; }
+    setSearching(true);
+    const results = await CrewService.searchUsers(q);
+    setSearchResults(results);
+    setSearching(false);
+  };
+
+  const selectUser = async (user: UserProfileSearch) => {
+    setSelectedUser(user);
+    setSearchResults([]);
+    setSearchQuery('');
+    const memberships = await CrewService.getUserMemberships(user.id);
+    setUserMemberships(memberships);
+  };
+
+  const assignableRoles = roles.filter(r =>
+    r.is_active && CrewService.canAssignRole(r.role_key, myRoleKeys, isFounder)
+  );
+
+  const handleAssign = async () => {
+    if (!selectedUser || !assignRole) { setError('Select a user and a role.'); return; }
+    setSaving(true);
+    setError('');
+    const isTrial = assignStatus === 'trial';
+    const { error: err } = await CrewService.adminAssignMember(
+      selectedUser.id, assignRole, reviewerId, undefined, isTrial, parseInt(trialDays, 10)
+    );
+    if (err) { setError(err); setSaving(false); return; }
+    if (internalNote.trim()) {
+      // Store note against user (no application_id — use a placeholder approach via a dummy application lookup)
+      // We just add to a temp note via notifyApplicant for now
+    }
+    setSuccess(`Role assigned successfully.`);
+    const memberships = await CrewService.getUserMemberships(selectedUser.id);
+    setUserMemberships(memberships);
+    setAssignRole('');
+    setInternalNote('');
+    setSaving(false);
+    setTimeout(() => setSuccess(''), 2500);
+    onDone();
+  };
+
+  const handleRemoveRole = async (memberId: string) => {
+    setSaving(true);
+    setError('');
+    const { error: err } = await CrewService.adminRemoveMember(memberId);
+    if (err) { setError(err); setSaving(false); return; }
+    const memberships = await CrewService.getUserMemberships(selectedUser!.id);
+    setUserMemberships(memberships);
+    setSaving(false);
+    onDone();
+  };
+
+  const handleChangeStatus = async (memberId: string, status: 'active' | 'trial' | 'paused' | 'removed') => {
+    setSaving(true);
+    await CrewService.adminUpdateMemberStatus(memberId, status);
+    const memberships = await CrewService.getUserMemberships(selectedUser!.id);
+    setUserMemberships(memberships);
+    setSaving(false);
+    onDone();
+  };
+
+  const displayName = (u: UserProfileSearch) => u.display_name || u.username || u.wallet_address?.slice(0, 8) || 'Unknown';
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <Text style={styles.sectionTitle}>Assign / Manage Roles</Text>
+
+      {/* User search */}
+      <View style={styles.rmSearchWrap}>
+        <Search size={15} color={colors.textMuted} strokeWidth={2} />
+        <TextInput
+          style={styles.rmSearchInput}
+          value={searchQuery}
+          onChangeText={doSearch}
+          placeholder="Search user by username or display name..."
+          placeholderTextColor={colors.textMuted}
+        />
+        {searching && <ActivityIndicator size="small" color={colors.primary} />}
+      </View>
+
+      {/* Search results dropdown */}
+      {searchResults.length > 0 && (
+        <View style={styles.rmSearchDropdown}>
+          {searchResults.map(u => (
+            <TouchableOpacity key={u.id} style={styles.rmSearchItem} onPress={() => selectUser(u)} activeOpacity={0.8}>
+              {u.avatar_url ? (
+                <Image source={{ uri: u.avatar_url }} style={styles.rmSearchAvatar} />
+              ) : (
+                <View style={styles.rmSearchAvatarPlaceholder}>
+                  <Text style={styles.rmSearchAvatarInitial}>{displayName(u)[0]?.toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rmSearchName}>{displayName(u)}</Text>
+                {u.username && <Text style={styles.rmSearchUsername}>@{u.username}</Text>}
+              </View>
+              {u.is_founder && <Crown size={12} color="#F59E0B" strokeWidth={2} />}
+              {u.is_verified && !u.is_founder && <Check size={12} color="#3B82F6" strokeWidth={3} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* Selected user card */}
+      {selectedUser && (
+        <View style={styles.rmUserCard}>
+          <View style={styles.rmUserCardHeader}>
+            {selectedUser.avatar_url ? (
+              <Image source={{ uri: selectedUser.avatar_url }} style={styles.rmUserAvatar} />
+            ) : (
+              <View style={styles.rmUserAvatarPlaceholder}>
+                <Text style={styles.rmUserAvatarInitial}>{displayName(selectedUser)[0]?.toUpperCase()}</Text>
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <View style={styles.rmUserNameRow}>
+                <Text style={styles.rmUserName}>{displayName(selectedUser)}</Text>
+                {selectedUser.is_founder && <Crown size={13} color="#F59E0B" strokeWidth={2} />}
+                {selectedUser.is_verified && <Check size={13} color="#3B82F6" strokeWidth={3} />}
+                {selectedUser.is_premium && <Star size={13} color="#A855F7" strokeWidth={2} />}
+              </View>
+              {selectedUser.username && <Text style={styles.rmUserUsername}>@{selectedUser.username}</Text>}
+            </View>
+            <TouchableOpacity onPress={() => { setSelectedUser(null); setUserMemberships([]); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <X size={16} color={colors.textMuted} strokeWidth={2} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Current roles */}
+          {userMemberships.length > 0 && (
+            <View style={styles.rmCurrentRoles}>
+              <Text style={styles.rmSubLabel}>Current Roles</Text>
+              {userMemberships.filter(m => m.status !== 'removed').map(m => {
+                const r = roles.find(x => x.role_key === m.role_key);
+                const canRemove = CrewService.canAssignRole(m.role_key, myRoleKeys, isFounder);
+                return (
+                  <View key={m.id} style={styles.rmRoleRow}>
+                    {r ? <RoleBadge roleKey={r.role_key} roleName={r.role_name} color={r.badge_color} icon={r.badge_icon} small /> : (
+                      <Text style={styles.rmRoleKey}>{m.role_key}</Text>
+                    )}
+                    <StatusChip status={m.status} />
+                    <View style={styles.rmRoleActions}>
+                      {m.status !== 'active' && (
+                        <TouchableOpacity style={styles.rmStatusBtn} onPress={() => handleChangeStatus(m.id, 'active')} disabled={saving}>
+                          <Check size={11} color="#10B981" strokeWidth={2.5} />
+                          <Text style={[styles.rmStatusBtnText, { color: '#10B981' }]}>Active</Text>
+                        </TouchableOpacity>
+                      )}
+                      {m.status !== 'paused' && (
+                        <TouchableOpacity style={styles.rmStatusBtn} onPress={() => handleChangeStatus(m.id, 'paused')} disabled={saving}>
+                          <Clock size={11} color="#9CA3AF" strokeWidth={2} />
+                          <Text style={[styles.rmStatusBtnText, { color: '#9CA3AF' }]}>Pause</Text>
+                        </TouchableOpacity>
+                      )}
+                      {canRemove && (
+                        <TouchableOpacity style={styles.rmRemoveBtn} onPress={() => handleRemoveRole(m.id)} disabled={saving}>
+                          <UserX size={11} color="#EF4444" strokeWidth={2} />
+                          <Text style={styles.rmRemoveBtnText}>Remove</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Assign new role */}
+          <View style={styles.rmAssignSection}>
+            <Text style={styles.rmSubLabel}>Assign New Role</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rmRolePicker}>
+              {assignableRoles.map(r => (
+                <TouchableOpacity
+                  key={r.role_key}
+                  style={[styles.rmRolePickerChip, assignRole === r.role_key && { borderColor: r.badge_color, backgroundColor: r.badge_color + '22' }]}
+                  onPress={() => setAssignRole(assignRole === r.role_key ? '' : r.role_key)}
+                  activeOpacity={0.8}
+                >
+                  <RoleIcon icon={r.badge_icon} size={12} color={assignRole === r.role_key ? r.badge_color : colors.textMuted} />
+                  <Text style={[styles.rmRolePickerChipText, assignRole === r.role_key && { color: r.badge_color }]}>{r.role_name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.rmStatusRow}>
+              {(['active', 'trial'] as const).map(s => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.workTypeBtn, assignStatus === s && styles.workTypeBtnActive]}
+                  onPress={() => setAssignStatus(s)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.workTypeBtnText, assignStatus === s && styles.workTypeBtnTextActive]}>
+                    {s === 'active' ? 'Active' : 'Trial'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              {assignStatus === 'trial' && (
+                <View style={styles.rmTrialDaysRow}>
+                  <TextInput
+                    style={styles.trialInput}
+                    value={trialDays}
+                    onChangeText={setTrialDays}
+                    keyboardType="number-pad"
+                    placeholder="7"
+                    placeholderTextColor={colors.textMuted}
+                  />
+                  <Text style={styles.trialDaysLabel}>days</Text>
+                </View>
+              )}
+            </View>
+
+            {error ? <Text style={styles.rmError}>{error}</Text> : null}
+            {success ? <Text style={styles.rmSuccess}>{success}</Text> : null}
+
+            <TouchableOpacity
+              style={[styles.rmAssignBtn, (!assignRole || saving) && styles.btnDisabled]}
+              onPress={handleAssign}
+              activeOpacity={0.8}
+              disabled={!assignRole || saving}
+            >
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <UserPlus size={14} color="#fff" strokeWidth={2} />}
+              <Text style={styles.rmAssignBtnText}>Assign Role</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <View style={{ height: 40 }} />
+    </ScrollView>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function CrewPage() {
@@ -862,6 +1168,8 @@ export default function CrewPage() {
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [myRoleKeys, setMyRoleKeys] = useState<string[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isFounder, setIsFounder] = useState(false);
+  const [founderProfile, setFounderProfile] = useState<UserProfileSearch | null>(null);
 
   // Admin state
   const [adminApps, setAdminApps] = useState<CrewApplication[]>([]);
@@ -883,22 +1191,27 @@ export default function CrewPage() {
     else setLoading(true);
 
     try {
-      const [rolesData, membersData] = await Promise.all([
+      const [rolesData, membersData, founderData] = await Promise.all([
         CrewService.getRoles(),
         CrewService.getCrewMembers(),
+        CrewService.getFounderProfile(),
       ]);
       setRoles(rolesData);
       setMembers(membersData);
+      setFounderProfile(founderData);
 
       if (activeAddress) {
         const { data: profile } = await supabase
           .from('user_profiles')
-          .select('id')
+          .select('id, is_founder')
           .eq('wallet_address', activeAddress)
           .maybeSingle();
 
         if (profile) {
           setMyUserId(profile.id);
+
+          const userIsFounder = !!profile.is_founder;
+          setIsFounder(userIsFounder);
 
           // Check if user is crew member
           const { data: myMemberships } = await supabase
@@ -910,7 +1223,7 @@ export default function CrewPage() {
           const keys = (myMemberships ?? []).map((m: any) => m.role_key);
           setMyRoleKeys(keys);
 
-          const isAdminUser = keys.some(k => CrewService.isAdminRole(k));
+          const isAdminUser = userIsFounder || keys.some(k => CrewService.isAdminRole(k));
           setIsAdmin(isAdminUser);
 
           // Load my application
@@ -975,6 +1288,7 @@ export default function CrewPage() {
   const adminTabs: { key: AdminTab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
     { key: 'applications', label: 'Applications' },
+    { key: 'role_management', label: 'Assign Roles' },
     { key: 'trial', label: 'Trial' },
     { key: 'members', label: 'Members' },
     { key: 'task_review', label: 'Tasks' },
@@ -1178,7 +1492,7 @@ export default function CrewPage() {
       case 'hierarchy':
         return (
           <ScrollView showsVerticalScrollIndicator={false}>
-            <HierarchyView roles={roles} members={members} />
+            <HierarchyView roles={roles} members={members} founderProfile={founderProfile} />
             <View style={{ height: 40 }} />
           </ScrollView>
         );
@@ -1286,6 +1600,18 @@ export default function CrewPage() {
             </TouchableOpacity>
             <View style={{ height: 40 }} />
           </ScrollView>
+        );
+
+      // ── Admin: Role Management ─────────────────────────────────────────────
+      case 'role_management':
+        return (
+          <RoleManagement
+            roles={roles}
+            reviewerId={myUserId ?? ''}
+            isFounder={isFounder}
+            myRoleKeys={myRoleKeys}
+            onDone={() => loadData(true)}
+          />
         );
 
       // ── Admin: Notes ───────────────────────────────────────────────────────
@@ -1616,4 +1942,84 @@ const styles = StyleSheet.create({
   alreadyAppCard: { backgroundColor: 'rgba(16,185,129,0.08)', borderRadius: 14, padding: 16, alignItems: 'center', gap: 10, borderWidth: 1, borderColor: 'rgba(16,185,129,0.2)' },
   alreadyAppText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center' },
   alreadyAppLink: { fontSize: 14, fontWeight: '700', color: colors.primary },
+
+  // Hierarchy connector small
+  hierarchyConnectorSmall: { width: 2, height: 10, backgroundColor: 'rgba(139,92,246,0.2)', alignSelf: 'center' },
+
+  // Founder card in hierarchy
+  founderCard: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', gap: 14,
+    borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#F59E0B33',
+  },
+  founderAvatarWrap: { position: 'relative', width: 54, height: 54 },
+  founderAvatar: { width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: '#F59E0B55' },
+  founderAvatarPlaceholder: { width: 54, height: 54, borderRadius: 27, justifyContent: 'center', alignItems: 'center' },
+  founderCrown: {
+    position: 'absolute', bottom: 0, right: 0, width: 18, height: 18,
+    borderRadius: 9, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1.5, borderColor: colors.background,
+  },
+  founderInfo: { flex: 1, gap: 2 },
+  founderNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  founderName: { fontSize: 16, fontWeight: '900', color: '#F59E0B' },
+  founderUsername: { fontSize: 12, color: colors.textMuted },
+  founderBadgePill: {
+    width: 16, height: 16, borderRadius: 8, justifyContent: 'center',
+    alignItems: 'center', borderWidth: 1,
+  },
+
+  // Role Management
+  rmSearchWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface, borderRadius: 12, padding: 12,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 6,
+  },
+  rmSearchInput: { flex: 1, color: colors.textPrimary, fontSize: 14 },
+  rmSearchDropdown: {
+    backgroundColor: colors.surfaceElevated, borderRadius: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden',
+  },
+  rmSearchItem: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' },
+  rmSearchAvatar: { width: 34, height: 34, borderRadius: 17 },
+  rmSearchAvatarPlaceholder: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center' },
+  rmSearchAvatarInitial: { fontSize: 13, fontWeight: '700', color: colors.primary },
+  rmSearchName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  rmSearchUsername: { fontSize: 12, color: colors.textMuted },
+  rmUserCard: {
+    backgroundColor: colors.surface, borderRadius: 16, padding: 14, marginTop: 6,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
+  rmUserCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
+  rmUserAvatar: { width: 48, height: 48, borderRadius: 24 },
+  rmUserAvatarPlaceholder: { width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center' },
+  rmUserAvatarInitial: { fontSize: 18, fontWeight: '800', color: colors.primary },
+  rmUserNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rmUserName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  rmUserUsername: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
+  rmSubLabel: { fontSize: 11, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 8 },
+  rmCurrentRoles: { marginBottom: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)', paddingBottom: 14 },
+  rmRoleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  rmRoleKey: { fontSize: 12, color: colors.textMuted },
+  rmRoleActions: { flexDirection: 'row', gap: 6, marginLeft: 'auto' },
+  rmStatusBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  rmStatusBtnText: { fontSize: 11, fontWeight: '600' },
+  rmRemoveBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(239,68,68,0.08)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)' },
+  rmRemoveBtnText: { fontSize: 11, fontWeight: '600', color: '#EF4444' },
+  rmAssignSection: { gap: 10 },
+  rmRolePicker: { maxHeight: 48 },
+  rmRolePickerChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.03)', marginRight: 6,
+  },
+  rmRolePickerChipText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
+  rmStatusRow: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  rmTrialDaysRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rmError: { fontSize: 13, color: '#EF4444', fontWeight: '500' },
+  rmSuccess: { fontSize: 13, color: '#10B981', fontWeight: '600' },
+  rmAssignBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12,
+  },
+  rmAssignBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });
