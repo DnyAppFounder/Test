@@ -650,7 +650,7 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
   );
 }
 
-// ── Admin: Application Detail ─────────────────────────────────────────────────
+// ── Admin: Application Detail (CV/Resume view) ────────────────────────────────
 
 function AdminApplicationDetail({
   app, tasks, notes, roles, reviewerId,
@@ -673,44 +673,37 @@ function AdminApplicationDetail({
   const role = roles.find(r => r.role_key === app.role_key);
   const p = app.user_profiles;
   const displayName = p?.display_name || p?.username || 'Unknown';
+  const walletShort = p?.wallet_address ? `${p.wallet_address.slice(0, 6)}…${p.wallet_address.slice(-4)}` : '';
+  const isPremium = p ? VerificationService.isPremiumActive(p as any) : false;
+  const isVerified = p?.is_verified || p?.verified_basic;
 
-  const action = async (
-    status: CrewAppStatus,
-    isTrial = false,
-    assignMember = false
-  ) => {
+  const action = async (status: CrewAppStatus, isTrial = false, assignMember = false) => {
     setLoading(true);
     setError('');
-
     const { error: err } = await CrewService.adminUpdateApplicationStatus(
       app.id, status, reviewerId,
       msgText.trim() || undefined,
       undefined,
       isTrial ? parseInt(trialDays, 10) : undefined
     );
-
     if (err) { setError(err); setLoading(false); return; }
-
     if (assignMember && app.user_id) {
       await CrewService.adminAssignMember(
         app.user_id, app.role_key, reviewerId, app.id, isTrial, parseInt(trialDays, 10)
       );
     }
-
-    const notifMsg = {
+    const notifMsg: Partial<Record<CrewAppStatus, string>> = {
       under_review: 'Your DAWEN Crew application is now under review.',
-      shortlisted: 'Your DAWEN Crew application has been shortlisted.',
+      shortlisted: 'Your DAWEN Crew application has been shortlisted!',
       trial: `You have been moved to trial for ${role?.role_name ?? app.role_key}.`,
       accepted: 'Your DAWEN Crew application has been accepted!',
       rejected: 'Your DAWEN Crew application was not accepted at this time.',
+      needs_changes: msgText.trim() ? `Please update your application: ${msgText.trim()}` : 'Your application needs changes. Please review and resubmit.',
       paused: 'Your DAWEN Crew application has been paused.',
-    }[status];
-
-    if (notifMsg && app.user_id) {
-      await CrewService.notifyApplicant(app.user_id, reviewerId, notifMsg);
-    }
-
-    setSuccess(`Status updated to: ${CrewService.getStatusLabel(status)}`);
+    };
+    const msg = notifMsg[status];
+    if (msg && app.user_id) await CrewService.notifyApplicant(app.user_id, reviewerId, msg);
+    setSuccess(`Status: ${CrewService.getStatusLabel(status)}`);
     setTimeout(() => { setSuccess(''); onRefresh(); }, 1500);
     setLoading(false);
   };
@@ -724,69 +717,98 @@ function AdminApplicationDetail({
     setLoading(false);
   };
 
-  const reviewTask = async (taskId: string, st: 'approved' | 'rejected') => {
+  const reviewTask = async (taskId: string, st: 'approved' | 'rejected' | 'needs_changes') => {
     await CrewService.adminReviewTask(taskId, st, reviewerId);
     onRefresh();
   };
 
+  const approvedTaskCount = tasks.filter(t => t.status === 'approved').length;
+  const submittedTaskCount = tasks.filter(t => t.status === 'pending_review' || t.status === 'submitted').length;
+
   return (
     <ScrollView style={styles.detailScroll} showsVerticalScrollIndicator={false}>
+      {/* ── Header ── */}
       <View style={styles.detailHeader}>
         <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
         </TouchableOpacity>
-        <Text style={styles.detailTitle}>Application Review</Text>
+        <Text style={styles.detailTitle}>Application</Text>
         <StatusChip status={app.status as CrewAppStatus} />
       </View>
 
-      {/* Applicant card */}
-      <View style={styles.applicantCard}>
-        {p?.avatar_url ? (
-          <Image source={{ uri: p.avatar_url }} style={styles.applicantAvatar} />
-        ) : (
-          <View style={styles.applicantAvatarPlaceholder}>
-            <Text style={styles.applicantAvatarInitial}>{displayName[0]?.toUpperCase()}</Text>
+      {/* ── CV Header: Applicant identity ── */}
+      <LinearGradient colors={['rgba(139,92,246,0.08)', 'transparent']} style={styles.cvHeader}>
+        <View style={styles.cvAvatarWrap}>
+          {p?.avatar_url ? (
+            <Image source={{ uri: p.avatar_url }} style={styles.cvAvatar} />
+          ) : (
+            <View style={styles.cvAvatarPlaceholder}>
+              <Text style={styles.cvAvatarInitial}>{displayName[0]?.toUpperCase()}</Text>
+            </View>
+          )}
+          {isPremium && <View style={[styles.cvBadgeDot, { backgroundColor: '#A855F7' }]} />}
+          {isVerified && !isPremium && <View style={[styles.cvBadgeDot, { backgroundColor: '#2563EB' }]} />}
+        </View>
+        <View style={styles.cvIdentity}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <Text style={styles.cvName}>{displayName}</Text>
+            {p && <VerificationBadge profile={p as any} size="sm" />}
           </View>
-        )}
-        <View style={styles.applicantInfo}>
-          <Text style={styles.applicantName}>{displayName}</Text>
-          {p?.username && <Text style={styles.applicantUsername}>@{p.username}</Text>}
+          {p?.username && <Text style={styles.cvUsername}>@{p.username}</Text>}
+          {walletShort ? <Text style={styles.cvWallet}>{walletShort}</Text> : null}
           {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} />}
         </View>
+      </LinearGradient>
+
+      {/* ── Meta row ── */}
+      <View style={styles.cvMetaRow}>
+        {app.submitted_at && <Text style={styles.cvMeta}>Submitted {new Date(app.submitted_at).toLocaleDateString()}</Text>}
+        {app.timezone && <Text style={styles.cvMeta}>{app.timezone}</Text>}
+        {app.availability_hours && <Text style={styles.cvMeta}>{app.availability_hours}</Text>}
+        {app.work_type && <Text style={styles.cvMeta}>{app.work_type.replace('_', ' ')}</Text>}
+        {app.price_rate && <Text style={styles.cvMeta}>{app.price_rate}</Text>}
       </View>
 
-      {/* Quick actions */}
-      {success ? (
-        <View style={styles.successRow}>
-          <CheckCircle size={14} color="#10B981" strokeWidth={2} />
-          <Text style={styles.successRowText}>{success}</Text>
+      {/* ── Socials ── */}
+      {(app.x_username || app.telegram_username || app.discord_username) && (
+        <View style={styles.cvSocialsRow}>
+          {app.x_username && <View style={styles.cvSocialPill}><Text style={[styles.cvSocialText, { color: '#E7E9EA' }]}>X: @{app.x_username}</Text></View>}
+          {app.telegram_username && <View style={styles.cvSocialPill}><Text style={[styles.cvSocialText, { color: '#27A7E7' }]}>TG: @{app.telegram_username}</Text></View>}
+          {app.discord_username && <View style={styles.cvSocialPill}><Text style={[styles.cvSocialText, { color: '#5865F2' }]}>Discord: {app.discord_username}</Text></View>}
         </View>
-      ) : null}
-      {error ? (
-        <View style={styles.errorRow}>
-          <AlertTriangle size={14} color="#EF4444" strokeWidth={2} />
-          <Text style={styles.errorRowText}>{error}</Text>
+      )}
+      {(app.languages?.length ?? 0) > 0 && (
+        <View style={styles.cvSocialsRow}>
+          {app.languages.map(l => <View key={l} style={styles.cvSocialPill}><Text style={styles.cvSocialText}>{l}</Text></View>)}
         </View>
-      ) : null}
+      )}
 
-      <Text style={styles.detailSectionLabel}>User message (optional)</Text>
+      {/* ── Feedback/status ── */}
+      {success ? <View style={styles.successRow}><CheckCircle size={14} color="#10B981" strokeWidth={2} /><Text style={styles.successRowText}>{success}</Text></View> : null}
+      {error ? <View style={styles.errorRow}><AlertTriangle size={14} color="#EF4444" strokeWidth={2} /><Text style={styles.errorRowText}>{error}</Text></View> : null}
+
+      {/* ── User message ── */}
+      <Text style={styles.detailSectionLabel}>Message to applicant (optional)</Text>
       <TextInput
         style={styles.msgInput}
         value={msgText}
         onChangeText={setMsgText}
-        placeholder="Message visible to the applicant..."
+        placeholder="Visible to the applicant in My App..."
         placeholderTextColor={colors.textMuted}
         multiline
       />
 
+      {/* ── Quick actions ── */}
+      <Text style={styles.detailSectionLabel}>Actions</Text>
       <View style={styles.actionGrid}>
         <ActionBtn label="Under Review" color="#F59E0B" onPress={() => action('under_review')} loading={loading} />
         <ActionBtn label="Shortlist" color="#8B5CF6" onPress={() => action('shortlisted')} loading={loading} />
+        <ActionBtn label="Req. Changes" color="#F97316" onPress={() => action('needs_changes')} loading={loading} />
         <ActionBtn label="Accept" color="#10B981" onPress={() => action('accepted', false, true)} loading={loading} />
         <ActionBtn label="Reject" color="#EF4444" onPress={() => action('rejected')} loading={loading} />
-        <ActionBtn label="Pause" color="#9CA3AF" onPress={() => action('paused')} loading={loading} />
       </View>
 
+      {/* ── Trial ── */}
       <View style={styles.trialSection}>
         <Text style={styles.detailSectionLabel}>Move to Trial</Text>
         <View style={styles.trialRow}>
@@ -806,85 +828,97 @@ function AdminApplicationDetail({
         </View>
       </View>
 
-      {/* Application answers */}
-      <Text style={styles.detailSectionLabel}>Application Answers</Text>
+      {/* ── CV: Application answers ── */}
+      <Text style={styles.detailSectionLabel}>Why they want this role</Text>
       {[
         ['Motivation', app.motivation],
-        ['Contribution', app.contribution],
+        ['What they can bring', app.contribution],
         ['Experience', app.experience],
-        ['Previous Projects', app.previous_projects],
-        ['Spam Scenario', app.scenario_spam],
-        ['Bug Scenario', app.scenario_bug],
-        ['Conflict Scenario', app.scenario_conflict],
-        ['Trust Statement', app.trust_statement],
-        ['Extra Notes', app.extra_notes],
+        ['Previous projects / communities', app.previous_projects],
+        ['Trust statement', app.trust_statement],
+        ['Extra notes', app.extra_notes],
       ].filter(([, v]) => v).map(([label, val]) => (
         <View key={label as string} style={styles.answerBlock}>
-          <Text style={styles.answerLabel}>{label}</Text>
-          <Text style={styles.answerText}>{val}</Text>
+          <Text style={styles.answerLabel}>{label as string}</Text>
+          <Text style={styles.answerText}>{val as string}</Text>
         </View>
       ))}
 
-      {/* Contact */}
-      {(app.x_username || app.telegram_username || app.discord_username) && (
+      {/* ── Scenario questions ── */}
+      {(app.scenario_spam || app.scenario_bug || app.scenario_conflict) && (
         <>
-          <Text style={styles.detailSectionLabel}>Contact</Text>
-          {app.x_username && <Text style={styles.contactItem}>X: @{app.x_username}</Text>}
-          {app.telegram_username && <Text style={styles.contactItem}>Telegram: @{app.telegram_username}</Text>}
-          {app.discord_username && <Text style={styles.contactItem}>Discord: {app.discord_username}</Text>}
-          {app.timezone && <Text style={styles.contactItem}>Timezone: {app.timezone}</Text>}
-          {app.availability_hours && <Text style={styles.contactItem}>Available: {app.availability_hours}</Text>}
-          {app.work_type && <Text style={styles.contactItem}>Work type: {app.work_type}</Text>}
+          <Text style={styles.detailSectionLabel}>Scenario Answers</Text>
+          {app.scenario_spam && <View style={styles.answerBlock}><Text style={styles.answerLabel}>Spam/scam scenario</Text><Text style={styles.answerText}>{app.scenario_spam}</Text></View>}
+          {app.scenario_bug && <View style={styles.answerBlock}><Text style={styles.answerLabel}>Bug report scenario</Text><Text style={styles.answerText}>{app.scenario_bug}</Text></View>}
+          {app.scenario_conflict && <View style={styles.answerBlock}><Text style={styles.answerLabel}>Conflict scenario</Text><Text style={styles.answerText}>{app.scenario_conflict}</Text></View>}
         </>
       )}
 
-      {/* Proof links */}
+      {/* ── Proof links ── */}
       {(app.proof_links?.length ?? 0) > 0 && (
         <>
-          <Text style={styles.detailSectionLabel}>Proof / Links</Text>
+          <Text style={styles.detailSectionLabel}>Proof / Portfolio links</Text>
           {app.proof_links.map((link, i) => (
             <Text key={i} style={styles.proofLink}>{link}</Text>
           ))}
         </>
       )}
 
-      {/* Tasks */}
+      {/* ── Tasks ── */}
       {tasks.length > 0 && (
         <>
-          <Text style={styles.detailSectionLabel}>Tasks ({tasks.filter(t => t.status === 'submitted' || t.status === 'approved').length}/{tasks.length} submitted)</Text>
+          <Text style={styles.detailSectionLabel}>
+            Tasks — {approvedTaskCount} approved · {submittedTaskCount} pending · {tasks.length} total
+          </Text>
           {tasks.map(task => (
-            <View key={task.id} style={styles.taskReviewCard}>
+            <View key={task.id} style={[styles.taskReviewCard, task.status === 'approved' && { borderColor: '#10B98133' }]}>
               <View style={styles.taskReviewHeader}>
-                <Text style={styles.taskReviewTitle}>{task.title}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.taskReviewTitle}>{task.title}</Text>
+                  {task.is_required && <Text style={styles.taskRequired}>Required</Text>}
+                </View>
                 <StatusChip status={task.status as any} />
               </View>
-              {task.proof_text && <Text style={styles.taskReviewProof}>{task.proof_text}</Text>}
-              {task.proof_links?.length > 0 && task.proof_links.map((l, i) => (
-                <Text key={i} style={styles.proofLink}>{l}</Text>
-              ))}
-              <View style={styles.taskReviewActions}>
-                <TouchableOpacity style={styles.taskApproveBtn} onPress={() => reviewTask(task.id, 'approved')} activeOpacity={0.8}>
-                  <Check size={12} color="#10B981" strokeWidth={2} />
-                  <Text style={styles.taskApproveBtnText}>Approve</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.taskRejectBtn} onPress={() => reviewTask(task.id, 'rejected')} activeOpacity={0.8}>
-                  <X size={12} color="#EF4444" strokeWidth={2} />
-                  <Text style={styles.taskRejectBtnText}>Reject</Text>
-                </TouchableOpacity>
-              </View>
+              {task.proof_text ? (
+                <View style={styles.proofBlock}>
+                  <Text style={styles.proofBlockLabel}>Submitted proof</Text>
+                  <Text style={styles.taskReviewProof}>{task.proof_text}</Text>
+                </View>
+              ) : <Text style={styles.taskReviewNoProof}>No proof submitted yet.</Text>}
+              {(task.proof_links ?? []).length > 0 && (
+                <View style={{ marginTop: 4 }}>
+                  {task.proof_links.map((l, i) => <Text key={i} style={styles.proofLink}>{l}</Text>)}
+                </View>
+              )}
+              {task.reviewed_at && (
+                <Text style={styles.taskReviewedMeta}>Reviewed {new Date(task.reviewed_at).toLocaleDateString()}</Text>
+              )}
+              {task.status !== 'approved' && (
+                <View style={styles.taskReviewActions}>
+                  <TouchableOpacity style={styles.taskApproveBtn} onPress={() => reviewTask(task.id, 'approved')} activeOpacity={0.8}>
+                    <Check size={12} color="#10B981" strokeWidth={2} /><Text style={styles.taskApproveBtnText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.taskRejectBtn} onPress={() => reviewTask(task.id, 'rejected')} activeOpacity={0.8}>
+                    <X size={12} color="#EF4444" strokeWidth={2} /><Text style={styles.taskRejectBtnText}>Reject</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.taskNeedsChangesBtn} onPress={() => reviewTask(task.id, 'needs_changes')} activeOpacity={0.8}>
+                    <AlertTriangle size={12} color="#F97316" strokeWidth={2} /><Text style={styles.taskNeedsChangesBtnText}>Changes</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           ))}
         </>
       )}
 
-      {/* Internal notes */}
+      {/* ── Internal notes ── */}
       <Text style={styles.detailSectionLabel}>Internal Notes</Text>
       <View style={styles.noteInputRow}>
         <TextInput
           style={styles.noteInput}
           value={noteText}
           onChangeText={setNoteText}
-          placeholder="Add a private note..."
+          placeholder="Add a private note (not visible to applicant)..."
           placeholderTextColor={colors.textMuted}
           multiline
         />
@@ -895,9 +929,7 @@ function AdminApplicationDetail({
       {notes.map(n => (
         <View key={n.id} style={styles.noteCard}>
           <Text style={styles.noteCardText}>{n.note}</Text>
-          <Text style={styles.noteCardMeta}>
-            {n.creator?.display_name || n.creator?.username || 'Admin'} · {new Date(n.created_at).toLocaleDateString()}
-          </Text>
+          <Text style={styles.noteCardMeta}>{n.creator?.display_name || n.creator?.username || 'Admin'} · {new Date(n.created_at).toLocaleDateString()}</Text>
         </View>
       ))}
 
@@ -919,30 +951,184 @@ function ActionBtn({ label, color, onPress, loading }: { label: string; color: s
   );
 }
 
+// ── Official DAWEN social links ────────────────────────────────────────────────
+const DAWEN_SOCIALS = {
+  x: 'https://x.com/DawenApp',
+  telegram: 'https://t.me/DawenApp',
+  discord: 'https://discord.gg/DawenApp',
+};
+
+// ── Task-specific form per task_key ───────────────────────────────────────────
+
+const APP_TEST_FEATURES = ['Wallet', 'Trading', 'Social Feed', 'Groups', 'DAWEN World', 'Rewards', 'Launchpad', 'Settings'];
+
+function TaskForm({ task, onSubmit, onCancel }: {
+  task: CrewApplicationTask;
+  onSubmit: (proofText: string, proofLinks: string[]) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const router = useRouter();
+  const [saving, setSaving] = useState(false);
+  const [proofText, setProofText] = useState(task.proof_text ?? '');
+  const [proofLink, setProofLink] = useState((task.proof_links ?? [])[0] ?? '');
+  const [testFeatures, setTestFeatures] = useState<string[]>([]);
+  const [bugType, setBugType] = useState('bug');
+  const [bugTitle, setBugTitle] = useState('');
+  const [bugDesc, setBugDesc] = useState('');
+  const [bugSeverity, setBugSeverity] = useState('medium');
+  const [xUser, setXUser] = useState('');
+  const [teleUser, setTeleUser] = useState('');
+  const [discordUser, setDiscordUser] = useState('');
+
+  const isValid = () => {
+    if (task.task_key === 'test_app') return testFeatures.length > 0 && proofText.trim().length > 10;
+    if (task.task_key === 'submit_feedback' || task.task_key === 'bug_report') return bugTitle.trim().length > 3 && bugDesc.trim().length > 10;
+    if (task.task_key === 'join_socials') return xUser.trim().length > 0 || teleUser.trim().length > 0 || discordUser.trim().length > 0;
+    if (task.task_key === 'signature_wall') return true;
+    if (!task.proof_required) return true;
+    return proofText.trim().length > 10;
+  };
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    try {
+      let text = proofText.trim();
+      let links = proofLink.trim() ? [proofLink.trim()] : [];
+      if (task.task_key === 'test_app') {
+        text = `Features tested: ${testFeatures.join(', ')}\n\n${proofText.trim()}`;
+      } else if (task.task_key === 'submit_feedback' || task.task_key === 'bug_report') {
+        text = `Type: ${bugType} | Severity: ${bugSeverity}\nTitle: ${bugTitle}\n\n${bugDesc}`;
+      } else if (task.task_key === 'join_socials') {
+        text = [xUser && `X: @${xUser}`, teleUser && `Telegram: @${teleUser}`, discordUser && `Discord: ${discordUser}`].filter(Boolean).join('\n');
+        if (proofLink.trim()) links = [proofLink.trim()];
+      }
+      await onSubmit(text, links);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={styles.taskFormWrap}>
+      {task.admin_message && (
+        <View style={[styles.adminMsgCard, { marginBottom: 10 }]}>
+          <AlertTriangle size={12} color="#F97316" strokeWidth={2} />
+          <Text style={[styles.adminMsgText, { color: '#F97316', fontSize: 12 }]}>Admin: {task.admin_message}</Text>
+        </View>
+      )}
+
+      {task.task_key === 'signature_wall' && (
+        <>
+          <Text style={styles.taskFormHint}>Sign the DAWEN Signature Wall to prove you are part of the early community.</Text>
+          <TouchableOpacity style={styles.taskFormLinkBtn} onPress={() => router.push('/gaming' as any)} activeOpacity={0.8}>
+            <Rocket size={14} color="#8B5CF6" strokeWidth={2} />
+            <Text style={styles.taskFormLinkBtnText}>Go to Signature Wall (Gaming)</Text>
+            <ChevronRight size={14} color="#8B5CF6" strokeWidth={2} />
+          </TouchableOpacity>
+          <Text style={styles.taskFormHint}>After signing, tap Submit below.</Text>
+        </>
+      )}
+
+      {task.task_key === 'join_socials' && (
+        <>
+          <Text style={styles.taskFormHint}>Join/follow the official DAWEN channels, then submit your usernames.</Text>
+          <View style={styles.socialLinksRow}>
+            <Text style={[styles.socialLinkBtnText, { color: '#E7E9EA' }]}>X: {DAWEN_SOCIALS.x}</Text>
+            <Text style={[styles.socialLinkBtnText, { color: '#27A7E7' }]}>Telegram: {DAWEN_SOCIALS.telegram}</Text>
+            <Text style={[styles.socialLinkBtnText, { color: '#5865F2' }]}>Discord: {DAWEN_SOCIALS.discord}</Text>
+          </View>
+          <FormField label="Your X (Twitter) username *" value={xUser} onChange={setXUser} placeholder="@yourhandle" />
+          <FormField label="Your Telegram username" value={teleUser} onChange={setTeleUser} placeholder="@yourhandle" />
+          <FormField label="Your Discord username" value={discordUser} onChange={setDiscordUser} placeholder="username" />
+          <FormField label="Proof screenshot link (optional)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
+        </>
+      )}
+
+      {task.task_key === 'test_app' && (
+        <>
+          <Text style={styles.taskFormHint}>Select all features you tested:</Text>
+          <View style={styles.checkboxGrid}>
+            {APP_TEST_FEATURES.map(f => (
+              <TouchableOpacity
+                key={f}
+                style={[styles.checkboxItem, testFeatures.includes(f) && styles.checkboxItemActive]}
+                onPress={() => setTestFeatures(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
+                activeOpacity={0.8}
+              >
+                {testFeatures.includes(f) && <Check size={10} color={colors.primary} strokeWidth={3} />}
+                <Text style={[styles.checkboxItemText, testFeatures.includes(f) && styles.checkboxItemTextActive]}>{f}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <FormField label="Your feedback / first impressions *" value={proofText} onChange={setProofText} multiline placeholder="What worked well? What needs improvement?" />
+        </>
+      )}
+
+      {(task.task_key === 'submit_feedback' || task.task_key === 'bug_report') && (
+        <>
+          <View style={styles.workTypeRow}>
+            {(['bug', 'feedback', 'suggestion'] as const).map(t => (
+              <TouchableOpacity key={t} style={[styles.workTypeBtn, bugType === t && styles.workTypeBtnActive]} onPress={() => setBugType(t)} activeOpacity={0.8}>
+                <Text style={[styles.workTypeBtnText, bugType === t && styles.workTypeBtnTextActive]}>{t.charAt(0).toUpperCase() + t.slice(1)}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <FormField label="Title *" value={bugTitle} onChange={setBugTitle} placeholder="Short descriptive title..." />
+          <FormField label="Description *" value={bugDesc} onChange={setBugDesc} multiline placeholder="Describe in detail..." />
+          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
+            {(['low', 'medium', 'high', 'critical'] as const).map(s => (
+              <TouchableOpacity key={s} style={[styles.workTypeBtn, { flex: 1 }, bugSeverity === s && styles.workTypeBtnActive]} onPress={() => setBugSeverity(s)} activeOpacity={0.8}>
+                <Text style={[styles.workTypeBtnText, bugSeverity === s && styles.workTypeBtnTextActive]}>{s.charAt(0).toUpperCase() + s.slice(1)}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <FormField label="Screenshot or proof link (optional)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
+        </>
+      )}
+
+      {!['signature_wall', 'join_socials', 'test_app', 'submit_feedback', 'bug_report'].includes(task.task_key) && task.proof_required && (
+        <>
+          <FormField label="Your answer / proof *" value={proofText} onChange={setProofText} multiline placeholder="Type your answer here..." />
+          <FormField label="Proof link (optional)" value={proofLink} onChange={setProofLink} placeholder="https://..." />
+        </>
+      )}
+
+      <View style={styles.taskFormActions}>
+        <TouchableOpacity style={styles.taskFormCancelBtn} onPress={onCancel} activeOpacity={0.8}>
+          <Text style={styles.taskFormCancelBtnText}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.taskConfirmBtn, { flex: 1 }, (!isValid() || saving) && styles.btnDisabled]}
+          onPress={handleSubmit}
+          activeOpacity={0.8}
+          disabled={!isValid() || saving}
+        >
+          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Send size={14} color="#fff" strokeWidth={2} />}
+          <Text style={styles.taskConfirmBtnText}>Submit for Review</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ── My Application view ───────────────────────────────────────────────────────
 
 function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplication; tasks: CrewApplicationTask[]; roles: CrewRole[]; onRefresh?: () => void }) {
   const role = roles.find(r => r.role_key === app.role_key);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [proofText, setProofText] = useState('');
-  const [proofLink, setProofLink] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
 
-  const submitTask = async () => {
-    if (!taskId) return;
-    setSaving(true);
-    const links = proofLink.trim() ? [proofLink.trim()] : [];
+  const submitTask = async (taskId: string, proofText: string, proofLinks: string[]) => {
     await CrewService.updateTask(taskId, {
-      proof_text: proofText.trim() || undefined,
-      proof_links: links,
+      proof_text: proofText || undefined,
+      proof_links: proofLinks,
       status: 'pending_review',
     });
-    setTaskId(null);
-    setProofText('');
-    setProofLink('');
-    setSaving(false);
+    setOpenTaskId(null);
     onRefresh?.();
   };
+
+  const approvedCount = tasks.filter(t => t.status === 'approved').length;
+  const totalRequired = tasks.filter(t => t.is_required).length;
 
   return (
     <View>
@@ -963,13 +1149,16 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
 
       {tasks.length > 0 && (
         <>
-          <Text style={styles.sectionTitle}>Starter Tasks</Text>
+          <View style={styles.taskProgressRow}>
+            <Text style={styles.sectionTitle}>Starter Tasks</Text>
+            <Text style={styles.taskProgressLabel}>{approvedCount}/{totalRequired} required done</Text>
+          </View>
           <Text style={styles.sectionHint}>Complete these tasks to strengthen your application.</Text>
           {tasks.map(task => {
             const canSubmit = task.status === 'not_started' || task.status === 'needs_changes';
-            const isOpen = taskId === task.id;
+            const isOpen = openTaskId === task.id;
             return (
-              <View key={task.id} style={[styles.taskCard, task.status === 'needs_changes' && { borderColor: '#F9731633' }]}>
+              <View key={task.id} style={[styles.taskCard, task.status === 'needs_changes' && styles.taskCardNeedsChanges]}>
                 <View style={styles.taskCardTitleRow}>
                   <View style={styles.taskCardTitleLeft}>
                     {task.status === 'approved' ? (
@@ -980,6 +1169,8 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
                       <Clock size={16} color="#F59E0B" strokeWidth={2} />
                     ) : task.status === 'needs_changes' ? (
                       <AlertTriangle size={16} color="#F97316" strokeWidth={2} />
+                    ) : task.status === 'submitted' ? (
+                      <Clock size={16} color="#3B82F6" strokeWidth={2} />
                     ) : (
                       <View style={styles.taskCircle} />
                     )}
@@ -991,51 +1182,24 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
                   <StatusChip status={task.status as any} />
                 </View>
                 <Text style={styles.taskDesc}>{task.description}</Text>
-                {task.status === 'needs_changes' && (
-                  <Text style={styles.taskNeedsChangesNote}>Admin requested changes. Please resubmit.</Text>
+                {task.proof_text && task.status !== 'not_started' && (
+                  <Text style={styles.taskSubmittedProof} numberOfLines={2}>{task.proof_text}</Text>
                 )}
-                {canSubmit && (
+                {canSubmit && !isOpen && (
                   <TouchableOpacity
                     style={[styles.taskSubmitBtn, { alignSelf: 'flex-start', marginTop: 8 }]}
-                    onPress={() => {
-                      if (isOpen) { setTaskId(null); } else { setTaskId(task.id); setProofText(''); setProofLink(''); }
-                    }}
+                    onPress={() => setOpenTaskId(task.id)}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.taskSubmitBtnText}>{isOpen ? 'Cancel' : task.status === 'needs_changes' ? 'Resubmit' : 'Submit'}</Text>
+                    <Text style={styles.taskSubmitBtnText}>{task.status === 'needs_changes' ? 'Resubmit' : 'Submit Proof'}</Text>
                   </TouchableOpacity>
                 )}
                 {isOpen && (
-                  <View style={styles.taskProofWrap}>
-                    {task.proof_required && (
-                      <>
-                        <TextInput
-                          style={styles.taskProofInput}
-                          value={proofText}
-                          onChangeText={setProofText}
-                          placeholder="Describe what you did..."
-                          placeholderTextColor={colors.textMuted}
-                          multiline
-                        />
-                        <TextInput
-                          style={[styles.taskProofInput, { minHeight: 44 }]}
-                          value={proofLink}
-                          onChangeText={setProofLink}
-                          placeholder="Proof link (optional)"
-                          placeholderTextColor={colors.textMuted}
-                        />
-                      </>
-                    )}
-                    <TouchableOpacity
-                      style={[styles.taskConfirmBtn, saving && styles.btnDisabled]}
-                      onPress={submitTask}
-                      activeOpacity={0.8}
-                      disabled={saving}
-                    >
-                      {saving ? <ActivityIndicator size="small" color="#fff" /> : <Send size={14} color="#fff" strokeWidth={2} />}
-                      <Text style={styles.taskConfirmBtnText}>Submit for Review</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <TaskForm
+                    task={task}
+                    onSubmit={(text, links) => submitTask(task.id, text, links)}
+                    onCancel={() => setOpenTaskId(null)}
+                  />
                 )}
               </View>
             );
@@ -1045,6 +1209,7 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
     </View>
   );
 }
+
 
 // ── Admin: Role Management ────────────────────────────────────────────────────
 
@@ -1334,6 +1499,9 @@ export default function CrewPage() {
   const [allAdminTasks, setAllAdminTasks] = useState<CrewApplicationTask[]>([]);
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>('pending_review');
   const [adminTaskCounts, setAdminTaskCounts] = useState<Record<string, { total: number; done: number }>>({});
+  // Task review: selected applicant's app for per-applicant task detail
+  const [taskReviewApp, setTaskReviewApp] = useState<CrewApplication | null>(null);
+  const [taskReviewTasks, setTaskReviewTasks] = useState<CrewApplicationTask[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1803,13 +1971,134 @@ export default function CrewPage() {
 
       // ── Admin: Task Review ─────────────────────────────────────────────────
       case 'task_review': {
-        const filteredTasks = taskStatusFilter
-          ? allAdminTasks.filter(t => t.status === taskStatusFilter)
-          : allAdminTasks;
+        // If a specific applicant is selected, show their full task detail
+        if (taskReviewApp) {
+          const p = taskReviewApp.user_profiles;
+          const displayName = p?.display_name || p?.username || 'Unknown';
+          const role = roles.find(r => r.role_key === taskReviewApp.role_key);
+          return (
+            <View style={{ flex: 1 }}>
+              <View style={styles.detailHeader}>
+                <TouchableOpacity onPress={() => { setTaskReviewApp(null); setTaskReviewTasks([]); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <ArrowLeft size={20} color={colors.textPrimary} strokeWidth={2} />
+                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.detailTitle}>{displayName}</Text>
+                  {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />}
+                </View>
+                <StatusChip status={taskReviewApp.status as CrewAppStatus} />
+              </View>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {taskReviewTasks.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <ListChecks size={36} color={colors.textMuted} strokeWidth={1.5} />
+                    <Text style={styles.emptyStateText}>No tasks found.</Text>
+                  </View>
+                ) : (
+                  taskReviewTasks.map(task => (
+                    <View key={task.id} style={styles.adminTaskCard}>
+                      <View style={styles.adminTaskHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.adminTaskTitle}>{task.title}</Text>
+                          {task.is_required && <Text style={styles.taskRequired}>Required</Text>}
+                        </View>
+                        <StatusChip status={task.status as any} />
+                      </View>
+                      <Text style={styles.taskDesc}>{task.description}</Text>
+                      {task.proof_text ? (
+                        <View style={styles.proofBlock}>
+                          <Text style={styles.proofBlockLabel}>Submitted proof</Text>
+                          <Text style={styles.adminTaskProof}>{task.proof_text}</Text>
+                        </View>
+                      ) : null}
+                      {(task.proof_links ?? []).length > 0 && (
+                        <View style={styles.proofBlock}>
+                          <Text style={styles.proofBlockLabel}>Proof links</Text>
+                          {task.proof_links.map((l, i) => <Text key={i} style={styles.proofLink}>{l}</Text>)}
+                        </View>
+                      )}
+                      {task.reviewed_at && (
+                        <Text style={styles.taskReviewedMeta}>
+                          Reviewed {new Date(task.reviewed_at).toLocaleDateString()}
+                        </Text>
+                      )}
+                      {task.admin_message && (
+                        <View style={[styles.adminMsgCard, { marginTop: 6 }]}>
+                          <AlertTriangle size={11} color="#F97316" strokeWidth={2} />
+                          <Text style={[styles.adminMsgText, { color: '#F97316', fontSize: 12 }]}>{task.admin_message}</Text>
+                        </View>
+                      )}
+                      {task.status !== 'approved' && (
+                        <View style={styles.taskReviewActions}>
+                          <TouchableOpacity
+                            style={styles.taskApproveBtn}
+                            onPress={async () => {
+                              await CrewService.adminReviewTask(task.id, 'approved', myUserId ?? '');
+                              const tasks = await CrewService.getApplicationTasks(taskReviewApp.id);
+                              setTaskReviewTasks(tasks);
+                              reloadAdminApps();
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <Check size={12} color="#10B981" strokeWidth={2} />
+                            <Text style={styles.taskApproveBtnText}>Approve</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.taskRejectBtn}
+                            onPress={async () => {
+                              await CrewService.adminReviewTask(task.id, 'rejected', myUserId ?? '');
+                              const tasks = await CrewService.getApplicationTasks(taskReviewApp.id);
+                              setTaskReviewTasks(tasks);
+                              reloadAdminApps();
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <X size={12} color="#EF4444" strokeWidth={2} />
+                            <Text style={styles.taskRejectBtnText}>Reject</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.taskNeedsChangesBtn}
+                            onPress={async () => {
+                              await CrewService.adminReviewTask(task.id, 'needs_changes', myUserId ?? '');
+                              const tasks = await CrewService.getApplicationTasks(taskReviewApp.id);
+                              setTaskReviewTasks(tasks);
+                              reloadAdminApps();
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <AlertTriangle size={12} color="#F97316" strokeWidth={2} />
+                            <Text style={styles.taskNeedsChangesBtnText}>Needs Changes</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  ))
+                )}
+                <View style={{ height: 40 }} />
+              </ScrollView>
+            </View>
+          );
+        }
+
+        // Group tasks by applicant
+        const appMap: Record<string, { app: CrewApplication; tasks: CrewApplicationTask[] }> = {};
+        for (const task of allAdminTasks) {
+          if (!appMap[task.application_id]) {
+            const app = adminApps.find(a => a.id === task.application_id);
+            if (!app) continue;
+            appMap[task.application_id] = { app, tasks: [] };
+          }
+          appMap[task.application_id].tasks.push(task);
+        }
+        const grouped = Object.values(appMap);
+        const filteredGrouped = taskStatusFilter
+          ? grouped.filter(g => g.tasks.some(t => t.status === taskStatusFilter))
+          : grouped;
+
         return (
           <View style={{ flex: 1 }}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterScroll, { marginBottom: 10 }]}>
-              {['pending_review', 'submitted', 'needs_changes', 'approved', 'rejected', ''].map(s => (
+              {(['', 'pending_review', 'submitted', 'needs_changes', 'approved', 'rejected'] as const).map(s => (
                 <TouchableOpacity
                   key={s || 'all'}
                   style={[styles.filterChip, taskStatusFilter === s && styles.filterChipActive]}
@@ -1823,71 +2112,55 @@ export default function CrewPage() {
               ))}
             </ScrollView>
             <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor={colors.primary} />}>
-              {filteredTasks.length === 0 ? (
+              {filteredGrouped.length === 0 ? (
                 <View style={styles.emptyState}>
                   <ListChecks size={36} color={colors.textMuted} strokeWidth={1.5} />
-                  <Text style={styles.emptyStateText}>No tasks to review.</Text>
+                  <Text style={styles.emptyStateText}>No task submissions to review.</Text>
                 </View>
               ) : (
-                filteredTasks.map(task => {
-                  const applicant = task.user_profiles;
-                  const applicantName = applicant?.display_name || applicant?.username || 'Unknown';
-                  const roleKey = task.crew_applications?.role_key;
-                  const role = roleKey ? roles.find(r => r.role_key === roleKey) : null;
+                filteredGrouped.map(({ app, tasks }) => {
+                  const p = app.user_profiles;
+                  const dName = p?.display_name || p?.username || 'Unknown';
+                  const role = roles.find(r => r.role_key === app.role_key);
+                  const pendingCount = tasks.filter(t => t.status === 'pending_review' || t.status === 'submitted').length;
+                  const approvedCount = tasks.filter(t => t.status === 'approved').length;
+                  const total = tasks.length;
                   return (
-                    <View key={task.id} style={styles.adminTaskCard}>
-                      <View style={styles.adminTaskHeader}>
-                        <View style={{ flex: 1, gap: 2 }}>
-                          <Text style={styles.adminTaskTitle}>{task.title}</Text>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <Text style={styles.adminTaskApplicant}>{applicantName}</Text>
-                            {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />}
+                    <TouchableOpacity
+                      key={app.id}
+                      style={styles.applicantTaskCard}
+                      onPress={async () => {
+                        const ts = await CrewService.getApplicationTasks(app.id);
+                        setTaskReviewApp(app);
+                        setTaskReviewTasks(ts);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.applicantTaskCardHeader}>
+                        {p?.avatar_url ? (
+                          <Image source={{ uri: p.avatar_url }} style={styles.applicantTaskAvatar} />
+                        ) : (
+                          <View style={styles.applicantTaskAvatarPlaceholder}>
+                            <Text style={styles.applicantTaskAvatarInitial}>{dName[0]?.toUpperCase()}</Text>
                           </View>
+                        )}
+                        <View style={{ flex: 1, gap: 3 }}>
+                          <Text style={styles.applicantTaskName}>{dName}</Text>
+                          {p?.username && <Text style={styles.applicantTaskUsername}>@{p.username}</Text>}
+                          {role && <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />}
                         </View>
-                        <StatusChip status={task.status as any} />
+                        <StatusChip status={app.status as CrewAppStatus} />
                       </View>
-                      {task.proof_text ? (
-                        <Text style={styles.adminTaskProof}>{task.proof_text}</Text>
-                      ) : null}
-                      {task.proof_links?.length > 0 && task.proof_links.map((l, i) => (
-                        <Text key={i} style={styles.proofLink}>{l}</Text>
-                      ))}
-                      <View style={styles.taskReviewActions}>
-                        <TouchableOpacity
-                          style={styles.taskApproveBtn}
-                          onPress={async () => {
-                            await CrewService.adminReviewTask(task.id, 'approved', myUserId ?? '');
-                            reloadAdminApps();
-                          }}
-                          activeOpacity={0.8}
-                        >
-                          <Check size={12} color="#10B981" strokeWidth={2} />
-                          <Text style={styles.taskApproveBtnText}>Approve</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.taskRejectBtn}
-                          onPress={async () => {
-                            await CrewService.adminReviewTask(task.id, 'rejected', myUserId ?? '');
-                            reloadAdminApps();
-                          }}
-                          activeOpacity={0.8}
-                        >
-                          <X size={12} color="#EF4444" strokeWidth={2} />
-                          <Text style={styles.taskRejectBtnText}>Reject</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.taskNeedsChangesBtn}
-                          onPress={async () => {
-                            await CrewService.adminReviewTask(task.id, 'needs_changes', myUserId ?? '');
-                            reloadAdminApps();
-                          }}
-                          activeOpacity={0.8}
-                        >
-                          <AlertTriangle size={12} color="#F97316" strokeWidth={2} />
-                          <Text style={styles.taskNeedsChangesBtnText}>Needs Changes</Text>
-                        </TouchableOpacity>
+                      <View style={styles.applicantTaskProgress}>
+                        <Text style={styles.applicantTaskProgressText}>{approvedCount}/{total} approved</Text>
+                        {pendingCount > 0 && (
+                          <View style={styles.applicantTaskPendingBadge}>
+                            <Text style={styles.applicantTaskPendingText}>{pendingCount} pending review</Text>
+                          </View>
+                        )}
+                        <ChevronRight size={14} color={colors.textMuted} strokeWidth={2} />
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })
               )}
@@ -2354,6 +2627,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12,
   },
+  rmAssignBtnText: { fontSize: 14, fontWeight: '800', color: '#fff' },
   // Admin search (stable, no re-fetch)
   adminSearchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
@@ -2420,4 +2694,64 @@ const styles = StyleSheet.create({
   taskCardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6, gap: 8 },
   taskCardTitleLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1 },
   taskNeedsChangesNote: { fontSize: 12, color: '#F97316', fontWeight: '600', marginTop: 4, marginBottom: 2 },
+
+  // CV / resume header
+  cvHeader: { borderRadius: 16, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: 'rgba(139,92,246,0.15)' },
+  cvAvatarWrap: { position: 'relative', width: 64, height: 64, alignSelf: 'center', marginBottom: 12 },
+  cvAvatar: { width: 64, height: 64, borderRadius: 32 },
+  cvAvatarPlaceholder: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(139,92,246,0.18)', justifyContent: 'center', alignItems: 'center' },
+  cvAvatarInitial: { fontSize: 26, fontWeight: '900', color: colors.primary },
+  cvBadgeDot: { position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: colors.surface },
+  cvIdentity: { alignItems: 'center', gap: 2 },
+  cvName: { fontSize: 18, fontWeight: '900', color: colors.textPrimary },
+  cvUsername: { fontSize: 13, color: colors.textMuted },
+  cvWallet: { fontSize: 11, color: colors.textMuted, fontFamily: 'monospace' },
+  cvMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  cvMeta: { fontSize: 11, color: colors.textSecondary, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  cvSocialsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
+  cvSocialPill: { backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  cvSocialText: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
+
+  // Task form
+  taskFormWrap: { marginTop: 10, gap: 8 },
+  taskFormHint: { fontSize: 12, color: colors.textMuted, lineHeight: 17, marginBottom: 4 },
+  taskFormLinkBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(139,92,246,0.1)', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)', alignSelf: 'flex-start' },
+  taskFormLinkBtnText: { fontSize: 13, fontWeight: '700', color: colors.primary },
+  taskFormActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  taskFormCancelBtn: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  taskFormCancelBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  socialLinksRow: { gap: 4, marginBottom: 8 },
+  socialLinkBtnText: { fontSize: 12, fontWeight: '500' },
+
+  // Checkbox grid (test_app task)
+  checkboxGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
+  checkboxItem: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.03)' },
+  checkboxItemActive: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: '#10B981' },
+  checkboxItemText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
+  checkboxItemTextActive: { color: '#10B981' },
+
+  // Applicant task card (tasks tab grouped view)
+  applicantTaskCard: { backgroundColor: colors.surface, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  applicantTaskCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  applicantTaskAvatar: { width: 42, height: 42, borderRadius: 21 },
+  applicantTaskAvatarPlaceholder: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center' },
+  applicantTaskAvatarInitial: { fontSize: 16, fontWeight: '800', color: colors.primary },
+  applicantTaskName: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  applicantTaskUsername: { fontSize: 12, color: colors.textMuted },
+  applicantTaskProgress: { alignItems: 'flex-end', gap: 4 },
+  applicantTaskProgressText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
+  applicantTaskPendingBadge: { backgroundColor: 'rgba(249,115,22,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(249,115,22,0.25)' },
+  applicantTaskPendingText: { fontSize: 11, fontWeight: '700', color: '#F97316' },
+
+  // Proof block in detail views
+  proofBlock: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: 10, marginTop: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  proofBlockLabel: { fontSize: 10, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
+
+  // Task progress in MyApplicationView
+  taskProgressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  taskProgressLabel: { fontSize: 13, fontWeight: '700', color: colors.primary },
+  taskSubmittedProof: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic', marginTop: 4 },
+  taskCardNeedsChanges: { borderColor: 'rgba(249,115,22,0.35)', backgroundColor: 'rgba(249,115,22,0.04)' },
+  taskReviewedMeta: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
+  taskReviewNoProof: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic', marginTop: 2 },
 });

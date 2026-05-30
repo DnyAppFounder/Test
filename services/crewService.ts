@@ -60,7 +60,7 @@ export interface CrewApplication {
 
 export type CrewAppStatus =
   | 'draft' | 'submitted' | 'under_review' | 'shortlisted'
-  | 'trial' | 'accepted' | 'rejected' | 'paused' | 'removed' | 'blacklisted';
+  | 'trial' | 'accepted' | 'rejected' | 'needs_changes' | 'paused' | 'removed' | 'blacklisted';
 
 export type CrewTaskStatus = 'not_started' | 'submitted' | 'pending_review' | 'needs_changes' | 'approved' | 'rejected';
 
@@ -75,6 +75,7 @@ export interface CrewApplicationTask {
   proof_required: boolean;
   proof_text?: string;
   proof_links: string[];
+  admin_message?: string;
   status: CrewTaskStatus;
   reviewed_by?: string;
   reviewed_at?: string;
@@ -153,28 +154,30 @@ export interface CrewInternalNote {
 // Tasks seeded per role
 const ROLE_TASKS: Record<string, { task_key: string; title: string; description: string; is_required: boolean; proof_required: boolean }[]> = {
   default: [
-    { task_key: 'complete_profile', title: 'Complete your DAWEN profile', description: 'Set up your username, avatar, and bio in your profile.', is_required: true, proof_required: false },
-    { task_key: 'test_app', title: 'Test the DAWEN beta app', description: 'Explore the app features including trading, social, and gaming.', is_required: true, proof_required: false },
-    { task_key: 'submit_feedback', title: 'Submit 1 useful feedback or bug report', description: 'Use the app and share something that can be improved.', is_required: false, proof_required: true },
-    { task_key: 'explain_dawen', title: 'Explain what DAWEN is in your own words', description: 'Write a short paragraph (3-5 sentences) explaining what DAWEN is to a new user.', is_required: true, proof_required: true },
+    { task_key: 'complete_profile', title: 'Complete your DAWEN profile', description: 'Set up your username, avatar photo, and a short bio in your profile settings. A complete profile shows you are serious about joining the team.', is_required: true, proof_required: false },
+    { task_key: 'test_app', title: 'Test the DAWEN beta app', description: 'Explore the app: try the trading section, social feed, gaming, DAWEN World, rewards, and settings. Tell us which features you tested and share your first impressions.', is_required: true, proof_required: true },
+    { task_key: 'explain_dawen', title: 'Explain what DAWEN is in your own words', description: 'Write 3–5 sentences explaining what DAWEN is to a brand-new user who has never heard of it. Be clear, honest, and in your own words.', is_required: true, proof_required: true },
+    { task_key: 'join_socials', title: 'Join / follow DAWEN on socials', description: 'Follow DAWEN on X, join the Telegram group, and join the Discord server. Submit your X username, Telegram username, and Discord username as proof. Official links are shown when you open this task.', is_required: true, proof_required: true },
+    { task_key: 'signature_wall', title: 'Sign the DAWEN Signature Wall', description: 'Leave your signature on the DAWEN Signature Wall to show you are part of the early community. Tap "Go to Signature Wall" to sign, then come back and submit.', is_required: true, proof_required: false },
   ],
   raider: [
-    { task_key: 'proof_promotion', title: 'Submit 1 proof of organic DAWEN promotion', description: 'Share a post, tweet, or message promoting DAWEN. No bots, no fake engagement.', is_required: true, proof_required: true },
-    { task_key: 'join_channels', title: 'Join DAWEN Discord/Telegram', description: 'Confirm you have joined the official DAWEN community channels.', is_required: true, proof_required: false },
+    { task_key: 'proof_promotion', title: 'Submit 1 proof of organic DAWEN promotion', description: 'Share a post, tweet, or message promoting DAWEN. No bots, no fake engagement. Submit the link or screenshot as proof.', is_required: true, proof_required: true },
   ],
   helper: [
-    { task_key: 'sample_support', title: 'Answer a sample support question', description: 'How would you help a new user who cannot find their wallet balance?', is_required: true, proof_required: true },
-    { task_key: 'join_channels', title: 'Join DAWEN Discord/Telegram', description: 'Confirm you have joined the official DAWEN community channels.', is_required: true, proof_required: false },
+    { task_key: 'sample_support', title: 'Answer a sample support question', description: 'How would you help a new user who says: "I opened the DAWEN app but I cannot find my wallet balance. What do I do?" Write a clear, helpful answer.', is_required: true, proof_required: true },
   ],
   content_creator: [
-    { task_key: 'sample_content', title: 'Submit 1 sample content idea or piece', description: 'Create a post, meme, thread idea, or short video concept about DAWEN.', is_required: true, proof_required: true },
+    { task_key: 'sample_content', title: 'Submit 1 sample content idea or piece', description: 'Create a post, meme, thread idea, or short video concept about DAWEN. Submit the content or a link to it.', is_required: true, proof_required: true },
   ],
   bug_hunter: [
-    { task_key: 'bug_report', title: 'Submit 1 real bug report or test feedback', description: 'Find and report a real bug or usability issue in the DAWEN app with details.', is_required: true, proof_required: true },
+    { task_key: 'bug_report', title: 'Submit 1 real bug report or test feedback', description: 'Find and report a real bug or usability issue in the DAWEN app. Include: what happened, steps to reproduce, expected behavior, and your device/browser.', is_required: true, proof_required: true },
   ],
-  moderator: [
-    { task_key: 'join_channels', title: 'Join DAWEN Discord/Telegram', description: 'Confirm you have joined the official DAWEN community channels.', is_required: true, proof_required: false },
-  ],
+  moderator: [],
+  chiller: [],
+  ambassador: [],
+  event_host: [],
+  world_builder: [],
+  launchpad_scout: [],
 };
 
 function getTasksForRole(roleKey: string) {
@@ -479,12 +482,14 @@ export const CrewService = {
     isTrial = false,
     trialDays = 7
   ): Promise<{ error: string | null }> {
+    const status = isTrial ? 'trial' : 'active';
     const memberData: Record<string, unknown> = {
       user_id: userId,
       role_key: roleKey,
-      status: isTrial ? 'trial' : 'active',
+      status,
       assigned_by: assignedById,
       assigned_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     if (applicationId) memberData.application_id = applicationId;
     if (isTrial && trialDays) {
@@ -493,10 +498,31 @@ export const CrewService = {
       memberData.trial_ends_at = trialEnd.toISOString();
     }
 
-    const { error } = await supabase
+    // Try insert first; if conflict on (user_id, role_key), update with new status
+    const { error: insertErr } = await supabase
       .from('crew_members')
-      .upsert(memberData, { onConflict: 'user_id,role_key', ignoreDuplicates: false });
-    return { error: error?.message ?? null };
+      .insert(memberData);
+
+    if (insertErr) {
+      // Row already exists — update it (do not use upsert which may reset status unexpectedly)
+      const updatePayload: Record<string, unknown> = {
+        status,
+        assigned_by: assignedById,
+        assigned_at: memberData.assigned_at,
+        updated_at: memberData.updated_at,
+      };
+      if (applicationId) updatePayload.application_id = applicationId;
+      if (isTrial && memberData.trial_ends_at) updatePayload.trial_ends_at = memberData.trial_ends_at;
+
+      const { error: updateErr } = await supabase
+        .from('crew_members')
+        .update(updatePayload)
+        .eq('user_id', userId)
+        .eq('role_key', roleKey);
+      return { error: updateErr?.message ?? null };
+    }
+
+    return { error: null };
   },
 
   async adminUpdateMemberStatus(
@@ -529,7 +555,7 @@ export const CrewService = {
     taskId: string,
     status: 'approved' | 'rejected' | 'needs_changes',
     reviewerId: string,
-    userMessage?: string
+    adminMessage?: string
   ): Promise<{ error: string | null }> {
     const updates: Record<string, unknown> = {
       status,
@@ -537,12 +563,58 @@ export const CrewService = {
       reviewed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    if (userMessage) updates.proof_text = userMessage; // reuse proof_text as admin message for needs_changes
+    if (adminMessage) updates.admin_message = adminMessage;
     const { error } = await supabase
       .from('crew_application_tasks')
       .update(updates)
       .eq('id', taskId);
     return { error: error?.message ?? null };
+  },
+
+  // ── Admin: Tasks grouped by applicant ────────────────────────────────────
+
+  async adminGetTasksGroupedByApplicant(): Promise<Array<{
+    application: CrewApplication;
+    tasks: CrewApplicationTask[];
+    pendingCount: number;
+    approvedCount: number;
+    rejectedCount: number;
+    totalCount: number;
+    lastSubmitted?: string;
+  }>> {
+    const [appsRes, tasksRes] = await Promise.all([
+      supabase
+        .from('crew_applications')
+        .select(`
+          *,
+          user_profiles (
+            username, display_name, avatar_url, wallet_address,
+            is_verified, verified_basic, is_premium, premium_expires_at
+          )
+        `)
+        .in('status', ['submitted', 'under_review', 'shortlisted', 'trial', 'needs_changes'])
+        .order('submitted_at', { ascending: false }),
+      supabase
+        .from('crew_application_tasks')
+        .select('*')
+        .order('updated_at', { ascending: false }),
+    ]);
+
+    const apps = (appsRes.data ?? []) as CrewApplication[];
+    const allTasks = (tasksRes.data ?? []) as CrewApplicationTask[];
+
+    return apps.map(app => {
+      const tasks = allTasks.filter(t => t.application_id === app.id);
+      const pendingCount = tasks.filter(t => t.status === 'pending_review' || t.status === 'submitted').length;
+      const approvedCount = tasks.filter(t => t.status === 'approved').length;
+      const rejectedCount = tasks.filter(t => t.status === 'rejected' || t.status === 'needs_changes').length;
+      const submitted = tasks
+        .filter(t => t.status !== 'not_started')
+        .map(t => t.updated_at)
+        .sort()
+        .at(-1);
+      return { application: app, tasks, pendingCount, approvedCount, rejectedCount, totalCount: tasks.length, lastSubmitted: submitted };
+    }).filter(g => g.tasks.length > 0);
   },
 
   // ── Admin: Fetch all notes with applicant context ─────────────────────────
@@ -676,6 +748,7 @@ export const CrewService = {
       trial: 'Trial',
       accepted: 'Accepted',
       rejected: 'Rejected',
+      needs_changes: 'Needs Changes',
       paused: 'Paused',
       removed: 'Removed',
       blacklisted: 'Blacklisted',
@@ -692,6 +765,7 @@ export const CrewService = {
       trial: '#06B6D4',
       accepted: '#10B981',
       rejected: '#EF4444',
+      needs_changes: '#F97316',
       paused: '#9CA3AF',
       removed: '#EF4444',
       blacklisted: '#DC2626',
