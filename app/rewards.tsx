@@ -30,8 +30,8 @@ import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeReward
 import { SignatureWallRewardService } from '@/services/signatureWallRewardService';
 import { fetchLeaderboard, OverallEntry } from '@/services/leaderboardService';
 import {
-  checkDworldAta,
-  createDworldAta,
+  checkDwcAta,
+  createDwcAta,
   getDeviceFingerprintHash,
 } from '@/services/rewardSecurityService';
 import { supabase } from '@/lib/supabase';
@@ -323,7 +323,7 @@ export default function RewardsScreen() {
       setCreatingAta(true);
       try {
         const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
-        await createDworldAta(mnemonic, 0);
+        await createDwcAta(mnemonic, 0);
         setCreatingAta(false);
         // Retry the claim now that ATA exists
         result = await doClaimCall();
@@ -549,7 +549,7 @@ export default function RewardsScreen() {
             {(verificationStatus === 'pending' || verificationStatus === 'flagged') && (
               <TouchableOpacity
                 style={styles.verifyAccountBtn}
-                onPress={() => router.push('/settings' as any)}
+                onPress={() => router.push('/verify-account' as any)}
                 activeOpacity={0.8}
               >
                 <Text style={styles.verifyAccountBtnText}>Verify Account</Text>
