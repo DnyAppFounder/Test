@@ -131,9 +131,13 @@ function MemberCard({ member, roles }: { member: CrewMember; roles: CrewRole[] }
               </View>
             )}
           </View>
-          {username ? <Text style={styles.memberCardUsername} numberOfLines={1}>{username}</Text> : null}
-          {role ? (
-            <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />
+          {(username || role) ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {username ? <Text style={styles.memberCardUsername} numberOfLines={1}>{username}</Text> : null}
+              {role ? (
+                <RoleBadge roleKey={role.role_key} roleName={role.role_name} color={role.badge_color} icon={role.badge_icon} small />
+              ) : null}
+            </View>
           ) : null}
         </View>
         <StatusChip status={member.status as any} />
@@ -185,11 +189,15 @@ function FounderMemberCard({ profile }: { profile: UserProfileSearch }) {
               </View>
             )}
           </View>
-          {profile.username ? <Text style={styles.memberCardUsername}>@{profile.username}</Text> : null}
-          <View style={[styles.roleBadge, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B55' }]}>
-            <Crown size={10} color="#F59E0B" strokeWidth={2} />
-            <Text style={[styles.roleBadgeText, { color: '#F59E0B' }]}>Founder / Owner</Text>
-          </View>
+          {profile.username || true ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {profile.username ? <Text style={styles.memberCardUsername}>@{profile.username}</Text> : null}
+              <View style={[styles.roleBadge, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B55', marginBottom: 0, marginRight: 0, paddingHorizontal: 7, paddingVertical: 2 }]}>
+                <Crown size={9} color="#F59E0B" strokeWidth={2} />
+                <Text style={[styles.roleBadgeTextSmall, { color: '#F59E0B' }]}>Founder / Owner</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
         <View style={[styles.statusChip, { backgroundColor: '#F59E0B22', borderColor: '#F59E0B44' }]}>
           <View style={[styles.statusDot, { backgroundColor: '#F59E0B' }]} />
@@ -263,11 +271,15 @@ function CommunityManagerCard({ member, roles }: { member: CrewMember; roles: Cr
               </View>
             )}
           </View>
-          {p?.username ? <Text style={styles.memberCardUsername}>@{p.username}</Text> : null}
-          <View style={[styles.roleBadge, { backgroundColor: '#06B6D422', borderColor: '#06B6D455' }]}>
-            <Users size={10} color="#06B6D4" strokeWidth={2} />
-            <Text style={[styles.roleBadgeText, { color: '#06B6D4' }]}>Community Manager</Text>
-          </View>
+          {p?.username || true ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {p?.username ? <Text style={styles.memberCardUsername} numberOfLines={1}>@{p.username}</Text> : null}
+              <View style={[styles.roleBadge, { backgroundColor: '#06B6D422', borderColor: '#06B6D455', marginBottom: 0, marginRight: 0, paddingHorizontal: 7, paddingVertical: 2 }]}>
+                <Users size={9} color="#06B6D4" strokeWidth={2} />
+                <Text style={[styles.roleBadgeTextSmall, { color: '#06B6D4' }]}>Community Manager</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
         <StatusChip status={member.status as any} />
       </View>
@@ -637,6 +649,61 @@ function HierarchyMemberRow({ member }: { member: CrewMember }) {
   );
 }
 
+// ── Hierarchy CM embedded block ───────────────────────────────────────────────
+
+function HierarchyCMBlock({ role, member }: { role: CrewRole; member: CrewMember }) {
+  const router = useRouter();
+  const p = member.user_profiles;
+  const isPremium = p ? VerificationService.isPremiumActive(p as any) : false;
+  const isVerified = p?.is_verified || p?.verified_basic;
+  const displayName = p?.display_name || p?.username || 'Community Manager';
+  const profileId = p?.wallet_address || member.user_id;
+
+  return (
+    <TouchableOpacity
+      style={[styles.hierarchyRoleBlock, styles.hierarchyRoleBlockManager, { paddingVertical: 14 }]}
+      onPress={() => profileId && router.push(`/profile/${profileId}` as any)}
+      activeOpacity={0.85}
+    >
+      <View style={styles.memberCardAvatarWrap}>
+        {p?.avatar_url ? (
+          <Image source={{ uri: p.avatar_url }} style={styles.memberAvatar} />
+        ) : (
+          <LinearGradient colors={['#06B6D466', '#06B6D422']} style={styles.memberAvatarPlaceholder}>
+            <Users size={18} color="#06B6D4" strokeWidth={1.5} />
+          </LinearGradient>
+        )}
+        <View style={[styles.memberBadgeDot, {
+          backgroundColor: isPremium ? '#7C3AED' : isVerified ? '#2563EB' : '#06B6D4'
+        }]} />
+      </View>
+      <View style={[styles.hierarchyRoleMeta, { gap: 2 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+          <Text style={[styles.hierarchyRoleName, { color: '#06B6D4', fontSize: 14 }]} numberOfLines={1}>{displayName}</Text>
+          {isPremium && (
+            <View style={[styles.memberInlineBadge, { backgroundColor: '#7C3AED', borderColor: '#A855F7' }]}>
+              <Check size={8} color="#fff" strokeWidth={3} />
+            </View>
+          )}
+          {isVerified && !isPremium && (
+            <View style={[styles.memberInlineBadge, { backgroundColor: '#2563EB', borderColor: '#3B82F6' }]}>
+              <Check size={8} color="#fff" strokeWidth={3} />
+            </View>
+          )}
+          <View style={[styles.roleBadge, { backgroundColor: '#06B6D422', borderColor: '#06B6D455', marginBottom: 0, marginRight: 0, paddingHorizontal: 7, paddingVertical: 2 }]}>
+            <Users size={9} color="#06B6D4" strokeWidth={2} />
+            <Text style={[styles.roleBadgeTextSmall, { color: '#06B6D4' }]}>{role.role_name}</Text>
+          </View>
+        </View>
+        {p?.username ? (
+          <Text style={styles.hierarchyUserUsername} numberOfLines={1}>@{p.username}</Text>
+        ) : null}
+      </View>
+      <StatusChip status={member.status as any} />
+    </TouchableOpacity>
+  );
+}
+
 // ── Hierarchy display ─────────────────────────────────────────────────────────
 
 function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; members: CrewMember[]; founderProfile: UserProfileSearch | null }) {
@@ -688,39 +755,42 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
         const roleMembers = members.filter(m => m.role_key === rk && m.status !== 'removed');
         const isManager = idx === 0;
 
+        const cmMember = isManager && roleMembers.length > 0 ? roleMembers[0] : null;
+
         return (
           <View key={rk} style={styles.hierarchyLevel}>
             {idx > 0 && <View style={styles.hierarchyConnectorSmall} />}
-            <View style={[
-              styles.hierarchyRoleBlock,
-              isManager && styles.hierarchyRoleBlockManager,
-            ]}>
-              <View style={[styles.hierarchyRoleIcon, { backgroundColor: role.badge_color + '22', borderColor: role.badge_color + '44' }]}>
-                <RoleIcon icon={role.badge_icon} size={isManager ? 18 : 15} color={role.badge_color} />
-              </View>
-              <View style={styles.hierarchyRoleMeta}>
-                <Text style={[styles.hierarchyRoleName, { color: role.badge_color }]}>
-                  {role.role_name}
-                </Text>
-                <Text style={styles.hierarchyRoleDesc} numberOfLines={2}>{role.description}</Text>
-                {roleMembers.length > 0 && (
-                  <Text style={[styles.hierarchyMemberCount, { color: role.badge_color }]}>
-                    {roleMembers.length} member{roleMembers.length !== 1 ? 's' : ''}
+            {isManager && cmMember ? (
+              <HierarchyCMBlock role={role} member={cmMember} />
+            ) : (
+              <View style={[
+                styles.hierarchyRoleBlock,
+                isManager && styles.hierarchyRoleBlockManager,
+              ]}>
+                <View style={[styles.hierarchyRoleIcon, { backgroundColor: role.badge_color + '22', borderColor: role.badge_color + '44' }]}>
+                  <RoleIcon icon={role.badge_icon} size={isManager ? 18 : 15} color={role.badge_color} />
+                </View>
+                <View style={styles.hierarchyRoleMeta}>
+                  <Text style={[styles.hierarchyRoleName, { color: role.badge_color }]}>
+                    {role.role_name}
                   </Text>
+                  <Text style={styles.hierarchyRoleDesc} numberOfLines={2}>{role.description}</Text>
+                  {roleMembers.length > 0 && (
+                    <Text style={[styles.hierarchyMemberCount, { color: role.badge_color }]}>
+                      {roleMembers.length} member{roleMembers.length !== 1 ? 's' : ''}
+                    </Text>
+                  )}
+                </View>
+                {!role.is_applyable && (
+                  <View style={styles.noApplyBadge}>
+                    <Text style={styles.noApplyText}>Assigned only</Text>
+                  </View>
                 )}
               </View>
-              {!role.is_applyable && (
-                <View style={styles.noApplyBadge}>
-                  <Text style={styles.noApplyText}>Assigned only</Text>
-                </View>
-              )}
-            </View>
-            {roleMembers.length > 0 && (
+            )}
+            {roleMembers.length > 0 && !isManager && (
               <View style={styles.hierarchyUsersWrap}>
-                {isManager
-                  ? roleMembers.map(m => <CommunityManagerCard key={m.id} member={m} roles={roles} />)
-                  : roleMembers.map(m => <HierarchyMemberRow key={m.id} member={m} />)
-                }
+                {roleMembers.map(m => <HierarchyMemberRow key={m.id} member={m} />)}
               </View>
             )}
           </View>
