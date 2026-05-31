@@ -320,6 +320,21 @@ async function sendRewardTokens(
 
   const rawBase64 = btoa(String.fromCharCode(...tx.serialize()));
 
+  // ── Pre-send diagnostic log ──────────────────────────────────────────────────
+  console.log("[reward-claim] ── PRE-SEND DIAGNOSTICS ──────────────────────────────");
+  console.log(`[reward-claim] connected wallet (fee payer / treasury): ${derivedPubStr}`);
+  console.log(`[reward-claim] treasury authority:   ${derivedPubStr}`);
+  console.log(`[reward-claim] treasury ATA:         ${treasuryATA.toBase58()}`);
+  console.log(`[reward-claim] recipient wallet:     ${safeWallet}`);
+  console.log(`[reward-claim] recipient ATA:        ${userATA.toBase58()} (exists: true)`);
+  console.log(`[reward-claim] DWORLD mint:          ${safeMint}`);
+  console.log(`[reward-claim] token program:        ${tokenProgramDetected} (${isToken2022 ? "Token-2022" : "SPL Token"})`);
+  console.log(`[reward-claim] transfer amount (UI): ${rewardAmount} DWORLD`);
+  console.log(`[reward-claim] transfer amount (raw): ${rawAmount.toString()} (decimals: ${mintDecimals})`);
+  console.log(`[reward-claim] treasury DWORLD bal:  ${treasuryDworldBalance}`);
+  console.log(`[reward-claim] treasury SOL bal:     ${solBalance.toFixed(6)} SOL`);
+  console.log("[reward-claim] ──────────────────────────────────────────────────────");
+
   // Simulate before sending
   const simResult = await solanaRpc("simulateTransaction", [
     rawBase64,
@@ -600,6 +615,7 @@ Deno.serve(async (req: Request) => {
 
     // ── Send tokens ────────────────────────────────────────────────────────────
     const mintAddress = DWC_MINT_ENV;
+    console.log(`[reward-claim] initiating claim | reward_type: ${reward.reason} | user_id: ${reward.user_id ?? "null"} | wallet: ${wallet_address.slice(0,8)}...${wallet_address.slice(-4)} | amount: ${reward.reward_amount}`);
     let sendResult: SendResult;
 
     try {

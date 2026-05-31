@@ -1,10 +1,8 @@
 import {
-  Connection,
   Keypair,
   PublicKey,
   Transaction,
   TransactionInstruction,
-  SystemProgram,
   LAMPORTS_PER_SOL,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
@@ -13,28 +11,25 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SolanaConnectionService } from './solana/connectionService';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
 
+// Public constants — safe to embed in client bundle
+const DWORLD_MINT = (
+  process.env.EXPO_PUBLIC_DWC_MINT ||
+  'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump'
+).trim();
+
 const TOKEN_PROGRAM_ID_STR       = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
-const TOKEN_2022_PROGRAM_ID_STR  = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const ASSOC_TOKEN_PROGRAM_ID_STR = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 const SYSTEM_PROGRAM_ID_STR      = '11111111111111111111111111111111';
 
 const DEVICE_FP_KEY = '@dawen_device_fp';
 
-// ── Device fingerprint ────────────────────────────────────────────────────────
-// Stable per-install identifier. Stored in AsyncStorage so it persists across
-// sessions but is reset on reinstall. We hash it before sending to the server.
+// ── SHA-256 / fallback hash ───────────────────────────────────────────────────
 
 async function sha256hex(input: string): Promise<string> {
   if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const buf = await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(input),
-    );
-    return Array.from(new Uint8Array(buf))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  // Fallback for environments without SubtleCrypto: use a djb2-style hash
   let h = 5381;
   for (let i = 0; i < input.length; i++) {
     h = (Math.imul(h, 33) ^ input.charCodeAt(i)) >>> 0;
@@ -42,11 +37,12 @@ async function sha256hex(input: string): Promise<string> {
   return h.toString(16).padStart(8, '0');
 }
 
+// ── Device fingerprint ────────────────────────────────────────────────────────
+
 async function getOrCreateDeviceId(): Promise<string> {
   try {
     const existing = await AsyncStorage.getItem(DEVICE_FP_KEY);
     if (existing) return existing;
-    // Generate a random 32-byte id
     const bytes = new Uint8Array(32);
     if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
       crypto.getRandomValues(bytes);
@@ -63,18 +59,12 @@ async function getOrCreateDeviceId(): Promise<string> {
 
 export async function getDeviceFingerprintHash(): Promise<string> {
   const deviceId = await getOrCreateDeviceId();
-  const platform = Platform.OS;
-  const combined = `${platform}:${deviceId}`;
-  return sha256hex(combined);
+  return sha256hex(`${Platform.OS}:${deviceId}`);
 }
 
-// ── ATA derivation (mirrors the edge function logic) ─────────────────────────
+// ── ATA derivation ────────────────────────────────────────────────────────────
 
-function deriveATA(
-  owner: PublicKey,
-  mint: PublicKey,
-  tokenProgramId: PublicKey,
-): PublicKey {
+function deriveATA(owner: PublicKey, mint: PublicKey, tokenProgramId: PublicKey): PublicKey {
   const assocProgramId = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
   const [ata] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
@@ -83,32 +73,38 @@ function deriveATA(
   return ata;
 }
 
-// ── ATA existence check ───────────────────────────────────────────────────────
+// ── Detect DWORLD token program (SPL Token or Token-2022) ────────────────────
+
+async function getDworldTokenProgram(): Promise<string> {
+  const svc = SolanaConnectionService.getInstance();
+  try {
+    const mintInfo = await svc.rpcCall('getAccountInfo', [
+      DWORLD_MINT,
+      { encoding: 'jsonParsed', commitment: 'confirmed' },
+    ]) as any;
+    return mintInfo?.value?.owner ?? TOKEN_PROGRAM_ID_STR;
+  } catch {
+    return TOKEN_PROGRAM_ID_STR;
+  }
+}
+
+// ── ATA check ─────────────────────────────────────────────────────────────────
 
 export interface AtaStatus {
   exists: boolean;
   ataAddress: string;
   tokenProgram: string;
+  mintAddress: string;
 }
 
 export async function checkDworldAta(walletAddress: string): Promise<AtaStatus> {
-  const mintStr = (process.env.EXPO_PUBLIC_DWC_MINT ?? '').trim();
-  if (!mintStr) throw new Error('EXPO_PUBLIC_DWC_MINT is not configured');
-
-  const mint      = new PublicKey(mintStr);
-  const owner     = new PublicKey(walletAddress);
-  const svc       = SolanaConnectionService.getInstance();
-
-  // Detect token program from on-chain mint owner
-  const mintInfo = await svc.rpcCall('getAccountInfo', [
-    mintStr,
-    { encoding: 'jsonParsed', commitment: 'confirmed' },
-  ]) as any;
-
-  const tokenProgram: string = mintInfo?.value?.owner ?? TOKEN_PROGRAM_ID_STR;
+  const svc          = SolanaConnectionService.getInstance();
+  const mint         = new PublicKey(DWORLD_MINT);
+  const owner        = new PublicKey(walletAddress);
+  const tokenProgram = await getDworldTokenProgram();
   const tokenProgramId = new PublicKey(tokenProgram);
-  const ata = deriveATA(owner, mint, tokenProgramId);
-  const ataStr = ata.toBase58();
+  const ata          = deriveATA(owner, mint, tokenProgramId);
+  const ataStr       = ata.toBase58();
 
   const ataInfo = await svc.rpcCall('getAccountInfo', [
     ataStr,
@@ -119,67 +115,58 @@ export async function checkDworldAta(walletAddress: string): Promise<AtaStatus> 
     exists: !!ataInfo?.value,
     ataAddress: ataStr,
     tokenProgram,
+    mintAddress: DWORLD_MINT,
   };
 }
 
-// ── ATA creation (user is payer — treasury does NOT pay rent) ─────────────────
-// Uses CreateIdempotent (discriminator = 1) so it's safe to call even if the
-// ATA already exists — it simply becomes a no-op.
+// ── ATA creation (user is payer) ──────────────────────────────────────────────
+// User pays ~0.002039 SOL rent for their DWORLD token account.
+// Uses CreateIdempotent (discriminator=1) — no-op if ATA already exists.
 
-export async function createDworldAta(
-  mnemonic: string,
-  accountIndex = 0,
-): Promise<string> {
-  const mintStr = (process.env.EXPO_PUBLIC_DWC_MINT ?? '').trim();
-  if (!mintStr) throw new Error('EXPO_PUBLIC_DWC_MINT is not configured');
+export async function createDworldAta(mnemonic: string, accountIndex = 0): Promise<string> {
+  const svc  = SolanaConnectionService.getInstance();
+  const conn = svc.getConnection();
+  const mint = new PublicKey(DWORLD_MINT);
 
-  const mint    = new PublicKey(mintStr);
-  const svc     = SolanaConnectionService.getInstance();
-  const conn    = svc.getConnection();
-
-  // Derive user keypair
   const rawKp  = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, accountIndex);
   const keypair = Keypair.fromSecretKey(rawKp.secretKey);
   const owner   = keypair.publicKey;
 
-  // Detect token program
-  const mintInfo = await svc.rpcCall('getAccountInfo', [
-    mintStr,
-    { encoding: 'jsonParsed', commitment: 'confirmed' },
-  ]) as any;
-
-  const tokenProgram: string = mintInfo?.value?.owner ?? TOKEN_PROGRAM_ID_STR;
+  const tokenProgram      = await getDworldTokenProgram();
   const tokenProgramId    = new PublicKey(tokenProgram);
   const assocTokenProgram = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
   const systemProgram     = new PublicKey(SYSTEM_PROGRAM_ID_STR);
   const ata               = deriveATA(owner, mint, tokenProgramId);
 
-  // Check SOL balance — creating ATA requires ~0.00204 SOL rent
+  // SOL balance check — ATA creation costs ~0.002039 SOL rent + fee
   const balResult = await svc.rpcCall('getBalance', [
     owner.toBase58(),
     { commitment: 'confirmed' },
   ]) as any;
   const solBalance = Number(balResult ?? 0) / LAMPORTS_PER_SOL;
-  const MIN_SOL_FOR_ATA = 0.003; // 0.00204 rent + fee buffer
-  if (solBalance < MIN_SOL_FOR_ATA) {
+  const MIN_SOL = 0.003;
+  if (solBalance < MIN_SOL) {
     throw new Error(
-      `INSUFFICIENT_SOL_FOR_ATA: you need at least ${MIN_SOL_FOR_ATA} SOL to create your DWORLD token account. ` +
-      `Current balance: ${solBalance.toFixed(6)} SOL.`,
+      `INSUFFICIENT_SOL_FOR_ATA: need at least ${MIN_SOL} SOL (have ${solBalance.toFixed(6)} SOL)`,
     );
   }
 
-  // CreateIdempotent = discriminator 1
-  // keys: [payer, ata, owner, mint, systemProgram, tokenProgram]
+  console.log(
+    `[rewardSecurity] creating ATA | owner: ${owner.toBase58().slice(0,8)}` +
+    ` | mint: ${DWORLD_MINT.slice(0,8)} | tokenProg: ${tokenProgram.slice(0,8)}` +
+    ` | ata: ${ata.toBase58().slice(0,8)}`,
+  );
+
   const tx = new Transaction();
   tx.add(new TransactionInstruction({
     programId: assocTokenProgram,
     keys: [
-      { pubkey: owner,           isSigner: true,  isWritable: true  }, // payer
-      { pubkey: ata,             isSigner: false, isWritable: true  }, // ATA
-      { pubkey: owner,           isSigner: false, isWritable: false }, // owner
-      { pubkey: mint,            isSigner: false, isWritable: false }, // mint
-      { pubkey: systemProgram,   isSigner: false, isWritable: false }, // system
-      { pubkey: tokenProgramId,  isSigner: false, isWritable: false }, // token program
+      { pubkey: owner,          isSigner: true,  isWritable: true  }, // payer
+      { pubkey: ata,            isSigner: false, isWritable: true  }, // ATA
+      { pubkey: owner,          isSigner: false, isWritable: false }, // owner
+      { pubkey: mint,           isSigner: false, isWritable: false }, // mint
+      { pubkey: systemProgram,  isSigner: false, isWritable: false }, // system
+      { pubkey: tokenProgramId, isSigner: false, isWritable: false }, // token program
     ],
     data: Buffer.from([1]),
   }));
@@ -189,6 +176,6 @@ export async function createDworldAta(
     preflightCommitment: 'confirmed',
   });
 
-  console.log('[rewardSecurity] ATA created:', ata.toBase58(), 'sig:', sig);
+  console.log('[rewardSecurity] ATA created:', ata.toBase58(), '| sig:', sig);
   return sig;
 }
