@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, ShieldCheck, ShieldAlert, ShieldX, Clock, CheckCircle, ExternalLink, Send } from 'lucide-react-native';
+import { ArrowLeft, ShieldCheck, ShieldAlert, ShieldX, Clock, CircleCheck as CheckCircle, ExternalLink, Send } from 'lucide-react-native';
 import { useWallet } from '@/contexts/WalletContext';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';

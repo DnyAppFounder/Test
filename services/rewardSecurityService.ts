@@ -10,8 +10,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SolanaConnectionService } from './solana/connectionService';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
 
-// Client-side mint constant — reads from public env, falls back to known address.
-// DWC_MINT is the server secret name; EXPO_PUBLIC_DWC_MINT exposes it to the client bundle.
+// DWC_MINT: server secret name is DWC_MINT. Client reads EXPO_PUBLIC_DWC_MINT.
+// Falls back to the hardcoded public mint address if env is not set.
 const DWC_MINT = (
   process.env.EXPO_PUBLIC_DWC_MINT ||
   'BW1T8pZB2S18nPyMP4sUySV5FoC3VboX6vg3nmvQpump'
@@ -30,7 +30,7 @@ async function sha256hex(input: string): Promise<string> {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  // djb2 fallback for environments without Web Crypto
+  // djb2 fallback
   let h = 5381;
   for (let i = 0; i < input.length; i++) {
     h = (Math.imul(h, 33) ^ input.charCodeAt(i)) >>> 0;
@@ -73,12 +73,78 @@ function deriveATA(owner: PublicKey, mint: PublicKey, tokenProgramId: PublicKey)
   return ata;
 }
 
+// ── RPC helper: direct Helius first, Supabase proxy as fallback ───────────────
+// For user-signed transactions (ATA creation), the direct RPC is more reliable
+// than the Supabase proxy — faster, no proxy timeout, supports CORS for browsers.
+
+async function ataRpcCall(method: string, params: any[]): Promise<any> {
+  const svc = SolanaConnectionService.getInstance();
+
+  // Build URL list: direct Helius URL first, proxy as fallback
+  const directUrl = (process.env.EXPO_PUBLIC_SOLANA_RPC_URL || '').trim();
+  const proxyUrl  = svc.getRpcUrl();
+  const anonKey   = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '').trim();
+
+  const urls: Array<{ url: string; needsAuth: boolean }> = [];
+  if (directUrl) urls.push({ url: directUrl, needsAuth: false });
+  if (proxyUrl && proxyUrl !== directUrl) urls.push({ url: proxyUrl, needsAuth: true });
+  if (urls.length === 0) throw new Error('No Solana RPC URL configured');
+
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: String(Date.now() + Math.random()),
+    method,
+    params,
+  });
+
+  let lastError = '';
+
+  for (const { url, needsAuth } of urls) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (needsAuth && anonKey) {
+      headers['Authorization'] = `Bearer ${anonKey}`;
+      headers['apikey'] = anonKey;
+    }
+
+    console.log(`[ataRpc] ${method} -> ${url.slice(0, 60)}`);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(20_000),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        lastError = `HTTP ${response.status}: ${text.slice(0, 200)}`;
+        console.error(`[ataRpc] ${method} non-OK from ${url.slice(0, 40)}: ${lastError}`);
+        continue;
+      }
+
+      const json = await response.json();
+      if (json.error) {
+        lastError = `RPC error: ${json.error.message || JSON.stringify(json.error)}`;
+        console.error(`[ataRpc] ${method} rpc error: ${lastError}`);
+        continue;
+      }
+
+      return json.result;
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+      console.error(`[ataRpc] ${method} fetch failed (${url.slice(0, 40)}): ${lastError}`);
+    }
+  }
+
+  throw new Error(`Network error: ${method} failed on all RPC endpoints. Last error: ${lastError}`);
+}
+
 // ── Detect token program (SPL Token or Token-2022) ───────────────────────────
 
 async function getDwcTokenProgram(): Promise<string> {
-  const svc = SolanaConnectionService.getInstance();
   try {
-    const mintInfo = await svc.rpcCall('getAccountInfo', [
+    const mintInfo = await ataRpcCall('getAccountInfo', [
       DWC_MINT,
       { encoding: 'jsonParsed', commitment: 'confirmed' },
     ]) as any;
@@ -98,14 +164,13 @@ export interface AtaStatus {
 }
 
 export async function checkDwcAta(walletAddress: string): Promise<AtaStatus> {
-  const svc          = SolanaConnectionService.getInstance();
   const mint         = new PublicKey(DWC_MINT);
   const owner        = new PublicKey(walletAddress);
   const tokenProgram = await getDwcTokenProgram();
   const ata          = deriveATA(owner, mint, new PublicKey(tokenProgram));
   const ataStr       = ata.toBase58();
 
-  const ataInfo = await svc.rpcCall('getAccountInfo', [
+  const ataInfo = await ataRpcCall('getAccountInfo', [
     ataStr,
     { encoding: 'base64', commitment: 'confirmed' },
   ]) as any;
@@ -119,13 +184,15 @@ export async function checkDwcAta(walletAddress: string): Promise<AtaStatus> {
 }
 
 // ── ATA creation — user is fee payer and rent payer ──────────────────────────
-// Uses CreateIdempotent (discriminator=1): no-op if ATA already exists.
-// Avoids sendAndConfirmTransaction which fails with the Supabase RPC proxy —
-// instead uses svc.rpcCall() directly (same path the edge function uses).
+// Uses CreateIdempotent (discriminator=1): safe to call if ATA already exists.
+// Uses direct Helius RPC (not Supabase proxy) for reliability.
+// User pays ~0.002039 SOL ATA rent + ~0.000005 SOL tx fee.
+// Treasury NEVER pays ATA rent.
 
 export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<string> {
-  const svc  = SolanaConnectionService.getInstance();
   const mint = new PublicKey(DWC_MINT);
+
+  console.log(`[rewardSecurity] createDwcAta | mint: ${DWC_MINT.slice(0, 8)}...${DWC_MINT.slice(-4)}`);
 
   const rawKp   = KeyDerivationManager.deriveSolanaKeyPair(mnemonic, accountIndex);
   const keypair = Keypair.fromSecretKey(rawKp.secretKey);
@@ -137,25 +204,30 @@ export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<
   const systemProgram     = new PublicKey(SYSTEM_PROGRAM_ID_STR);
   const ata               = deriveATA(owner, mint, tokenProgramId);
 
-  // ATA creation costs ~0.002039 SOL rent-exempt deposit + ~0.000005 SOL fee
-  const balResult = await svc.rpcCall('getBalance', [
-    owner.toBase58(),
-    { commitment: 'confirmed' },
-  ]) as any;
-  const solBalance = Number(balResult ?? 0) / LAMPORTS_PER_SOL;
+  // Check balance — ATA creation needs ~0.003 SOL
+  let solBalance = 0;
+  try {
+    const balResult = await ataRpcCall('getBalance', [
+      owner.toBase58(),
+      { commitment: 'confirmed' },
+    ]) as any;
+    solBalance = Number(balResult ?? 0) / LAMPORTS_PER_SOL;
+  } catch (e: any) {
+    throw new Error(`Network error checking wallet balance. Please try again. (${e?.message})`);
+  }
+
   if (solBalance < 0.003) {
     throw new Error(
-      `INSUFFICIENT_SOL_FOR_ATA: need at least 0.003 SOL (have ${solBalance.toFixed(6)} SOL)`,
+      `INSUFFICIENT_SOL_FOR_ATA: You need at least 0.003 SOL to create your DWORLD token account (have ${solBalance.toFixed(6)} SOL).`,
     );
   }
 
   console.log(
-    `[rewardSecurity] creating ATA | mint: ${DWC_MINT.slice(0, 8)}` +
-    ` | owner: ${owner.toBase58().slice(0, 8)} | ata: ${ata.toBase58().slice(0, 8)}` +
+    `[rewardSecurity] owner: ${owner.toBase58().slice(0, 8)} | ata: ${ata.toBase58().slice(0, 8)}` +
     ` | tokenProg: ${tokenProgram.slice(0, 8)} | sol: ${solBalance.toFixed(4)}`,
   );
 
-  // Build the CreateIdempotent instruction
+  // Build CreateIdempotent instruction (discriminator=1 = no-op if ATA already exists)
   const tx = new Transaction();
   tx.add(new TransactionInstruction({
     programId: assocTokenProgram,
@@ -167,17 +239,17 @@ export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<
       { pubkey: systemProgram,  isSigner: false, isWritable: false }, // system program
       { pubkey: tokenProgramId, isSigner: false, isWritable: false }, // token program
     ],
-    data: Buffer.from([1]), // CreateIdempotent discriminator
+    data: Buffer.from([1]),
   }));
 
-  // Get blockhash via rpcCall — works with the Supabase proxy unlike Connection internals
+  // Fetch blockhash
   let blockhash: string;
   try {
-    const bhResult = await svc.rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]) as any;
+    const bhResult = await ataRpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]) as any;
     blockhash = bhResult?.value?.blockhash ?? bhResult?.blockhash;
-    if (!blockhash) throw new Error('empty blockhash response');
+    if (!blockhash) throw new Error('empty blockhash in RPC response');
   } catch (e: any) {
-    throw new Error(`Network error while preparing token account creation. Please try again. (${e?.message})`);
+    throw new Error(`Network error fetching blockhash. Please try again. (${e?.message})`);
   }
 
   tx.recentBlockhash = blockhash;
@@ -186,45 +258,62 @@ export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<
 
   // Serialize — btoa/fromCharCode avoids Buffer polyfill issues on web
   const serialized = tx.serialize();
-  const base64Tx = btoa(String.fromCharCode(...serialized));
+  const base64Tx   = btoa(String.fromCharCode(...serialized));
 
-  // Simulate before sending
-  const simResult = await svc.rpcCall('simulateTransaction', [
-    base64Tx,
-    { encoding: 'base64', commitment: 'confirmed' },
-  ]) as any;
-  if (simResult?.value?.err) {
-    throw new Error(`Token account creation simulation failed: ${JSON.stringify(simResult.value.err)}`);
+  // Simulate before sending (non-fatal — continue even if simulate endpoint fails)
+  try {
+    const simResult = await ataRpcCall('simulateTransaction', [
+      base64Tx,
+      { encoding: 'base64', commitment: 'confirmed' },
+    ]) as any;
+    if (simResult?.value?.err) {
+      throw new Error(`Simulation failed: ${JSON.stringify(simResult.value.err)}`);
+    }
+  } catch (e: any) {
+    if (e?.message?.startsWith('Simulation failed:')) throw e;
+    // Network error on simulate — log and continue to send
+    console.warn('[rewardSecurity] ATA simulate warn (non-fatal):', e?.message);
   }
 
-  // Send
-  const sig = await svc.rpcCall('sendTransaction', [
-    base64Tx,
-    { encoding: 'base64', skipPreflight: true },
-  ]) as string;
+  // Send transaction
+  let sig: string;
+  try {
+    sig = await ataRpcCall('sendTransaction', [
+      base64Tx,
+      { encoding: 'base64', skipPreflight: true },
+    ]) as string;
+  } catch (e: any) {
+    throw new Error(`Failed to send token account creation transaction. Please try again. (${e?.message})`);
+  }
+
   if (!sig || typeof sig !== 'string') {
-    throw new Error('No signature returned from sendTransaction');
+    throw new Error('No transaction signature returned. Please try again.');
   }
 
-  console.log(`[rewardSecurity] ATA tx sent: ${sig} | ata: ${ata.toBase58()}`);
+  console.log(`[rewardSecurity] ATA tx sent: ${sig.slice(0, 20)} | ata: ${ata.toBase58().slice(0, 8)}`);
 
-  // Poll for confirmation
+  // Poll for confirmation (60s)
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2_500));
-    const statResult = await svc.rpcCall('getSignatureStatuses', [
-      [sig],
-      { searchTransactionHistory: true },
-    ]) as any;
-    const status = statResult?.value?.[0];
-    if (status?.err) {
-      throw new Error(`Token account creation failed on-chain: ${JSON.stringify(status.err)}`);
-    }
-    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-      console.log(`[rewardSecurity] ATA confirmed: ${ata.toBase58()} | sig: ${sig}`);
-      return sig;
+    try {
+      const statResult = await ataRpcCall('getSignatureStatuses', [
+        [sig],
+        { searchTransactionHistory: true },
+      ]) as any;
+      const status = statResult?.value?.[0];
+      if (status?.err) {
+        throw new Error(`Token account creation failed on-chain: ${JSON.stringify(status.err)}`);
+      }
+      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+        console.log(`[rewardSecurity] ATA confirmed | ata: ${ata.toBase58().slice(0, 8)}`);
+        return sig;
+      }
+    } catch (e: any) {
+      if (e?.message?.includes('failed on-chain')) throw e;
+      // Poll network error — keep trying
     }
   }
 
-  throw new Error('Token account creation not confirmed within 60s — check Solscan and retry');
+  throw new Error('Token account creation not confirmed within 60s. Check Solscan and retry.');
 }
