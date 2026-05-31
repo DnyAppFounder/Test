@@ -90,6 +90,7 @@ export function formatRewardReason(reason: string): string {
     case 'community_reward':         return 'Community Reward';
     case 'decode_first_completion':  return 'Decode the 7 Fragments Reward';
     case 'dynasty_signature':        return 'Dynasty Signature Reward';
+    case 'signature_wall':           return 'Signature Wall Reward';
     default: return reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   }
 }

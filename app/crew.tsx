@@ -46,9 +46,10 @@ function RoleIcon({ icon, size = 16, color }: { icon: string; size?: number; col
 function RoleBadge({ roleKey, roleName, color, icon, small = false }: {
   roleKey: string; roleName: string; color: string; icon: string; small?: boolean;
 }) {
+  const resolvedIcon = getRoleIconKey(roleKey, icon);
   return (
     <View style={[styles.roleBadge, { backgroundColor: color + '22', borderColor: color + '55' }, small && styles.roleBadgeSmall]}>
-      <RoleIcon icon={icon} size={small ? 10 : 12} color={color} />
+      <RoleIcon icon={resolvedIcon} size={small ? 10 : 12} color={color} />
       <Text style={[styles.roleBadgeText, { color }, small && styles.roleBadgeTextSmall]}>{roleName}</Text>
     </View>
   );
@@ -196,6 +197,81 @@ function FounderMemberCard({ profile }: { profile: UserProfileSearch }) {
         </View>
       </View>
       {profile.bio ? <Text style={styles.memberCardBio} numberOfLines={2}>{profile.bio}</Text> : null}
+      <View style={styles.memberCardFooter}>
+        <ChevronRight size={12} color={colors.textMuted} strokeWidth={2} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// Hardcoded role icon override so each role always uses the correct icon
+// regardless of what badge_icon is stored in the DB.
+function getRoleIconKey(roleKey: string, fallback: string): string {
+  const MAP: Record<string, string> = {
+    founder: 'crown',
+    community_manager: 'users',
+    moderator: 'shield',
+    chiller: 'smile',
+    raider: 'zap',
+    helper: 'help-circle',
+    content_creator: 'video',
+    ambassador: 'globe',
+    bug_hunter: 'bug',
+    event_host: 'calendar',
+    world_builder: 'home',
+    launchpad_scout: 'rocket',
+  };
+  return MAP[roleKey] ?? fallback;
+}
+
+function CommunityManagerCard({ member, roles }: { member: CrewMember; roles: CrewRole[] }) {
+  const router = useRouter();
+  const p = member.user_profiles;
+  const isPremium = p ? VerificationService.isPremiumActive(p as any) : false;
+  const isVerified = p?.is_verified || p?.verified_basic;
+  const displayName = p?.display_name || p?.username || 'Community Manager';
+  const profileId = p?.wallet_address || member.user_id;
+
+  return (
+    <TouchableOpacity
+      style={[styles.memberCard, { borderColor: '#06B6D433', backgroundColor: '#06B6D408' }]}
+      onPress={() => profileId && router.push(`/profile/${profileId}` as any)}
+      activeOpacity={0.8}
+    >
+      <View style={styles.memberCardTop}>
+        <View style={styles.memberCardAvatarWrap}>
+          {p?.avatar_url ? (
+            <Image source={{ uri: p.avatar_url }} style={styles.memberAvatar} />
+          ) : (
+            <LinearGradient colors={['#06B6D466', '#06B6D422']} style={styles.memberAvatarPlaceholder}>
+              <Users size={18} color="#06B6D4" strokeWidth={1.5} />
+            </LinearGradient>
+          )}
+          <View style={[styles.memberBadgeDot, { backgroundColor: '#06B6D4' }]} />
+        </View>
+        <View style={styles.memberCardInfo}>
+          <View style={styles.memberCardNameRow}>
+            <Text style={[styles.memberCardName, { color: '#06B6D4' }]} numberOfLines={1}>{displayName}</Text>
+            {isPremium && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#7C3AED', borderColor: '#A855F7' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+            {isVerified && !isPremium && (
+              <View style={[styles.memberInlineBadge, { backgroundColor: '#2563EB', borderColor: '#3B82F6' }]}>
+                <Check size={8} color="#fff" strokeWidth={3} />
+              </View>
+            )}
+          </View>
+          {p?.username ? <Text style={styles.memberCardUsername}>@{p.username}</Text> : null}
+          <View style={[styles.roleBadge, { backgroundColor: '#06B6D422', borderColor: '#06B6D455' }]}>
+            <Users size={10} color="#06B6D4" strokeWidth={2} />
+            <Text style={[styles.roleBadgeText, { color: '#06B6D4' }]}>Community Manager</Text>
+          </View>
+        </View>
+        <StatusChip status={member.status as any} />
+      </View>
+      {p?.bio ? <Text style={styles.memberCardBio} numberOfLines={2}>{p.bio}</Text> : null}
       <View style={styles.memberCardFooter}>
         <ChevronRight size={12} color={colors.textMuted} strokeWidth={2} />
       </View>
@@ -641,7 +717,10 @@ function HierarchyView({ roles, members, founderProfile }: { roles: CrewRole[]; 
             </View>
             {roleMembers.length > 0 && (
               <View style={styles.hierarchyUsersWrap}>
-                {roleMembers.map(m => <HierarchyMemberRow key={m.id} member={m} />)}
+                {isManager
+                  ? roleMembers.map(m => <CommunityManagerCard key={m.id} member={m} roles={roles} />)
+                  : roleMembers.map(m => <HierarchyMemberRow key={m.id} member={m} />)
+                }
               </View>
             )}
           </View>
@@ -707,6 +786,23 @@ function AdminApplicationDetail({
     setSuccess(`Status: ${CrewService.getStatusLabel(status)}`);
     setTimeout(() => { setSuccess(''); onRefresh(); }, 1500);
     setLoading(false);
+  };
+
+  const sendMessage = async () => {
+    if (!msgText.trim()) return;
+    setLoading(true);
+    setError('');
+    const { error: err } = await CrewService.updateApplication(app.id, {
+      user_visible_message: msgText.trim(),
+    });
+    if (err) { setError(err); setLoading(false); return; }
+    if (app.user_id) {
+      await CrewService.notifyApplicant(app.user_id, reviewerId, `Message from admin: ${msgText.trim()}`);
+    }
+    setSuccess('Message sent to applicant.');
+    setTimeout(() => setSuccess(''), 2500);
+    setLoading(false);
+    onRefresh();
   };
 
   const addNote = async () => {
@@ -798,6 +894,15 @@ function AdminApplicationDetail({
         placeholderTextColor={colors.textMuted}
         multiline
       />
+      <TouchableOpacity
+        style={[styles.sendMsgBtn, (!msgText.trim() || loading) && styles.sendMsgBtnDisabled]}
+        onPress={sendMessage}
+        disabled={!msgText.trim() || loading}
+        activeOpacity={0.8}
+      >
+        <Send size={13} color="#fff" strokeWidth={2} />
+        <Text style={styles.sendMsgBtnText}>Send Message to Applicant</Text>
+      </TouchableOpacity>
 
       {/* ── Quick actions ── */}
       <Text style={styles.detailSectionLabel}>Actions</Text>
@@ -1937,7 +2042,11 @@ export default function CrewPage() {
                     <Text style={[styles.memberGroupTitle, { color: role.badge_color }]}>{role.role_name}</Text>
                     <Text style={styles.memberGroupCount}>{roleMembers.length}</Text>
                   </View>
-                  {roleMembers.map(m => <MemberCard key={m.id} member={m} roles={roles} />)}
+                  {roleMembers.map(m =>
+                    m.role_key === 'community_manager'
+                      ? <CommunityManagerCard key={m.id} member={m} roles={roles} />
+                      : <MemberCard key={m.id} member={m} roles={roles} />
+                  )}
                 </View>
               );
             })}
@@ -2560,7 +2669,10 @@ const styles = StyleSheet.create({
   applicantName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
   applicantUsername: { fontSize: 12, color: colors.textMuted },
   detailSectionLabel: { fontSize: 11, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.7, marginTop: 16, marginBottom: 8 },
-  msgInput: { backgroundColor: colors.surface, borderRadius: 12, padding: 12, color: colors.textPrimary, fontSize: 13, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', minHeight: 60, textAlignVertical: 'top', marginBottom: 10 },
+  msgInput: { backgroundColor: colors.surface, borderRadius: 12, padding: 12, color: colors.textPrimary, fontSize: 13, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', minHeight: 60, textAlignVertical: 'top', marginBottom: 8 },
+  sendMsgBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, marginBottom: 14 },
+  sendMsgBtnDisabled: { opacity: 0.4 },
+  sendMsgBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
   actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   actionGridBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
   actionGridBtnText: { fontSize: 12, fontWeight: '700' },

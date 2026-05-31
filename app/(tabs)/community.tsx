@@ -902,6 +902,9 @@ export default function CommunityScreen() {
       router.push(`/profile/${notif.actor.id}` as any);
     } else if (notif.post_id && (notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention' || notif.type === 'promote')) {
       openCommentsModal(notif.post_id);
+    } else if (notif.type === 'mention' && !notif.post_id) {
+      // Crew application notifications have no post_id — open the Crew page
+      router.push('/crew' as any);
     } else if (notif.type === 'message' && notif.actor?.id) {
       router.push(`/chat/${notif.actor.id}` as any);
     }

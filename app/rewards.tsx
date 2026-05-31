@@ -26,6 +26,7 @@ import {
   formatRewardReason,
 } from '@/services/referralService';
 import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeRewardService';
+import { SignatureWallRewardService } from '@/services/signatureWallRewardService';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
 
@@ -49,6 +50,8 @@ export default function RewardsScreen() {
   const [claimSignature, setClaimSignature]       = useState<string | null>(null);
   const [decodeStatus, setDecodeStatus]           = useState<DecodeRewardStatus | null>(null);
   const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
+  const [sigWallSigned, setSigWallSigned]         = useState(false);
+  const [sigWallReward, setSigWallReward]         = useState<UserReward | null>(null);
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
@@ -80,23 +83,35 @@ export default function RewardsScreen() {
       ]);
       setEarlyRewardExhausted(exhausted);
 
-      const [code, refs, rwds, sts, dStatus, dReward] = await Promise.all([
+      const [code, refs, rwds, sts, dStatus, dReward, swSigned] = await Promise.all([
         ReferralService.getOrCreateReferralCode(activeAddress),
         ReferralService.getUserReferrals(activeAddress),
         ReferralService.getUserRewards(activeAddress),
         ReferralService.getReferralStats(activeAddress),
         DecodeRewardService.getStatus(activeAddress),
         DecodeRewardService.getDecodeUserReward(activeAddress),
+        SignatureWallRewardService.hasSigned(activeAddress),
       ]);
 
       if (code) {
         setReferralCode(code.code);
       }
       setReferrals(refs);
-      // Filter decode reward out of the generic list — shown in its own dedicated card
-      setRewards(rwds.filter(r => r.reason !== 'decode_first_completion'));
+      setSigWallSigned(swSigned);
+      // Filter decode + signature_wall rewards out of generic list — shown in dedicated cards
+      setRewards(rwds.filter(r => r.reason !== 'decode_first_completion' && r.reason !== 'signature_wall'));
       setDecodeStatus(dStatus);
       setDecodeReward(dReward);
+
+      // If signed, ensure reward exists and load it
+      if (swSigned) {
+        const swReward = await SignatureWallRewardService.ensureReward(activeAddress);
+        setSigWallReward(swReward);
+      } else {
+        // Still try to get existing reward record (e.g., if already claimed)
+        const swReward = await SignatureWallRewardService.getReward(activeAddress);
+        setSigWallReward(swReward);
+      }
       setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
     } catch (err: any) {
       console.error('[RewardsScreen] loadData error:', err);
@@ -493,6 +508,18 @@ export default function RewardsScreen() {
           />
         </View>
 
+        {/* Signature Wall Reward */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Signature Wall Reward</Text>
+          <SignatureWallRewardCard
+            hasSigned={sigWallSigned}
+            reward={sigWallReward}
+            claimingId={claimingId}
+            onClaim={handleClaimReward}
+            onGoToWall={() => router.push('/signature-wall' as any)}
+          />
+        </View>
+
         {/* Regular reward cards */}
         {rewards.length > 0 && (
           <View
@@ -653,6 +680,98 @@ function DecodeRewardCard({ status, reward, claimingId, onClaim }: DecodeRewardC
           <Text style={[styles.failedText, { color: '#F472B6' }]}>
             You unlocked 15,000 DWORLD. Claim now.
           </Text>
+        )}
+        {isClaimed && reward?.transaction_signature && (
+          <TouchableOpacity
+            onPress={() => {
+              const url = `https://solscan.io/tx/${reward.transaction_signature}`;
+              if (Platform.OS === 'web') {
+                (window as any).open(url, '_blank', 'noopener,noreferrer');
+              } else {
+                Linking.openURL(url).catch(() => {});
+              }
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 }}
+            activeOpacity={0.7}
+          >
+            <ExternalLink size={11} color={colors.primary} strokeWidth={2} />
+            <Text style={styles.txHash} numberOfLines={1}>
+              {reward.transaction_signature.slice(0, 18)}…
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {action}
+    </View>
+  );
+}
+
+// ── Signature Wall reward card ────────────────────────────────────────────────
+
+interface SignatureWallRewardCardProps {
+  hasSigned: boolean;
+  reward: UserReward | null;
+  claimingId: string | null;
+  onClaim: (reward: UserReward) => void;
+  onGoToWall: () => void;
+}
+
+function SignatureWallRewardCard({ hasSigned, reward, claimingId, onClaim, onGoToWall }: SignatureWallRewardCardProps) {
+  const isClaimed   = reward?.status === 'sent';
+  const isClaiming  = reward ? claimingId === reward.id : false;
+  const isReady     = reward?.status === 'ready' || reward?.status === 'failed';
+  const accentColor = '#10B981';
+
+  const action = (() => {
+    if (!hasSigned && !isClaimed) {
+      return (
+        <TouchableOpacity style={[styles.claimButton, { backgroundColor: accentColor }]} onPress={onGoToWall} activeOpacity={0.8}>
+          <Text style={styles.claimButtonText}>Sign</Text>
+        </TouchableOpacity>
+      );
+    }
+    if (isClaimed) {
+      return (
+        <View style={styles.claimedBadge}>
+          <Check size={14} color={colors.success} />
+          <Text style={styles.claimedText}>Claimed</Text>
+        </View>
+      );
+    }
+    if (isClaiming) {
+      return (
+        <View style={styles.claimedBadge}>
+          <ActivityIndicator size="small" color={accentColor} />
+        </View>
+      );
+    }
+    if (isReady && reward) {
+      return (
+        <TouchableOpacity
+          style={[styles.claimButton, { backgroundColor: accentColor }, !!claimingId && styles.claimButtonDisabled]}
+          onPress={() => onClaim(reward)}
+          disabled={!!claimingId}
+        >
+          <Text style={styles.claimButtonText}>{reward.status === 'failed' ? 'Retry' : 'Claim'}</Text>
+        </TouchableOpacity>
+      );
+    }
+    return null;
+  })();
+
+  return (
+    <View style={[styles.rewardCard, { borderColor: hasSigned ? 'rgba(16,185,129,0.3)' : colors.surfaceBorder }]}>
+      <View style={[styles.rewardIcon, { backgroundColor: hasSigned ? 'rgba(16,185,129,0.12)' : colors.surface }]}>
+        <Gift size={20} color={hasSigned ? accentColor : colors.textMuted} />
+      </View>
+      <View style={styles.rewardInfo}>
+        <Text style={styles.rewardType}>Signature Wall Reward</Text>
+        <Text style={[styles.rewardAmount, { color: hasSigned ? accentColor : colors.textMuted }]}>10,000 $DWORLD</Text>
+        {!hasSigned && (
+          <Text style={styles.failedText}>Sign the Signature Wall to unlock this reward</Text>
+        )}
+        {hasSigned && !isClaimed && (
+          <Text style={[styles.failedText, { color: '#34D399' }]}>You signed the wall — claim your reward!</Text>
         )}
         {isClaimed && reward?.transaction_signature && (
           <TouchableOpacity
