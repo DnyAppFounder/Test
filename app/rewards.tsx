@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info } from 'lucide-react-native';
+import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info, ShieldAlert } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -64,6 +64,7 @@ export default function RewardsScreen() {
   const [dawenScore, setDawenScore]               = useState<number>(0);
   const [claimingDawenScore, setClaimingDawenScore] = useState(false);
   const [creatingAta, setCreatingAta]               = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<string>('verified');
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
@@ -95,7 +96,7 @@ export default function RewardsScreen() {
       ]);
       setEarlyRewardExhausted(exhausted);
 
-      const [code, refs, rwds, sts, dStatus, dReward, swSigned] = await Promise.all([
+      const [code, refs, rwds, sts, dStatus, dReward, swSigned, profileRow] = await Promise.all([
         ReferralService.getOrCreateReferralCode(activeAddress),
         ReferralService.getUserReferrals(activeAddress),
         ReferralService.getUserRewards(activeAddress),
@@ -103,6 +104,12 @@ export default function RewardsScreen() {
         DecodeRewardService.getStatus(activeAddress),
         DecodeRewardService.getDecodeUserReward(activeAddress),
         SignatureWallRewardService.hasSigned(activeAddress),
+        supabase
+          .from('user_profiles')
+          .select('verification_status')
+          .eq('wallet_address', activeAddress)
+          .maybeSingle()
+          .then(({ data }) => data),
       ]);
 
       if (code) {
@@ -110,6 +117,7 @@ export default function RewardsScreen() {
       }
       setReferrals(refs);
       setSigWallSigned(swSigned);
+      setVerificationStatus(profileRow?.verification_status ?? 'verified');
       // Filter decode + signature_wall + dawen_score_15k rewards out of generic list — shown in dedicated cards
       setRewards(rwds.filter(r => r.reason !== 'decode_first_completion' && r.reason !== 'signature_wall' && r.reason !== 'dawen_score_15k'));
       setDecodeStatus(dStatus);
@@ -280,94 +288,114 @@ export default function RewardsScreen() {
 
   const handleClaimReward = async (reward: UserReward) => {
     if (!activeAddress || claimingId) return;
+
+    // Guard: verification must be 'verified' before we even attempt a claim
+    if (verificationStatus !== 'verified') {
+      const msg = verificationStatus === 'pending'
+        ? 'Your account is pending verification. Rewards will unlock once approved.'
+        : verificationStatus === 'flagged'
+        ? 'Your account is under review. Reward claims are temporarily paused.'
+        : 'This account is not eligible for rewards.';
+      setClaimMessage({ type: 'error', text: msg });
+      setTimeout(() => setClaimMessage(null), 8000);
+      return;
+    }
+
     setClaimingId(reward.id);
     setClaimMessage(null);
+    setCreatingAta(false);
 
-    // 1. Get device fingerprint (non-blocking — safe to fail)
+    // Device fingerprint — non-blocking, safe to fail
     let deviceFpHash: string | undefined;
     try { deviceFpHash = await getDeviceFingerprintHash(); } catch {}
 
-    // 2. Check if user's DWORLD ATA exists — create it if missing (user pays rent)
-    try {
-      const ataStatus = await checkDworldAta(activeAddress);
-      if (!ataStatus.exists) {
-        setCreatingAta(true);
-        setClaimMessage({ type: 'error', text: 'Creating your DWORLD token account... this costs ~0.002 SOL from your wallet.' });
-        try {
-          const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
-          await createDworldAta(mnemonic, 0);
-          setClaimMessage(null);
-        } catch (ataErr: any) {
-          setCreatingAta(false);
-          setClaimingId(null);
-          const msg = String(ataErr?.message || ataErr);
-          if (msg.includes('INSUFFICIENT_SOL_FOR_ATA')) {
-            setClaimMessage({ type: 'error', text: 'You need at least 0.003 SOL in your wallet to create a DWORLD token account. Please add SOL and try again.' });
-          } else if (msg.includes('locked') || msg.includes('unlock')) {
-            setClaimMessage({ type: 'error', text: 'Please unlock your wallet and try again.' });
-          } else {
-            setClaimMessage({ type: 'error', text: `Could not create DWORLD account: ${msg.slice(0, 120)}` });
-          }
-          setTimeout(() => setClaimMessage(null), 10000);
-          return;
-        } finally {
-          setCreatingAta(false);
-        }
-      }
-    } catch (checkErr: any) {
-      // ATA check failed — may not have EXPO_PUBLIC_DWC_MINT set, fall through and let server handle it
-      console.warn('[rewards] ATA check failed:', checkErr?.message);
-    }
-
-    // 3. Call edge function with device fingerprint
-    const timeout = new Promise<{ success: false; error: string }>((resolve) =>
-      setTimeout(
-        () => resolve({ success: false, error: 'Claim is taking longer than expected. Please check again.' }),
-        75_000,
-      )
-    );
-
-    const result = await Promise.race([
+    const doClaimCall = () => Promise.race([
       ReferralService.claimReward(reward.id, activeAddress, deviceFpHash),
-      timeout,
+      new Promise<{ success: false; error: string; code?: string }>((resolve) =>
+        setTimeout(() => resolve({ success: false, error: 'Claim timed out. Please check again.' }), 75_000)
+      ),
     ]);
+
+    let result = await doClaimCall();
+
+    // ATA_NOT_FOUND → create the token account (user pays rent) → retry once
+    if (!result.success && (result as any).code === 'ATA_NOT_FOUND') {
+      setCreatingAta(true);
+      try {
+        const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
+        await createDworldAta(mnemonic, 0);
+        setCreatingAta(false);
+        // Retry the claim now that ATA exists
+        result = await doClaimCall();
+      } catch (ataErr: any) {
+        setCreatingAta(false);
+        setClaimingId(null);
+        const msg = String(ataErr?.message || ataErr);
+        if (msg.includes('INSUFFICIENT_SOL_FOR_ATA') || msg.includes('INSUFFICIENT_SOL')) {
+          setClaimMessage({ type: 'error', text: 'You need a small amount of SOL to create your DWORLD token account and pay the network fee. Please add SOL and try again.' });
+        } else if (msg.includes('locked') || msg.includes('unlock')) {
+          setClaimMessage({ type: 'error', text: 'Wallet is locked. Please unlock your wallet and try again.' });
+        } else {
+          setClaimMessage({ type: 'error', text: `Could not create DWORLD token account: ${msg.slice(0, 120)}` });
+        }
+        setTimeout(() => setClaimMessage(null), 12000);
+        await loadData();
+        return;
+      }
+    }
 
     if (result.success) {
       const sig = (result as any).signature as string | undefined;
       setClaimSignature(sig ?? null);
-      setClaimMessage({ type: 'success', text: `Claim successful — ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} $DWORLD sent to your wallet.` });
+      setClaimMessage({
+        type: 'success',
+        text: `Claimed! ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} $DWORLD sent to your wallet.`,
+      });
       refreshPortfolio().catch(() => {});
     } else {
       setClaimSignature(null);
       const code = (result as any).code as string | undefined;
       let displayError = result.error || 'Claim failed. Please try again.';
-      // Map security block codes to friendly messages
-      if (code === 'ACCOUNT_REJECTED') displayError = 'Your account has been rejected and cannot claim rewards.';
-      else if (code === 'ACCOUNT_FLAGGED') displayError = 'Your account is under review. Claims are temporarily paused.';
-      else if (code === 'ACCOUNT_PENDING') displayError = 'Account verification pending. Please wait for approval.';
-      else if (code === 'DUPLICATE_WALLET') displayError = 'This wallet has already claimed this reward.';
-      else if (code === 'DUPLICATE_IP') displayError = 'A reward has already been claimed from your network.';
-      else if (code === 'DUPLICATE_DEVICE') displayError = 'A reward has already been claimed from this device.';
-      else if (code === 'ATA_NOT_FOUND') displayError = 'DWORLD token account not found. Please try again — the account may still be confirming.';
+      if (code === 'ACCOUNT_REJECTED' || code === 'ACCOUNT_FLAGGED') {
+        displayError = 'This account is not eligible for rewards.';
+      } else if (code === 'ACCOUNT_PENDING') {
+        displayError = 'Your account is pending verification. Rewards will unlock once approved.';
+      } else if (code === 'DUPLICATE_WALLET') {
+        displayError = 'This wallet has already claimed this reward.';
+      } else if (code === 'DUPLICATE_IP') {
+        displayError = 'A reward has already been claimed from your network.';
+      } else if (code === 'DUPLICATE_DEVICE') {
+        displayError = 'A reward has already been claimed from this device.';
+      } else if (code === 'ATA_NOT_FOUND') {
+        displayError = 'Could not create your DWORLD token account. Please try again.';
+      } else if (displayError.includes('custom program error: 0x1')) {
+        displayError = 'Transaction failed: insufficient SOL. Please add SOL to your wallet and try again.';
+      }
       setClaimMessage({ type: 'error', text: displayError });
     }
 
     setClaimingId(null);
     await loadData();
-    setTimeout(() => { setClaimMessage(null); setClaimSignature(null); }, 10000);
+    setTimeout(() => { setClaimMessage(null); setClaimSignature(null); }, 12000);
   };
 
-  // Signature Wall specific: ensure reward row exists first, then claim
+  // Signature Wall: ensure reward row exists via game_signatures check, then use shared claim flow
   const handleSigWallClaim = async (existingReward?: UserReward) => {
     if (!activeAddress || claimingId) return;
     let reward = existingReward ?? sigWallReward;
     if (!reward) {
-      // Try to create/fetch the reward row
       setClaimingId('sig-wall-pending');
+      setClaimMessage(null);
       reward = await SignatureWallRewardService.ensureReward(activeAddress);
       setClaimingId(null);
       if (!reward) {
-        setClaimMessage({ type: 'error', text: 'Could not create reward — check that your wallet has signed the Signature Wall, then try again. (See console for details.)' });
+        // Check if they actually signed — give a precise error
+        const signed = await SignatureWallRewardService.hasSigned(activeAddress);
+        if (!signed) {
+          setClaimMessage({ type: 'error', text: 'Your wallet has not signed the Signature Wall yet. Go to the wall and leave your signature first.' });
+        } else {
+          setClaimMessage({ type: 'error', text: 'Could not create your Signature Wall reward. Please try again in a moment.' });
+        }
         setTimeout(() => setClaimMessage(null), 8000);
         return;
       }
@@ -495,6 +523,36 @@ export default function RewardsScreen() {
               >
                 <ExternalLink size={13} color={colors.success} strokeWidth={2} />
                 <Text style={styles.solscanLinkText}>View transaction on Solscan</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* Verification gate banner */}
+        {verificationStatus !== 'verified' && (
+          <View style={[styles.statusBanner, styles.bannerVerification]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 6 }}>
+              <ShieldAlert size={16} color="#F59E0B" strokeWidth={2} />
+              <Text style={[styles.statusBannerText, { color: '#F59E0B' }]}>
+                {verificationStatus === 'pending'
+                  ? 'Account Pending Verification'
+                  : 'Account Not Eligible for Rewards'}
+              </Text>
+            </View>
+            <Text style={[styles.statusBannerText, { fontSize: 12, fontWeight: '400', color: colors.textSecondary }]}>
+              {verificationStatus === 'pending'
+                ? 'Your account is pending verification. Rewards will unlock once approved.'
+                : verificationStatus === 'flagged'
+                ? 'Your account is under review. Reward claims are temporarily paused.'
+                : 'This account is not eligible for rewards.'}
+            </Text>
+            {(verificationStatus === 'pending' || verificationStatus === 'flagged') && (
+              <TouchableOpacity
+                style={styles.verifyAccountBtn}
+                onPress={() => router.push('/settings' as any)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.verifyAccountBtnText}>Verify Account</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1212,6 +1270,24 @@ const styles = StyleSheet.create({
     backgroundColor: (colors as any).errorMuted ?? 'rgba(239,68,68,0.12)',
     borderWidth: 1,
     borderColor: (colors as any).error ?? '#EF4444',
+  },
+  bannerVerification: {
+    backgroundColor: 'rgba(245,158,11,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.45)',
+  },
+  verifyAccountBtn: {
+    marginTop: 10,
+    alignSelf: 'center',
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  verifyAccountBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#111827',
   },
   statusBannerText: {
     fontSize: fontSize.sm,
