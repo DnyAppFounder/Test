@@ -280,6 +280,25 @@ export default function RewardsScreen() {
     setTimeout(() => { setClaimMessage(null); setClaimSignature(null); }, 10000);
   };
 
+  // Signature Wall specific: ensure reward row exists first, then claim
+  const handleSigWallClaim = async (existingReward?: UserReward) => {
+    if (!activeAddress || claimingId) return;
+    let reward = existingReward ?? sigWallReward;
+    if (!reward) {
+      // Try to create/fetch the reward row
+      setClaimingId('sig-wall-pending');
+      reward = await SignatureWallRewardService.ensureReward(activeAddress);
+      setClaimingId(null);
+      if (!reward) {
+        setClaimMessage({ type: 'error', text: 'Could not create reward. Make sure you have signed the Signature Wall.' });
+        setTimeout(() => setClaimMessage(null), 6000);
+        return;
+      }
+      setSigWallReward(reward);
+    }
+    await handleClaimReward(reward);
+  };
+
   // ── No wallet ──────────────────────────────────────────────────────────────
   if (!activeAddress) {
     return (
@@ -515,7 +534,7 @@ export default function RewardsScreen() {
             hasSigned={sigWallSigned}
             reward={sigWallReward}
             claimingId={claimingId}
-            onClaim={handleClaimReward}
+            onClaim={handleSigWallClaim}
             onGoToWall={() => router.push('/signature-wall' as any)}
           />
         </View>
@@ -712,22 +731,22 @@ interface SignatureWallRewardCardProps {
   hasSigned: boolean;
   reward: UserReward | null;
   claimingId: string | null;
-  onClaim: (reward: UserReward) => void;
+  onClaim: (reward?: UserReward) => void;
   onGoToWall: () => void;
 }
 
 function SignatureWallRewardCard({ hasSigned, reward, claimingId, onClaim, onGoToWall }: SignatureWallRewardCardProps) {
   const isClaimed   = reward?.status === 'sent';
-  const isClaiming  = reward ? claimingId === reward.id : false;
+  const isClaiming  = claimingId === 'sig-wall-pending' || (reward ? claimingId === reward.id : false);
   const isReady     = reward?.status === 'ready' || reward?.status === 'failed';
   const accentColor = '#10B981';
 
   const action = (() => {
-    if (!hasSigned && !isClaimed) {
+    if (isClaiming) {
       return (
-        <TouchableOpacity style={[styles.claimButton, { backgroundColor: accentColor }]} onPress={onGoToWall} activeOpacity={0.8}>
-          <Text style={styles.claimButtonText}>Sign</Text>
-        </TouchableOpacity>
+        <View style={styles.claimedBadge}>
+          <ActivityIndicator size="small" color={accentColor} />
+        </View>
       );
     }
     if (isClaimed) {
@@ -738,25 +757,25 @@ function SignatureWallRewardCard({ hasSigned, reward, claimingId, onClaim, onGoT
         </View>
       );
     }
-    if (isClaiming) {
-      return (
-        <View style={styles.claimedBadge}>
-          <ActivityIndicator size="small" color={accentColor} />
-        </View>
-      );
-    }
-    if (isReady && reward) {
+    if (hasSigned) {
+      // Show Claim whether or not reward row is loaded yet — handleSigWallClaim creates it if missing
       return (
         <TouchableOpacity
           style={[styles.claimButton, { backgroundColor: accentColor }, !!claimingId && styles.claimButtonDisabled]}
-          onPress={() => onClaim(reward)}
+          onPress={() => onClaim(reward ?? undefined)}
           disabled={!!claimingId}
+          activeOpacity={0.8}
         >
-          <Text style={styles.claimButtonText}>{reward.status === 'failed' ? 'Retry' : 'Claim'}</Text>
+          <Text style={styles.claimButtonText}>{reward?.status === 'failed' ? 'Retry' : 'Claim'}</Text>
         </TouchableOpacity>
       );
     }
-    return null;
+    // Not signed yet
+    return (
+      <TouchableOpacity style={[styles.claimButton, { backgroundColor: '#374151' }]} onPress={onGoToWall} activeOpacity={0.8}>
+        <Text style={styles.claimButtonText}>Go to Wall</Text>
+      </TouchableOpacity>
+    );
   })();
 
   return (

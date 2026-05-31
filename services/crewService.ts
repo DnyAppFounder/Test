@@ -132,6 +132,22 @@ export interface UserProfileSearch {
   is_founder?: boolean;
 }
 
+export interface CrewApplicationMessage {
+  id: string;
+  application_id: string;
+  sender_id: string;
+  message: string;
+  sender_role: 'admin' | 'applicant';
+  is_internal: boolean;
+  created_at: string;
+  sender?: {
+    id: string;
+    username?: string;
+    display_name?: string;
+    avatar_url?: string;
+  };
+}
+
 export interface CrewInternalNote {
   id: string;
   application_id: string;
@@ -735,6 +751,52 @@ export const CrewService = {
       post_id: null,
       message,
     });
+  },
+
+  async notifyApplicantWithThread(
+    userId: string,
+    actorId: string,
+    applicationId: string,
+    message: string
+  ): Promise<void> {
+    await supabase.from('notifications').insert({
+      user_id: userId,
+      actor_id: actorId,
+      type: 'crew_message',
+      post_id: null,
+      crew_application_id: applicationId,
+      message,
+    });
+  },
+
+  // ── Application Messages ──────────────────────────────────────────────────
+
+  async getApplicationMessages(applicationId: string): Promise<CrewApplicationMessage[]> {
+    const { data } = await supabase
+      .from('crew_application_messages')
+      .select('*, sender:user_profiles!crew_application_messages_sender_id_fkey(id, username, display_name, avatar_url)')
+      .eq('application_id', applicationId)
+      .eq('is_internal', false)
+      .order('created_at', { ascending: true });
+    return (data ?? []) as CrewApplicationMessage[];
+  },
+
+  async sendApplicationMessage(
+    applicationId: string,
+    senderId: string,
+    message: string,
+    senderRole: 'admin' | 'applicant'
+  ): Promise<{ error: string | null }> {
+    const { error } = await supabase
+      .from('crew_application_messages')
+      .insert({
+        application_id: applicationId,
+        sender_id: senderId,
+        message,
+        sender_role: senderRole,
+        is_internal: false,
+      });
+    return { error: error?.message ?? null };
   },
 
   // ── Helpers ───────────────────────────────────────────────────────────────

@@ -90,8 +90,9 @@ export interface Notification {
   id: string;
   user_id: string;
   actor_id: string | null;
-  type: 'like' | 'comment' | 'follow' | 'mention' | 'repost' | 'message' | 'promote';
+  type: 'like' | 'comment' | 'follow' | 'mention' | 'repost' | 'message' | 'promote' | 'crew_message';
   post_id: string | null;
+  crew_application_id?: string | null;
   message: string;
   read: boolean;
   created_at: string;

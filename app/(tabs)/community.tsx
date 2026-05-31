@@ -17,7 +17,7 @@ import {
   Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap, Users } from 'lucide-react-native';
+import { Send, X, User, ImagePlus, MessageCircle, Check, CircleAlert, Wallet, Bell, Clock, Plus, Search, Heart, MessageSquare, UserPlus, AtSign, Repeat2, SlidersHorizontal, Trash2, Globe, Mail, Zap, Users, Shield } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
 import { ConfirmTransactionModal, TxDetail } from '@/components/ConfirmTransactionModal';
@@ -900,10 +900,12 @@ export default function CommunityScreen() {
     }
     if (notif.type === 'follow' && notif.actor?.id) {
       router.push(`/profile/${notif.actor.id}` as any);
+    } else if (notif.type === 'crew_message' && notif.crew_application_id) {
+      router.push(`/crew-message/${notif.crew_application_id}` as any);
     } else if (notif.post_id && (notif.type === 'like' || notif.type === 'comment' || notif.type === 'repost' || notif.type === 'mention' || notif.type === 'promote')) {
       openCommentsModal(notif.post_id);
     } else if (notif.type === 'mention' && !notif.post_id) {
-      // Crew application notifications have no post_id — open the Crew page
+      // Legacy crew application notifications have no post_id — open the Crew page
       router.push('/crew' as any);
     } else if (notif.type === 'message' && notif.actor?.id) {
       router.push(`/chat/${notif.actor.id}` as any);
@@ -1365,6 +1367,7 @@ export default function CommunityScreen() {
     if (type === 'repost') return <Repeat2 size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'message') return <MessageSquare size={18} color={colors.primary} strokeWidth={2} />;
     if (type === 'promote') return <Zap size={18} color="#F59E0B" fill="#F59E0B" strokeWidth={0} />;
+    if (type === 'crew_message') return <Shield size={18} color="#06B6D4" strokeWidth={2} />;
     return <Bell size={18} color={colors.primary} />;
   };
 

@@ -614,6 +614,21 @@ function FormField({ label, value, onChange, multiline, placeholder }: {
   );
 }
 
+function ViewThreadButton({ applicationId }: { applicationId: string }) {
+  const router = useRouter();
+  return (
+    <TouchableOpacity
+      style={styles.viewThreadBtn}
+      onPress={() => router.push(`/crew-message/${applicationId}` as any)}
+      activeOpacity={0.8}
+    >
+      <MessageSquare size={12} color={colors.primary} strokeWidth={2} />
+      <Text style={styles.viewThreadBtnText}>Open Application Thread</Text>
+      <ChevronRight size={12} color={colors.primary} strokeWidth={2} />
+    </TouchableOpacity>
+  );
+}
+
 // ── Hierarchy compact user row ────────────────────────────────────────────────
 
 function HierarchyMemberRow({ member }: { member: CrewMember }) {
@@ -852,7 +867,11 @@ function AdminApplicationDetail({
       paused: 'Your DAWEN Crew application has been paused.',
     };
     const msg = notifMsg[status];
-    if (msg && app.user_id) await CrewService.notifyApplicant(app.user_id, reviewerId, msg);
+    if (msg && app.user_id) {
+      await CrewService.notifyApplicantWithThread(app.user_id, reviewerId, app.id, msg);
+      // Also save the status change message to the thread
+      await CrewService.sendApplicationMessage(app.id, reviewerId, msg, 'admin');
+    }
     setSuccess(`Status: ${CrewService.getStatusLabel(status)}`);
     setTimeout(() => { setSuccess(''); onRefresh(); }, 1500);
     setLoading(false);
@@ -862,13 +881,15 @@ function AdminApplicationDetail({
     if (!msgText.trim()) return;
     setLoading(true);
     setError('');
-    const { error: err } = await CrewService.updateApplication(app.id, {
-      user_visible_message: msgText.trim(),
-    });
-    if (err) { setError(err); setLoading(false); return; }
+    // Save message to the thread
+    const { error: msgErr } = await CrewService.sendApplicationMessage(app.id, reviewerId, msgText.trim(), 'admin');
+    if (msgErr) { setError(msgErr); setLoading(false); return; }
+    // Also update user_visible_message for legacy display in MyApplicationView
+    await CrewService.updateApplication(app.id, { user_visible_message: msgText.trim() });
     if (app.user_id) {
-      await CrewService.notifyApplicant(app.user_id, reviewerId, `Message from admin: ${msgText.trim()}`);
+      await CrewService.notifyApplicantWithThread(app.user_id, reviewerId, app.id, msgText.trim());
     }
+    setMsgText('');
     setSuccess('Message sent to applicant.');
     setTimeout(() => setSuccess(''), 2500);
     setLoading(false);
@@ -1378,8 +1399,15 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
       {app.user_visible_message && (
         <View style={styles.adminMsgCard}>
           <FileText size={14} color={colors.primary} strokeWidth={2} />
-          <Text style={styles.adminMsgText}>{app.user_visible_message}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.adminMsgText}>{app.user_visible_message}</Text>
+            <ViewThreadButton applicationId={app.id} />
+          </View>
         </View>
+      )}
+
+      {!app.user_visible_message && (
+        <ViewThreadButton applicationId={app.id} />
       )}
 
       {tasks.length > 0 && (
@@ -2696,6 +2724,13 @@ const styles = StyleSheet.create({
   myAppDate: { fontSize: 12, color: colors.textMuted },
   adminMsgCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: 'rgba(139,92,246,0.08)', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
   adminMsgText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
+  viewThreadBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8,
+    alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 8, backgroundColor: 'rgba(139,92,246,0.12)',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+  },
+  viewThreadBtnText: { fontSize: 11, fontWeight: '700', color: colors.primary },
 
   // Tasks
   taskCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
