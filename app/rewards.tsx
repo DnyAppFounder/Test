@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
+import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
 import {
   ReferralService,
   Referral,
@@ -28,6 +29,11 @@ import {
 import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeRewardService';
 import { SignatureWallRewardService } from '@/services/signatureWallRewardService';
 import { fetchLeaderboard, OverallEntry } from '@/services/leaderboardService';
+import {
+  checkDworldAta,
+  createDworldAta,
+  getDeviceFingerprintHash,
+} from '@/services/rewardSecurityService';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
@@ -57,6 +63,7 @@ export default function RewardsScreen() {
   const [dawenScoreReward, setDawenScoreReward]   = useState<UserReward | null>(null);
   const [dawenScore, setDawenScore]               = useState<number>(0);
   const [claimingDawenScore, setClaimingDawenScore] = useState(false);
+  const [creatingAta, setCreatingAta]               = useState(false);
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
@@ -276,7 +283,43 @@ export default function RewardsScreen() {
     setClaimingId(reward.id);
     setClaimMessage(null);
 
-    // Race the edge-function call against a 75-second UI timeout
+    // 1. Get device fingerprint (non-blocking — safe to fail)
+    let deviceFpHash: string | undefined;
+    try { deviceFpHash = await getDeviceFingerprintHash(); } catch {}
+
+    // 2. Check if user's DWORLD ATA exists — create it if missing (user pays rent)
+    try {
+      const ataStatus = await checkDworldAta(activeAddress);
+      if (!ataStatus.exists) {
+        setCreatingAta(true);
+        setClaimMessage({ type: 'error', text: 'Creating your DWORLD token account... this costs ~0.002 SOL from your wallet.' });
+        try {
+          const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
+          await createDworldAta(mnemonic, 0);
+          setClaimMessage(null);
+        } catch (ataErr: any) {
+          setCreatingAta(false);
+          setClaimingId(null);
+          const msg = String(ataErr?.message || ataErr);
+          if (msg.includes('INSUFFICIENT_SOL_FOR_ATA')) {
+            setClaimMessage({ type: 'error', text: 'You need at least 0.003 SOL in your wallet to create a DWORLD token account. Please add SOL and try again.' });
+          } else if (msg.includes('locked') || msg.includes('unlock')) {
+            setClaimMessage({ type: 'error', text: 'Please unlock your wallet and try again.' });
+          } else {
+            setClaimMessage({ type: 'error', text: `Could not create DWORLD account: ${msg.slice(0, 120)}` });
+          }
+          setTimeout(() => setClaimMessage(null), 10000);
+          return;
+        } finally {
+          setCreatingAta(false);
+        }
+      }
+    } catch (checkErr: any) {
+      // ATA check failed — may not have EXPO_PUBLIC_DWC_MINT set, fall through and let server handle it
+      console.warn('[rewards] ATA check failed:', checkErr?.message);
+    }
+
+    // 3. Call edge function with device fingerprint
     const timeout = new Promise<{ success: false; error: string }>((resolve) =>
       setTimeout(
         () => resolve({ success: false, error: 'Claim is taking longer than expected. Please check again.' }),
@@ -285,7 +328,7 @@ export default function RewardsScreen() {
     );
 
     const result = await Promise.race([
-      ReferralService.claimReward(reward.id, activeAddress),
+      ReferralService.claimReward(reward.id, activeAddress, deviceFpHash),
       timeout,
     ]);
 
@@ -293,19 +336,24 @@ export default function RewardsScreen() {
       const sig = (result as any).signature as string | undefined;
       setClaimSignature(sig ?? null);
       setClaimMessage({ type: 'success', text: `Claim successful — ${Number(reward.reward_amount).toLocaleString('en-US', { maximumFractionDigits: 0 })} $DWORLD sent to your wallet.` });
-      // Refresh DWC balance after confirmed transfer
       refreshPortfolio().catch(() => {});
     } else {
       setClaimSignature(null);
-      setClaimMessage({ type: 'error', text: result.error || 'Claim failed. Please try again.' });
+      const code = (result as any).code as string | undefined;
+      let displayError = result.error || 'Claim failed. Please try again.';
+      // Map security block codes to friendly messages
+      if (code === 'ACCOUNT_REJECTED') displayError = 'Your account has been rejected and cannot claim rewards.';
+      else if (code === 'ACCOUNT_FLAGGED') displayError = 'Your account is under review. Claims are temporarily paused.';
+      else if (code === 'ACCOUNT_PENDING') displayError = 'Account verification pending. Please wait for approval.';
+      else if (code === 'DUPLICATE_WALLET') displayError = 'This wallet has already claimed this reward.';
+      else if (code === 'DUPLICATE_IP') displayError = 'A reward has already been claimed from your network.';
+      else if (code === 'DUPLICATE_DEVICE') displayError = 'A reward has already been claimed from this device.';
+      else if (code === 'ATA_NOT_FOUND') displayError = 'DWORLD token account not found. Please try again — the account may still be confirming.';
+      setClaimMessage({ type: 'error', text: displayError });
     }
 
     setClaimingId(null);
-
-    // Always reload from Supabase so the UI reflects the real claim status,
-    // including resetting any stale 'claiming' left by a timed-out edge call.
     await loadData();
-
     setTimeout(() => { setClaimMessage(null); setClaimSignature(null); }, 10000);
   };
 
@@ -423,10 +471,16 @@ export default function RewardsScreen() {
         )}
 
         {/* Claim status banner */}
-        {claimMessage && (
-          <View style={[styles.statusBanner, claimMessage.type === 'success' ? styles.bannerSuccess : styles.bannerError]}>
-            <Text style={styles.statusBannerText}>{claimMessage.text}</Text>
-            {claimMessage.type === 'success' && claimSignature && (
+        {(claimMessage || creatingAta) && (
+          <View style={[styles.statusBanner, claimMessage?.type === 'success' ? styles.bannerSuccess : styles.bannerError]}>
+            {creatingAta && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4 }}>
+                <ActivityIndicator size="small" color={colors.textPrimary} />
+                <Text style={[styles.statusBannerText, { fontSize: 12 }]}>Creating DWORLD token account...</Text>
+              </View>
+            )}
+            {claimMessage && <Text style={styles.statusBannerText}>{claimMessage.text}</Text>}
+            {claimMessage?.type === 'success' && claimSignature && (
               <TouchableOpacity
                 onPress={() => {
                   const url = `https://solscan.io/tx/${claimSignature}`;

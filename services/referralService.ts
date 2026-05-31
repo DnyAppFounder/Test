@@ -302,7 +302,8 @@ export class ReferralService {
   static async claimReward(
     rewardId: string,
     walletAddress: string,
-  ): Promise<{ success: boolean; signature?: string; error?: string }> {
+    deviceFingerprintHash?: string,
+  ): Promise<{ success: boolean; signature?: string; error?: string; code?: string; userAta?: string }> {
     try {
       if (!walletAddress) return { success: false, error: 'Connect your wallet to claim rewards' };
 
@@ -314,7 +315,11 @@ export class ReferralService {
           Authorization: `Bearer ${ANON_KEY}`,
           Apikey: ANON_KEY,
         },
-        body: JSON.stringify({ reward_id: rewardId, wallet_address: walletAddress }),
+        body: JSON.stringify({
+          reward_id: rewardId,
+          wallet_address: walletAddress,
+          device_fingerprint_hash: deviceFingerprintHash ?? null,
+        }),
       });
 
       const result = await resp.json();
