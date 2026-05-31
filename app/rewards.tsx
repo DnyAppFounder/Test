@@ -305,8 +305,8 @@ export default function RewardsScreen() {
       reward = await SignatureWallRewardService.ensureReward(activeAddress);
       setClaimingId(null);
       if (!reward) {
-        setClaimMessage({ type: 'error', text: 'Could not create reward. Make sure you have signed the Signature Wall.' });
-        setTimeout(() => setClaimMessage(null), 6000);
+        setClaimMessage({ type: 'error', text: 'Could not create reward — check that your wallet has signed the Signature Wall, then try again. (See console for details.)' });
+        setTimeout(() => setClaimMessage(null), 8000);
         return;
       }
       setSigWallReward(reward);
