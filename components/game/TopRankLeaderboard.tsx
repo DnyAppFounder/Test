@@ -511,14 +511,11 @@ export function TopRankLeaderboard() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Realtime: re-fetch when game_results or user_stats change
+  // Realtime: re-fetch when game_results change
   useEffect(() => {
     const channel = supabase
       .channel('leaderboard-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_results' }, () => {
-        load(true);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_stats' }, () => {
         load(true);
       })
       .subscribe();
