@@ -1,0 +1,56 @@
+import { supabase } from '@/lib/supabase';
+import { UserReward } from './referralService';
+
+export const SignatureWallRewardService = {
+  async hasSigned(walletAddress: string): Promise<boolean> {
+    const { data } = await supabase
+      .from('game_signatures')
+      .select('id')
+      .eq('wallet_address', walletAddress)
+      .limit(1)
+      .maybeSingle();
+    return !!data;
+  },
+
+  async getReward(walletAddress: string): Promise<UserReward | null> {
+    const { data } = await supabase
+      .from('user_rewards')
+      .select('*')
+      .eq('wallet_address', walletAddress)
+      .eq('reason', 'signature_wall')
+      .maybeSingle();
+    return data as UserReward | null;
+  },
+
+  async ensureReward(walletAddress: string): Promise<UserReward | null> {
+    // Check if reward already exists — skip RPC if it does
+    const existing = await this.getReward(walletAddress);
+    if (existing) return existing;
+
+    // Pass p_user_id explicitly as null — PostgREST requires all params to be
+    // listed or it may fail to resolve the function overload.
+    const { data, error } = await supabase.rpc('create_signature_wall_reward', {
+      p_wallet_address: walletAddress,
+      p_user_id: null,
+    });
+
+    if (error) {
+      console.error('[SignatureWallRewardService] RPC error:', error.message, error.details, error.hint);
+      return null;
+    }
+
+    if (!data) {
+      console.warn('[SignatureWallRewardService] RPC returned no data for wallet:', walletAddress);
+      return null;
+    }
+
+    const rows = Array.isArray(data) ? data : [data];
+    if (rows.length === 0) {
+      console.warn('[SignatureWallRewardService] RPC returned empty array — wallet may not be in game_signatures:', walletAddress);
+      return null;
+    }
+
+    return rows[0] as UserReward;
+  },
+};
+

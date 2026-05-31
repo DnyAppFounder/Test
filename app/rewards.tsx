@@ -27,6 +27,7 @@ import {
 } from '@/services/referralService';
 import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeRewardService';
 import { SignatureWallRewardService } from '@/services/signatureWallRewardService';
+import { fetchLeaderboard, OverallEntry } from '@/services/leaderboardService';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
@@ -118,12 +119,13 @@ export default function RewardsScreen() {
       }
       setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
 
-      // Load DAWEN score and any existing 15K score reward row
+      // Load DAWEN score from leaderboard RPC — same source as Top Rank
       try {
-        const { data: statsRow } = await supabase
-          .from('user_stats').select('dawen_score')
-          .eq('wallet_address', activeAddress).maybeSingle();
-        const score = Number(statsRow?.dawen_score ?? 0);
+        const leaderboardRows = await fetchLeaderboard('overall', 'ALL', 500);
+        const myEntry = leaderboardRows.find(
+          e => e.wallet_address.toLowerCase() === activeAddress.toLowerCase()
+        ) as OverallEntry | undefined;
+        const score = Number(myEntry?.dawen_score ?? 0);
         setDawenScore(score);
         const dsReward = rwds.find(r => r.reason === 'dawen_score_15k') ?? null;
         setDawenScoreReward(dsReward);
@@ -139,6 +141,18 @@ export default function RewardsScreen() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Realtime: refresh DAWEN score when game_results change
+  useEffect(() => {
+    if (!activeAddress) return;
+    const channel = supabase
+      .channel('rewards-game-results')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_results' }, () => {
+        loadData();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [activeAddress, loadData]);
 
   // After rewards reload, detect newly added reward IDs and scroll to highlight them
   useEffect(() => {

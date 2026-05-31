@@ -550,36 +550,41 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
       matchId: match?.id,
       onGameEnd: handleGameEnd,
     };
+    const handleBackFromGame = () => {
+      setStage('game_select');
+      setSelectedGame(null); setMode(null); setEntry(null);
+      setMatch(null); setResult(null); setGameSeed('');
+      onSetFullscreen?.(false);
+    };
+    const isDecodeGame = selectedGame === 'decode_7_fragments';
     return (
       <View style={[gameStyles.arenaContainer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        {selectedGame === 'dawen_aim_duel' ? (
+        {isDecodeGame ? (
+          <Decode7Fragments {...arenaProps} onBack={handleBackFromGame} />
+        ) : selectedGame === 'dawen_aim_duel' ? (
           <DawenAimDuel {...arenaProps} />
         ) : selectedGame === 'dawen_runner' ? (
           <DawenRunner {...arenaProps} />
         ) : selectedGame === 'dawen_memory' ? (
           <DawenMemoryDuel {...arenaProps} />
-        ) : selectedGame === 'decode_7_fragments' ? (
-          <Decode7Fragments {...arenaProps} />
         ) : (
           <DawenRushArena
             {...arenaProps}
             entryAmountSol={entry?.entry_amount_sol}
           />
         )}
-        {/* Back button overlay — positioned top-left, above game content */}
-        <TouchableOpacity
-          style={[gameStyles.gameBackBtn, { top: Math.max(insets.top, 10) + 4 }]}
-          onPress={() => {
-            setStage('game_select');
-            setSelectedGame(null); setMode(null); setEntry(null);
-            setMatch(null); setResult(null); setGameSeed('');
-            onSetFullscreen?.(false);
-          }}
-          activeOpacity={0.75}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <ArrowLeft size={18} color="#FFFFFF" strokeWidth={2.5} />
-        </TouchableOpacity>
+        {/* Footer back button for all games except Decode (which has its own built-in back) */}
+        {!isDecodeGame && (
+          <TouchableOpacity
+            style={gameStyles.gameBackFooter}
+            onPress={handleBackFromGame}
+            activeOpacity={0.75}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <ArrowLeft size={16} color="rgba(255,255,255,0.7)" strokeWidth={2.5} />
+            <Text style={gameStyles.gameBackFooterText}>Back to Games</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -705,18 +710,22 @@ const gameStyles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 4,
   },
-  gameBackBtn: {
-    position: 'absolute',
-    left: 12,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    justifyContent: 'center',
+  gameBackFooter: {
+    flexDirection: 'row',
     alignItems: 'center',
-    zIndex: 100,
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginTop: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  gameBackFooterText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.65)',
   },
   scroll: { flex: 1 },
   scrollContent: {

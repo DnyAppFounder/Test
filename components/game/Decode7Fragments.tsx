@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   useWindowDimensions,
 } from 'react-native';
+import { ArrowLeft } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import type { UnifiedGameResult } from '@/services/game/gameTypes';
 import type { GameMode } from './GameModeSelector';
@@ -151,9 +152,10 @@ interface Props {
   entryId?: string;
   matchId?: string;
   onGameEnd: (result: UnifiedGameResult) => void;
+  onBack?: () => void;
 }
 
-export function Decode7Fragments({ seed, mode, matchId, onGameEnd }: Props) {
+export function Decode7Fragments({ seed, mode, matchId, onGameEnd, onBack }: Props) {
   const { width: sw } = useWindowDimensions();
   // Size cells to fit the 18-column grid in available width
   const cellSize = Math.min(Math.floor((Math.min(sw - 32, 460)) / COLS), 26);
@@ -352,6 +354,14 @@ export function Decode7Fragments({ seed, mode, matchId, onGameEnd }: Props) {
             <Text style={styles.hudLabel}>ERRORS</Text>
           </View>
         </View>
+      )}
+
+      {/* Back button — below HUD, outside puzzle grid */}
+      {onBack && phase === 'playing' && (
+        <TouchableOpacity style={styles.backRow} onPress={onBack} activeOpacity={0.75} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <ArrowLeft size={14} color="rgba(255,255,255,0.55)" strokeWidth={2.5} />
+          <Text style={styles.backRowText}>Back</Text>
+        </TouchableOpacity>
       )}
 
       {/* Puzzle mode label */}
@@ -566,4 +576,17 @@ const styles = StyleSheet.create({
   endTitleExpired: { fontSize: fontSize.xxl, fontWeight: '900', color: '#F87171' },
   endSub: { fontSize: fontSize.md, color: colors.textSecondary, fontWeight: '600' },
   endCalculating: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '500', marginTop: 4 },
+  backRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  backRowText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.55)',
+  },
 });
