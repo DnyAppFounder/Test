@@ -136,7 +136,7 @@ export function DawenMemoryDuel({ seed, mode, onGameEnd }: Props) {
     const pairScore = pairsRef.current * 500;
     const speedBonus = allPairsFound ? Math.round(Math.max(0, (GAME_DURATION_MS - elapsed) / 1000) * 20) : 0;
     const mistakePenalty = mistakesRef.current * 30;
-    const finalScore = Math.min(10_000, Math.max(0, pairScore + speedBonus - mistakePenalty));
+    const finalScore = Math.max(0, pairScore + speedBonus - mistakePenalty);
     onGameEnd({
       score: finalScore,
       sessionId,

@@ -27,6 +27,7 @@ import {
 } from '@/services/referralService';
 import { DecodeRewardService, DecodeRewardStatus } from '@/services/decodeRewardService';
 import { SignatureWallRewardService } from '@/services/signatureWallRewardService';
+import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
 
@@ -52,6 +53,9 @@ export default function RewardsScreen() {
   const [decodeReward, setDecodeReward]           = useState<UserReward | null>(null);
   const [sigWallSigned, setSigWallSigned]         = useState(false);
   const [sigWallReward, setSigWallReward]         = useState<UserReward | null>(null);
+  const [dawenScoreReward, setDawenScoreReward]   = useState<UserReward | null>(null);
+  const [dawenScore, setDawenScore]               = useState<number>(0);
+  const [claimingDawenScore, setClaimingDawenScore] = useState(false);
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
@@ -98,8 +102,8 @@ export default function RewardsScreen() {
       }
       setReferrals(refs);
       setSigWallSigned(swSigned);
-      // Filter decode + signature_wall rewards out of generic list — shown in dedicated cards
-      setRewards(rwds.filter(r => r.reason !== 'decode_first_completion' && r.reason !== 'signature_wall'));
+      // Filter decode + signature_wall + dawen_score_15k rewards out of generic list — shown in dedicated cards
+      setRewards(rwds.filter(r => r.reason !== 'decode_first_completion' && r.reason !== 'signature_wall' && r.reason !== 'dawen_score_15k'));
       setDecodeStatus(dStatus);
       setDecodeReward(dReward);
 
@@ -113,6 +117,17 @@ export default function RewardsScreen() {
         setSigWallReward(swReward);
       }
       setStats({ totalReferrals: sts.totalReferrals, totalEarned: sts.totalEarned, unclaimedAmount: sts.unclaimedAmount });
+
+      // Load DAWEN score and any existing 15K score reward row
+      try {
+        const { data: statsRow } = await supabase
+          .from('user_stats').select('dawen_score')
+          .eq('wallet_address', activeAddress).maybeSingle();
+        const score = Number(statsRow?.dawen_score ?? 0);
+        setDawenScore(score);
+        const dsReward = rwds.find(r => r.reason === 'dawen_score_15k') ?? null;
+        setDawenScoreReward(dsReward);
+      } catch {}
     } catch (err: any) {
       console.error('[RewardsScreen] loadData error:', err);
       setLoadError(err?.message || 'Failed to load rewards data. Please try again.');
@@ -297,6 +312,36 @@ export default function RewardsScreen() {
       setSigWallReward(reward);
     }
     await handleClaimReward(reward);
+  };
+
+  // DAWEN Score 15K reward: create via RPC then claim
+  const handleDawenScoreClaim = async () => {
+    if (!activeAddress || claimingId || claimingDawenScore) return;
+    setClaimingDawenScore(true);
+    try {
+      const { data, error } = await supabase.rpc('create_dawen_score_reward', { p_wallet: activeAddress });
+      if (error || !data?.reward_id) {
+        setClaimMessage({ type: 'error', text: data?.reason === 'score_too_low' ? 'Your DAWEN Score is below 15,000.' : 'Could not create reward. Please try again.' });
+        setTimeout(() => setClaimMessage(null), 6000);
+        setClaimingDawenScore(false);
+        return;
+      }
+      // Fetch the reward row by ID
+      const { data: rewardRow } = await supabase
+        .from('user_rewards').select('*').eq('id', data.reward_id).maybeSingle();
+      setClaimingDawenScore(false);
+      if (!rewardRow) {
+        setClaimMessage({ type: 'error', text: 'Could not load reward. Please refresh and try again.' });
+        setTimeout(() => setClaimMessage(null), 6000);
+        return;
+      }
+      setDawenScoreReward(rewardRow as UserReward);
+      await handleClaimReward(rewardRow as UserReward);
+    } catch {
+      setClaimingDawenScore(false);
+      setClaimMessage({ type: 'error', text: 'Something went wrong. Please try again.' });
+      setTimeout(() => setClaimMessage(null), 6000);
+    }
   };
 
   // ── No wallet ──────────────────────────────────────────────────────────────
@@ -509,7 +554,7 @@ export default function RewardsScreen() {
             </TouchableOpacity>
           </View>
           {applySuccess && (
-            <Text style={styles.applySuccessText}>Referral applied successfully! Your 150 $DWORLD reward is ready to claim.</Text>
+            <Text style={styles.applySuccessText}>Referral applied successfully! Your 5,000 $DWORLD reward is ready to claim.</Text>
           )}
           {!!applyError && (
             <Text style={styles.applyError}>{applyError}</Text>
@@ -536,6 +581,18 @@ export default function RewardsScreen() {
             claimingId={claimingId}
             onClaim={handleSigWallClaim}
             onGoToWall={() => router.push('/signature-wall' as any)}
+          />
+        </View>
+
+        {/* 15K DAWEN Score Reward */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>15K DAWEN Score Reward</Text>
+          <DawenScoreRewardCard
+            dawenScore={dawenScore}
+            reward={dawenScoreReward}
+            claimingId={claimingId}
+            claiming={claimingDawenScore}
+            onClaim={handleDawenScoreClaim}
           />
         </View>
 
@@ -791,6 +848,112 @@ function SignatureWallRewardCard({ hasSigned, reward, claimingId, onClaim, onGoT
         )}
         {hasSigned && !isClaimed && (
           <Text style={[styles.failedText, { color: '#34D399' }]}>You signed the wall — claim your reward!</Text>
+        )}
+        {isClaimed && reward?.transaction_signature && (
+          <TouchableOpacity
+            onPress={() => {
+              const url = `https://solscan.io/tx/${reward.transaction_signature}`;
+              if (Platform.OS === 'web') {
+                (window as any).open(url, '_blank', 'noopener,noreferrer');
+              } else {
+                Linking.openURL(url).catch(() => {});
+              }
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 }}
+            activeOpacity={0.7}
+          >
+            <ExternalLink size={11} color={colors.primary} strokeWidth={2} />
+            <Text style={styles.txHash} numberOfLines={1}>
+              {reward.transaction_signature.slice(0, 18)}…
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {action}
+    </View>
+  );
+}
+
+// ── DAWEN Score 15K reward card ───────────────────────────────────────────────
+
+interface DawenScoreRewardCardProps {
+  dawenScore: number;
+  reward: UserReward | null;
+  claimingId: string | null;
+  claiming: boolean;
+  onClaim: () => void;
+}
+
+function DawenScoreRewardCard({ dawenScore, reward, claimingId, claiming, onClaim }: DawenScoreRewardCardProps) {
+  const THRESHOLD    = 15_000;
+  const isEligible   = dawenScore >= THRESHOLD;
+  const isClaimed    = reward?.status === 'sent';
+  const isFailed     = reward?.status === 'failed';
+  const isClaiming   = claiming || (reward ? claimingId === reward.id : false);
+  const accentColor  = '#F59E0B';
+  const pct          = Math.min(1, dawenScore / THRESHOLD);
+
+  const action = (() => {
+    if (isClaiming) {
+      return (
+        <View style={styles.claimedBadge}>
+          <ActivityIndicator size="small" color={accentColor} />
+        </View>
+      );
+    }
+    if (isClaimed) {
+      return (
+        <View style={styles.claimedBadge}>
+          <Check size={14} color={colors.success} />
+          <Text style={styles.claimedText}>Claimed</Text>
+        </View>
+      );
+    }
+    if (isEligible) {
+      return (
+        <TouchableOpacity
+          style={[styles.claimButton, { backgroundColor: accentColor }, !!claimingId && styles.claimButtonDisabled]}
+          onPress={onClaim}
+          disabled={!!claimingId}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.claimButtonText}>{isFailed ? 'Retry' : 'Claim'}</Text>
+        </TouchableOpacity>
+      );
+    }
+    return (
+      <View style={styles.claimedBadge}>
+        <Lock size={13} color={colors.textMuted} />
+        <Text style={[styles.claimedText, { color: colors.textMuted }]}>Locked</Text>
+      </View>
+    );
+  })();
+
+  return (
+    <View style={[styles.rewardCard, { borderColor: isEligible ? `rgba(245,158,11,0.35)` : colors.surfaceBorder }]}>
+      <View style={[styles.rewardIcon, { backgroundColor: isEligible ? 'rgba(245,158,11,0.12)' : colors.surface }]}>
+        <Star size={20} color={isEligible ? accentColor : colors.textMuted} fill={isEligible ? accentColor : 'none'} />
+      </View>
+      <View style={styles.rewardInfo}>
+        <Text style={styles.rewardType}>15K DAWEN Score Reward</Text>
+        <Text style={[styles.rewardAmount, { color: isEligible ? accentColor : colors.textMuted }]}>50,000 $DWORLD</Text>
+        {!isClaimed && (
+          <>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+              <View style={{ flex: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+                <View style={{ width: `${pct * 100}%`, height: '100%', backgroundColor: isEligible ? accentColor : '#4B5563', borderRadius: 2 }} />
+              </View>
+              <Text style={{ fontSize: 9, color: isEligible ? accentColor : colors.textMuted, fontWeight: '700' }}>
+                {dawenScore.toLocaleString()}/{THRESHOLD.toLocaleString()}
+              </Text>
+            </View>
+            {!isEligible && (
+              <Text style={styles.failedText}>Score {(THRESHOLD - dawenScore).toLocaleString()} more points to unlock</Text>
+            )}
+            {isEligible && !isClaimed && (
+              <Text style={[styles.failedText, { color: '#FCD34D' }]}>You reached 15K! Claim 50,000 $DWORLD.</Text>
+            )}
+          </>
         )}
         {isClaimed && reward?.transaction_signature && (
           <TouchableOpacity

@@ -10,7 +10,7 @@ export const ENTRY_AMOUNTS_SOL = [0.01, 0.05, 0.1] as const;
 export type EntrySol = (typeof ENTRY_AMOUNTS_SOL)[number];
 
 export const GAME_DURATION_MS = 60_000; // 1 minute (Dawen Rush)
-export const MAX_SCORE = 10_000;
+export const MAX_SCORE = 10_000_000; // No practical cap — save real scores
 export const PLAYER_LIVES = 3;
 
 // Scoring formula constants
@@ -50,5 +50,5 @@ export function computeScore(params: {
   const accuracy = orbsCollected / Math.max(1, totalSpawnedOrbs);
   const penalty = trapsHit * TRAP_PENALTY + obstaclesHit * OBSTACLE_PENALTY;
   const raw = (baseScore + comboBonus + survivalBonus) * accuracy - penalty;
-  return Math.min(MAX_SCORE, Math.max(0, Math.round(raw)));
+  return Math.max(0, Math.round(raw));
 }

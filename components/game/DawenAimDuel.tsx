@@ -113,7 +113,7 @@ export function DawenAimDuel({ seed, mode, onGameEnd }: Props) {
     const totalShotsAtempted = hitsRef.current + missesRef.current;
     const acc = totalShotsAtempted > 0 ? hitsRef.current / totalShotsAtempted : 0;
     const accBonus = Math.round(acc * 500);
-    const finalScore = Math.min(10_000, Math.max(0, scoreRef.current + accBonus));
+    const finalScore = Math.max(0, scoreRef.current + accBonus);
     onGameEnd({
       score: finalScore,
       sessionId,

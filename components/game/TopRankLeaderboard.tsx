@@ -40,10 +40,10 @@ const TEXT3         = '#60607A';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const TIMEFRAMES: { key: LeaderboardTimeframe; label: string }[] = [
+  { key: 'ALL', label: 'All Time' },
   { key: '24H', label: '24H' },
   { key: '7D',  label: '7D' },
   { key: '30D', label: '30D' },
-  { key: 'ALL', label: 'All Time' },
 ];
 
 interface CategoryDef {
@@ -510,6 +510,20 @@ export function TopRankLeaderboard() {
   }, [category, timeframe]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Realtime: re-fetch when game_results or user_stats change
+  useEffect(() => {
+    const channel = supabase
+      .channel('leaderboard-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_results' }, () => {
+        load(true);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_stats' }, () => {
+        load(true);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [load]);
 
   const onRefresh = () => { setRefreshing(true); load(true); };
 

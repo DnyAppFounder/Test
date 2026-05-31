@@ -167,7 +167,7 @@ export function DawenRunner({ seed, onGameEnd }: Props) {
     gs.ended = true;
     setPhase('ended');
     const survMs = gs.elapsed;
-    const total = Math.min(10_000, Math.max(0, Math.round(gs.score)));
+    const total = Math.max(0, Math.round(gs.score));
     onGameEnd({
       score: total, sessionId,
       survivalTimeMs: survMs,

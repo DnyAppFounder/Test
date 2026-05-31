@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight, Gift,
+  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight, Gift, ArrowLeft,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { DecodeRewardService } from '@/services/decodeRewardService';
@@ -566,6 +566,20 @@ function GameCitySection({ onSetFullscreen }: { onSetFullscreen?: (v: boolean) =
             entryAmountSol={entry?.entry_amount_sol}
           />
         )}
+        {/* Back button overlay — positioned top-left, above game content */}
+        <TouchableOpacity
+          style={[gameStyles.gameBackBtn, { top: Math.max(insets.top, 10) + 4 }]}
+          onPress={() => {
+            setStage('game_select');
+            setSelectedGame(null); setMode(null); setEntry(null);
+            setMatch(null); setResult(null); setGameSeed('');
+            onSetFullscreen?.(false);
+          }}
+          activeOpacity={0.75}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <ArrowLeft size={18} color="#FFFFFF" strokeWidth={2.5} />
+        </TouchableOpacity>
       </View>
     );
   }
@@ -690,6 +704,19 @@ const gameStyles = StyleSheet.create({
   arenaContainer: {
     flex: 1,
     paddingHorizontal: 4,
+  },
+  gameBackBtn: {
+    position: 'absolute',
+    left: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
   },
   scroll: { flex: 1 },
   scrollContent: {

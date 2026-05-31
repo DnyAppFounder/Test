@@ -229,7 +229,7 @@ export function Decode7Fragments({ seed, mode, matchId, onGameEnd }: Props) {
       ? Math.round(Math.max(0, (GAME_DURATION_MS - elapsed) / 1000) * 15)
       : 0;
     const mistakePenalty = mistakesRef.current * 20;
-    const finalScore = Math.min(10_000, Math.max(0, base + speedBonus - mistakePenalty));
+    const finalScore = Math.max(0, base + speedBonus - mistakePenalty);
 
     onGameEnd({
       score: finalScore,
