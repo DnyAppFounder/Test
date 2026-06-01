@@ -15,6 +15,27 @@ import { CrewService, CrewRole, CrewApplication, CrewApplicationTask, CrewTaskSt
 import VerificationBadge from '@/components/VerificationBadge';
 import { VerificationService } from '@/services/verificationService';
 
+function openLink(url: string) {
+  if (!url) return;
+  const href = url.startsWith('http') ? url : `https://${url}`;
+  if (Platform.OS === 'web') {
+    (window as any).open(href, '_blank', 'noopener,noreferrer');
+  } else {
+    Linking.openURL(href).catch(() => {});
+  }
+}
+
+function ProofLink({ link }: { link: string }) {
+  const isUrl = link.startsWith('http') || link.startsWith('www.') || link.includes('://');
+  if (!isUrl) return <Text style={styles.proofLink}>{link}</Text>;
+  return (
+    <TouchableOpacity onPress={() => openLink(link)} activeOpacity={0.7} style={styles.proofLinkRow}>
+      <ExternalLink size={11} color={colors.primary} strokeWidth={2} />
+      <Text style={[styles.proofLink, styles.proofLinkClickable]} numberOfLines={1}>{link}</Text>
+    </TouchableOpacity>
+  );
+}
+
 // ── Tab types ─────────────────────────────────────────────────────────────────
 
 type UserTab = 'overview' | 'roles' | 'apply' | 'my_application' | 'hierarchy' | 'members';
@@ -835,7 +856,7 @@ function AdminApplicationDetail({
   const [trialDays, setTrialDays] = useState('7');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const role = roles.find(r => r.role_key === app.role_key);
+  const [taskFeedback, setTaskFeedback] = useState<Record<string, string>>({});  const role = roles.find(r => r.role_key === app.role_key);
   const p = app.user_profiles;
   const displayName = p?.display_name || p?.username || 'Unknown';
   const walletShort = p?.wallet_address ? `${p.wallet_address.slice(0, 6)}…${p.wallet_address.slice(-4)}` : '';
@@ -905,8 +926,9 @@ function AdminApplicationDetail({
     setLoading(false);
   };
 
-  const reviewTask = async (taskId: string, st: 'approved' | 'rejected' | 'needs_changes') => {
-    await CrewService.adminReviewTask(taskId, st, reviewerId);
+  const reviewTask = async (taskId: string, st: 'approved' | 'rejected' | 'needs_changes', adminMsg?: string) => {
+    await CrewService.adminReviewTask(taskId, st, reviewerId, adminMsg);
+    setTaskFeedback(prev => { const n = { ...prev }; delete n[taskId]; return n; });
     onRefresh();
   };
 
@@ -1056,7 +1078,7 @@ function AdminApplicationDetail({
         <>
           <Text style={styles.detailSectionLabel}>Proof / Portfolio links</Text>
           {app.proof_links.map((link, i) => (
-            <Text key={i} style={styles.proofLink}>{link}</Text>
+            <ProofLink key={i} link={link} />
           ))}
         </>
       )}
@@ -1084,23 +1106,33 @@ function AdminApplicationDetail({
               ) : <Text style={styles.taskReviewNoProof}>No proof submitted yet.</Text>}
               {(task.proof_links ?? []).length > 0 && (
                 <View style={{ marginTop: 4 }}>
-                  {task.proof_links.map((l, i) => <Text key={i} style={styles.proofLink}>{l}</Text>)}
+                  {task.proof_links.map((l, i) => <ProofLink key={i} link={l} />)}
                 </View>
               )}
               {task.reviewed_at && (
                 <Text style={styles.taskReviewedMeta}>Reviewed {new Date(task.reviewed_at).toLocaleDateString()}</Text>
               )}
               {task.status !== 'approved' && (
-                <View style={styles.taskReviewActions}>
-                  <TouchableOpacity style={styles.taskApproveBtn} onPress={() => reviewTask(task.id, 'approved')} activeOpacity={0.8}>
-                    <Check size={12} color="#10B981" strokeWidth={2} /><Text style={styles.taskApproveBtnText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.taskRejectBtn} onPress={() => reviewTask(task.id, 'rejected')} activeOpacity={0.8}>
-                    <X size={12} color="#EF4444" strokeWidth={2} /><Text style={styles.taskRejectBtnText}>Reject</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.taskNeedsChangesBtn} onPress={() => reviewTask(task.id, 'needs_changes')} activeOpacity={0.8}>
-                    <AlertTriangle size={12} color="#F97316" strokeWidth={2} /><Text style={styles.taskNeedsChangesBtnText}>Changes</Text>
-                  </TouchableOpacity>
+                <View>
+                  <TextInput
+                    style={styles.taskFeedbackInput}
+                    placeholder="Optional feedback for applicant..."
+                    placeholderTextColor={colors.textMuted}
+                    value={taskFeedback[task.id] ?? ''}
+                    onChangeText={v => setTaskFeedback(prev => ({ ...prev, [task.id]: v }))}
+                    multiline
+                  />
+                  <View style={styles.taskReviewActions}>
+                    <TouchableOpacity style={styles.taskApproveBtn} onPress={() => reviewTask(task.id, 'approved')} activeOpacity={0.8}>
+                      <Check size={12} color="#10B981" strokeWidth={2} /><Text style={styles.taskApproveBtnText}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.taskRejectBtn} onPress={() => reviewTask(task.id, 'rejected', taskFeedback[task.id])} activeOpacity={0.8}>
+                      <X size={12} color="#EF4444" strokeWidth={2} /><Text style={styles.taskRejectBtnText}>Reject</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.taskNeedsChangesBtn} onPress={() => reviewTask(task.id, 'needs_changes', taskFeedback[task.id])} activeOpacity={0.8}>
+                      <AlertTriangle size={12} color="#F97316" strokeWidth={2} /><Text style={styles.taskNeedsChangesBtnText}>Changes</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
             </View>
@@ -1445,6 +1477,14 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
                   <StatusChip status={task.status as any} />
                 </View>
                 <Text style={styles.taskDesc}>{task.description}</Text>
+                {task.admin_message && (task.status === 'needs_changes' || task.status === 'rejected') && (
+                  <View style={styles.taskAdminFeedback}>
+                    <AlertTriangle size={12} color={task.status === 'needs_changes' ? '#F97316' : '#EF4444'} strokeWidth={2} />
+                    <Text style={[styles.taskAdminFeedbackText, { color: task.status === 'needs_changes' ? '#F97316' : '#EF4444' }]}>
+                      {task.admin_message}
+                    </Text>
+                  </View>
+                )}
                 {task.proof_text && task.status !== 'not_started' && (
                   <Text style={styles.taskSubmittedProof} numberOfLines={2}>{task.proof_text}</Text>
                 )}
@@ -2281,7 +2321,7 @@ export default function CrewPage() {
                       {(task.proof_links ?? []).length > 0 && (
                         <View style={styles.proofBlock}>
                           <Text style={styles.proofBlockLabel}>Proof links</Text>
-                          {task.proof_links.map((l, i) => <Text key={i} style={styles.proofLink}>{l}</Text>)}
+                          {task.proof_links.map((l, i) => <ProofLink key={i} link={l} />)}
                         </View>
                       )}
                       {task.reviewed_at && (
@@ -2792,10 +2832,25 @@ const styles = StyleSheet.create({
   answerText: { fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
   contactItem: { fontSize: 13, color: colors.textSecondary, marginBottom: 4 },
   proofLink: { fontSize: 12, color: colors.primary, marginBottom: 4 },
+  proofLinkRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  proofLinkClickable: { textDecorationLine: 'underline', flex: 1 },
+  taskAdminFeedback: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    backgroundColor: 'rgba(249,115,22,0.08)', borderRadius: 8,
+    padding: 8, marginTop: 6, marginBottom: 4,
+    borderWidth: 1, borderColor: 'rgba(249,115,22,0.25)',
+  },
+  taskAdminFeedbackText: { flex: 1, fontSize: 12, lineHeight: 17 },
   taskReviewCard: { backgroundColor: colors.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
   taskReviewHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   taskReviewTitle: { fontSize: 13, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: 8 },
   taskReviewProof: { fontSize: 12, color: colors.textSecondary, lineHeight: 17, marginBottom: 4 },
+  taskFeedbackInput: {
+    backgroundColor: colors.surfaceLight, borderRadius: 8, borderWidth: 1,
+    borderColor: colors.surfaceBorder, padding: 8, fontSize: 12,
+    color: colors.textPrimary, marginTop: 8, minHeight: 40,
+    textAlignVertical: 'top',
+  },
   taskReviewActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
   taskApproveBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 8, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(16,185,129,0.25)' },
   taskApproveBtnText: { fontSize: 12, fontWeight: '700', color: '#10B981' },

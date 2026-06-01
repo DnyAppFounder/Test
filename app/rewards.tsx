@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info, ShieldAlert } from 'lucide-react-native';
+import { ArrowLeft, Gift, Users, Coins, Copy, Check, Share2, Star, ExternalLink, Lock, Info, ShieldAlert, ShieldCheck } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useWallet } from '@/contexts/WalletContext';
 import { SecureWalletManager } from '@/lib/wallet/SecureWalletManager';
@@ -37,6 +37,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/theme';
 import { formatTokenAmount } from '@/lib/format';
+import { GetVerifiedModal } from '@/components/GetVerifiedModal';
 
 export default function RewardsScreen() {
   const router = useRouter();
@@ -65,6 +66,7 @@ export default function RewardsScreen() {
   const [claimingDawenScore, setClaimingDawenScore] = useState(false);
   const [creatingAta, setCreatingAta]               = useState(false);
   const [verificationStatus, setVerificationStatus] = useState<string>('verified');
+  const [showVerifyModal, setShowVerifyModal]       = useState(false);
   const [generatingCode, setGeneratingCode]       = useState(false);
   const [toast, setToast]                         = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [newRewardIds, setNewRewardIds]           = useState<Set<string>>(new Set());
@@ -320,6 +322,18 @@ export default function RewardsScreen() {
 
     // ATA_NOT_FOUND → create the token account (user pays rent) → retry once
     if (!result.success && (result as any).code === 'ATA_NOT_FOUND') {
+      // First check if the user has an in-app wallet with a mnemonic
+      const hasInAppWallet = await SecureWalletManager.getInstance().hasWallet();
+      if (!hasInAppWallet) {
+        setClaimingId(null);
+        setClaimMessage({
+          type: 'error',
+          text: 'A DWORLD token account needs to be created in your wallet. This requires an in-app DAWEN wallet (not an external wallet like Phantom). Please create or import a wallet in Settings.',
+        });
+        setTimeout(() => setClaimMessage(null), 12000);
+        return;
+      }
+
       setCreatingAta(true);
       try {
         const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
@@ -333,8 +347,8 @@ export default function RewardsScreen() {
         const msg = String(ataErr?.message || ataErr);
         if (msg.includes('INSUFFICIENT_SOL_FOR_ATA') || msg.includes('INSUFFICIENT_SOL')) {
           setClaimMessage({ type: 'error', text: 'You need a small amount of SOL to create your DWORLD token account and pay the network fee. Please add SOL and try again.' });
-        } else if (msg.includes('locked') || msg.includes('unlock')) {
-          setClaimMessage({ type: 'error', text: 'Wallet is locked. Please unlock your wallet and try again.' });
+        } else if (msg.includes('Failed to unlock wallet') || msg.includes('unlock')) {
+          setClaimMessage({ type: 'error', text: 'Could not unlock your DAWEN wallet. Please ensure your wallet is set up and try again.' });
         } else {
           setClaimMessage({ type: 'error', text: `Could not create DWORLD token account: ${msg.slice(0, 120)}` });
         }
@@ -549,10 +563,11 @@ export default function RewardsScreen() {
             {(verificationStatus === 'pending' || verificationStatus === 'flagged') && (
               <TouchableOpacity
                 style={styles.verifyAccountBtn}
-                onPress={() => router.push('/verify-account' as any)}
+                onPress={() => setShowVerifyModal(true)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.verifyAccountBtnText}>Verify Account</Text>
+                <ShieldCheck size={14} color="#fff" strokeWidth={2} />
+                <Text style={styles.verifyAccountBtnText}>Get Verified</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -805,11 +820,14 @@ export default function RewardsScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <GetVerifiedModal
+        visible={showVerifyModal}
+        onClose={() => setShowVerifyModal(false)}
+      />
     </View>
   );
 }
-
-// ── Decode reward card ────────────────────────────────────────────────────────
 
 interface DecodeRewardCardProps {
   status: DecodeRewardStatus | null;
@@ -1283,6 +1301,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   verifyAccountBtnText: {
     fontSize: 13,

@@ -44,6 +44,7 @@ import { colors, spacing, borderRadius, fontSize, elevation } from '@/constants/
 import { hashPin } from '@/lib/crypto/pinHash';
 import { ExportPrivateKeyModal } from '@/components/ExportPrivateKeyModal';
 import { AppGuideModal, clearAppGuideSeen } from '@/components/AppGuideModal';
+import { GetVerifiedModal } from '@/components/GetVerifiedModal';
 
 type SettingsModal = 'language' | 'profile' | 'accounts' | 'recovery' | 'help' | 'invite' | 'assistant' | 'notifications' | 'rewards' | 'verify' | 'premium' | 'pin' | null;
 
@@ -75,14 +76,6 @@ export default function SettingsScreen() {
   const [notifLoading, setNotifLoading] = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
-  // Blue badge verification (free 4-step)
-  const [verifyStatus, setVerifyStatus] = useState<{
-    followsDecent: boolean; followsBadge: boolean; followsDawenPulse: boolean; sentBlueDM: boolean;
-    alreadyVerified: boolean; decentId: string | null; badgeId: string | null; dawenPulseId: string | null; blueBadgeId: string | null;
-  } | null>(null);
-  const [verifyLoading, setVerifyLoading] = useState(false);
-  const [verifyChecking, setVerifyChecking] = useState(false);
-
   // Premium certification (paid)
   const [premiumTierKey, setPremiumTierKey] = useState<PremiumTierKey>('1m');
   const [premiumPayWith, setPremiumPayWith] = useState<'SOL' | 'DWORLD'>('SOL');
@@ -110,36 +103,6 @@ export default function SettingsScreen() {
   }, []);
 
   const usdToSol = (usd: number) => solUsdPrice > 0 ? usd / solUsdPrice : null;
-
-  const loadVerifyStatus = async () => {
-    if (!profile?.id) return;
-    setVerifyLoading(true);
-    try {
-      const status = await VerificationService.getVerificationStatus(profile.id);
-      setVerifyStatus(status);
-    } finally {
-      setVerifyLoading(false);
-    }
-  };
-
-  const handleCheckVerification = async () => {
-    if (!profile?.id) return;
-    setVerifyChecking(true);
-    try {
-      const granted = await VerificationService.checkAndGrantBasicVerification(profile.id);
-      if (granted) {
-        await refreshProfile();
-        const status = await VerificationService.getVerificationStatus(profile.id);
-        setVerifyStatus(status);
-      } else {
-        const status = await VerificationService.getVerificationStatus(profile.id);
-        setVerifyStatus(status);
-        Alert.alert('Not Yet Verified', 'Please complete all 4 steps first.');
-      }
-    } finally {
-      setVerifyChecking(false);
-    }
-  };
 
   const requestPremium = () => {
     setPremiumConfirmVisible(true);
@@ -417,7 +380,7 @@ export default function SettingsScreen() {
           icon: <Shield size={20} color="#3b82f6" />,
           label: 'Get Verified (Free)',
           value: (profile as any)?.verified_basic ? 'Verified' : undefined,
-          onPress: () => { loadVerifyStatus(); setActiveModal('verify'); },
+          onPress: () => setActiveModal('verify'),
         },
         {
           icon: <Shield size={20} color="#f59e0b" />,
@@ -998,140 +961,10 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
-      {/* Blue Badge Verification Modal (Free) */}
-      <Modal visible={activeModal === 'verify'} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { paddingBottom: 32 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Get Verified</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <X size={24} color={colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            {verifyLoading ? (
-              <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 40 }} />
-            ) : verifyStatus?.alreadyVerified ? (
-              <View style={{ alignItems: 'center', gap: 16, paddingVertical: 24 }}>
-                <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                  <Check size={36} color="#3b82f6" />
-                </View>
-                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.textPrimary }}>Already Verified!</Text>
-                <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center' }}>
-                  Your blue badge is active on your profile and posts.
-                </Text>
-                <TouchableOpacity style={{ backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 50, marginTop: 8 }} onPress={() => setActiveModal(null)}>
-                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Done</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 20, lineHeight: 18 }}>
-                  Complete all 4 steps below to receive your free blue verification badge.
-                </Text>
-
-                {/* Step 1 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsDecent ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsDecent ? '#3b82f6' : colors.surfaceBorder }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsDecent ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                    {verifyStatus?.followsDecent ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>1</Text>}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>Follow @Decent</Text>
-                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Follow the official Decent account</Text>
-                  </View>
-                  {verifyStatus?.decentId && (
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
-                      onPress={() => { setActiveModal(null); router.push(`/profile/${verifyStatus!.decentId}` as any); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.followsDecent ? 'Done' : 'Follow'}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Step 2 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsBadge ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsBadge ? '#3b82f6' : colors.surfaceBorder }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsBadge ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                    {verifyStatus?.followsBadge ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>2</Text>}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>Follow @VerificationBadge</Text>
-                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Follow the verification account</Text>
-                  </View>
-                  {verifyStatus?.badgeId && (
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
-                      onPress={() => { setActiveModal(null); router.push(`/profile/${verifyStatus!.badgeId}` as any); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.followsBadge ? 'Done' : 'Follow'}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Step 3 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.followsDawenPulse ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.followsDawenPulse ? '#3b82f6' : colors.surfaceBorder }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.followsDawenPulse ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                    {verifyStatus?.followsDawenPulse ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>3</Text>}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>Follow @DawenPulse</Text>
-                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Follow the official DawenPulse account</Text>
-                  </View>
-                  {verifyStatus?.dawenPulseId && (
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
-                      onPress={() => { setActiveModal(null); router.push(`/profile/${verifyStatus!.dawenPulseId}` as any); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.followsDawenPulse ? 'Done' : 'Follow'}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Step 4 */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12, backgroundColor: verifyStatus?.sentBlueDM ? 'rgba(59,130,246,0.08)' : colors.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: verifyStatus?.sentBlueDM ? '#3b82f6' : colors.surfaceBorder }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: verifyStatus?.sentBlueDM ? '#3b82f6' : 'rgba(59,130,246,0.15)', justifyContent: 'center', alignItems: 'center' }}>
-                    {verifyStatus?.sentBlueDM ? <Check size={16} color="#fff" strokeWidth={3} /> : <Text style={{ fontSize: 14, fontWeight: '800', color: '#3b82f6' }}>4</Text>}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>DM "Blue" to @BlueBadge</Text>
-                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>Send the message "Blue" to @BlueBadge</Text>
-                  </View>
-                  {verifyStatus?.blueBadgeId && (
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 }}
-                      onPress={() => { setActiveModal(null); router.push(`/chat/${verifyStatus!.blueBadgeId}` as any); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{verifyStatus?.sentBlueDM ? 'Done' : 'DM'}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                <TouchableOpacity
-                  style={{ backgroundColor: '#3b82f6', borderRadius: 14, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 8 }}
-                  onPress={handleCheckVerification}
-                  disabled={verifyChecking}
-                  activeOpacity={0.88}
-                >
-                  {verifyChecking
-                    ? <ActivityIndicator size="small" color="#fff" />
-                    : <Check size={18} color="#fff" />
-                  }
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: 0.5 }}>
-                    {verifyChecking ? 'Checking...' : 'CHECK & VERIFY'}
-                  </Text>
-                </TouchableOpacity>
-                <Text style={{ fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 10 }}>
-                  Verification is free. Make sure all 4 steps are completed before checking.
-                </Text>
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
+      <GetVerifiedModal
+        visible={activeModal === 'verify'}
+        onClose={() => setActiveModal(null)}
+      />
 
       {/* Change PIN Modal */}
       <Modal visible={activeModal === 'pin'} animationType="fade" transparent presentationStyle="overFullScreen">

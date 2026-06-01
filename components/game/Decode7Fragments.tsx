@@ -2,8 +2,7 @@ import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   useWindowDimensions,
-} from 'react-native';
-import { ArrowLeft } from 'lucide-react-native';
+} from 'react-native';import { ArrowLeft } from 'lucide-react-native';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import type { UnifiedGameResult } from '@/services/game/gameTypes';
 import type { GameMode } from './GameModeSelector';
@@ -331,7 +330,12 @@ export function Decode7Fragments({ seed, mode, matchId, onGameEnd, onBack }: Pro
     : `Puzzle ${puzzleId.split('-').pop()?.slice(-4).toUpperCase() ?? ''}`;
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.scrollContainer}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* HUD */}
       {phase === 'playing' && (
         <View style={styles.hud}>
@@ -465,12 +469,13 @@ export function Decode7Fragments({ seed, mode, matchId, onGameEnd, onBack }: Pro
           <Text style={styles.endSub}>Calculating score…</Text>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { alignItems: 'center', gap: spacing.sm },
+  scrollContainer: { flex: 1 },
+  container: { alignItems: 'center', gap: spacing.sm, paddingBottom: 32 },
   hud: {
     flexDirection: 'row',
     gap: spacing.md,
