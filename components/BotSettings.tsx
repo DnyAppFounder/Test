@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ActivityIndicator, Modal, ScrollView, Switch, Platform,
+  ActivityIndicator, Modal, ScrollView, Switch, Platform, Image,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import {
   X, Bot, Link, Copy, RefreshCw, Trash2, Send, Plus, Radio,
   TriangleAlert as AlertTriangle, CircleCheck as CheckCircle,
-  ChevronDown, ChevronUp, Settings, Unlink, Zap, MessageSquare,
+  ChevronDown, ChevronUp, Settings, Unlink, Zap, MessageSquare, Camera,
 } from 'lucide-react-native';
 import { colors, spacing, fontSize, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -90,6 +91,8 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
   const [savingInternal, setSavingInternal] = useState(false);
   const [internalBotName, setInternalBotName] = useState('');
   const [internalEnabled, setInternalEnabled] = useState(true);
+  const [internalBotAvatar, setInternalBotAvatar] = useState<string | null>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [editingCommand, setEditingCommand] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [savingCommand, setSavingCommand] = useState(false);
@@ -126,6 +129,9 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
   const [tgBroadcastText, setTgBroadcastText] = useState('');
   const [tgBroadcasting, setTgBroadcasting] = useState(false);
   const [tgBroadcastResult, setTgBroadcastResult] = useState('');
+  const [tgTargetBroadcastText, setTgTargetBroadcastText] = useState('');
+  const [tgTargetBroadcasting, setTgTargetBroadcasting] = useState(false);
+  const [tgTargetBroadcastResult, setTgTargetBroadcastResult] = useState('');
 
   useEffect(() => {
     if (visible) {
@@ -153,9 +159,11 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
         setCommands(iRes.commands ?? []);
         setInternalBotName(iRes.bot.bot_name);
         setInternalEnabled(iRes.bot.is_enabled);
+        setInternalBotAvatar(iRes.bot.bot_avatar_url ?? null);
       } else {
         setInternalBot(null);
         setCommands([]);
+        setInternalBotAvatar(null);
       }
 
       // Load Telegram bot
@@ -240,6 +248,45 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
+  const handlePickBotAvatar = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setUploadingAvatar(true);
+    try {
+      const ext = asset.uri.split('.').pop() ?? 'jpg';
+      const path = `bot-avatars/${groupId}/${Date.now()}.${ext}`;
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+      const { error: uploadErr } = await supabase.storage
+        .from('avatars')
+        .upload(path, blob, { contentType: asset.mimeType ?? 'image/jpeg', upsert: true });
+      if (uploadErr) return;
+      const { data: publicData } = supabase.storage.from('avatars').getPublicUrl(path);
+      if (publicData?.publicUrl) {
+        setInternalBotAvatar(publicData.publicUrl);
+        if (internalBot) {
+          await callInternalBot('upsert', {
+            group_id: groupId,
+            wallet_address: walletAddress,
+            bot_name: internalBotName || internalBot.bot_name,
+            is_enabled: internalEnabled,
+            bot_avatar_url: publicData.publicUrl,
+          });
+          setInternalBot(prev => prev ? { ...prev, bot_avatar_url: publicData.publicUrl } : prev);
+          flash('Bot avatar updated.');
+        }
+      }
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
   // ── Internal bot handlers ───────────────────────────────────────────────────
 
   const handleSaveInternalBot = async () => {
@@ -251,6 +298,7 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
         wallet_address: walletAddress,
         bot_name: internalBotName.trim() || 'DAWEN Bot',
         is_enabled: internalEnabled,
+        bot_avatar_url: internalBotAvatar ?? null,
       });
       if (res.success) {
         setInternalBot(res.bot);
@@ -264,12 +312,12 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
 
   const handleToggleInternalBot = async (val: boolean) => {
     setInternalEnabled(val);
-    if (!internalBot) return;
     await callInternalBot('upsert', {
       group_id: groupId,
       wallet_address: walletAddress,
-      bot_name: internalBot.bot_name,
+      bot_name: internalBotName || internalBot?.bot_name || 'DAWEN Bot',
       is_enabled: val,
+      bot_avatar_url: internalBotAvatar ?? null,
     });
   };
 
@@ -555,6 +603,30 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
     }
   };
 
+  const handleTgTargetBroadcast = async () => {
+    if (!tgTargetBroadcastText.trim() || tgTargetBroadcasting) return;
+    setTgTargetBroadcasting(true);
+    setTgTargetBroadcastResult('');
+    try {
+      const res = await callTelegramBot('broadcast_to_targets', {
+        group_id: groupId,
+        wallet_address: walletAddress,
+        message: tgTargetBroadcastText.trim(),
+      });
+      if (res.success) {
+        const detail = res.failed > 0 ? ` (${res.failed} failed)` : '';
+        setTgTargetBroadcastResult(`Sent to ${res.sent} target${res.sent !== 1 ? 's' : ''}${detail}.`);
+        setTgTargetBroadcastText('');
+      } else {
+        setTgTargetBroadcastResult(res.error || 'Failed to send');
+      }
+    } catch {
+      setTgTargetBroadcastResult('Network error');
+    } finally {
+      setTgTargetBroadcasting(false);
+    }
+  };
+
   // ── Derived values ──────────────────────────────────────────────────────────
 
   const linkCodeExpiry = linkCode ? new Date(linkCode.expires_at) : null;
@@ -621,6 +693,9 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
                 onToggle={handleToggleInternalBot}
                 onSave={handleSaveInternalBot}
                 saving={savingInternal}
+                botAvatarUrl={internalBotAvatar}
+                uploadingAvatar={uploadingAvatar}
+                onPickAvatar={handlePickBotAvatar}
                 editingCommand={editingCommand}
                 editText={editText}
                 setEditText={setEditText}
@@ -686,6 +761,11 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
                 broadcasting={tgBroadcasting}
                 broadcastResult={tgBroadcastResult}
                 onBroadcast={handleTgBroadcast}
+                targetBroadcastText={tgTargetBroadcastText}
+                setTargetBroadcastText={setTgTargetBroadcastText}
+                targetBroadcasting={tgTargetBroadcasting}
+                targetBroadcastResult={tgTargetBroadcastResult}
+                onTargetBroadcast={handleTgTargetBroadcast}
               />
             )}
           </ScrollView>
@@ -723,6 +803,7 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
 
 function InternalBotTab({
   isAdmin, bot, commands, botName, setBotName, enabled, onToggle, onSave, saving,
+  botAvatarUrl, uploadingAvatar, onPickAvatar,
   editingCommand, editText, setEditText, onEditCommand, onSaveCommand, savingCommand, onCancelEdit, onToggleCommand,
   broadcastText, setBroadcastText, onBroadcast, broadcasting, broadcastResult,
   groupId, walletAddress, callInternalBot,
@@ -751,6 +832,27 @@ function InternalBotTab({
               trackColor={{ false: 'rgba(255,255,255,0.1)', true: 'rgba(59,130,246,0.45)' }}
               thumbColor={enabled ? colors.primary : '#555'}
             />
+          </View>
+
+          {/* Bot Avatar */}
+          <Text style={styles.fieldLabel}>Bot Avatar</Text>
+          <View style={styles.avatarRow}>
+            <TouchableOpacity onPress={onPickAvatar} activeOpacity={0.8} disabled={uploadingAvatar} style={styles.avatarWrap}>
+              {botAvatarUrl ? (
+                <Image source={{ uri: botAvatarUrl }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Bot size={22} color={colors.textMuted} strokeWidth={2} />
+                </View>
+              )}
+              <View style={styles.avatarCamOverlay}>
+                {uploadingAvatar
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Camera size={12} color="#fff" strokeWidth={2} />
+                }
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.avatarHint}>Tap to change the bot's avatar image.</Text>
           </View>
 
           <Text style={styles.fieldLabel}>Bot Name</Text>
@@ -889,6 +991,7 @@ function TelegramTab({
   addTargetInput, setAddTargetInput, addingTarget, targetError, onAddTarget, onRemoveTarget,
   testBotRunning, testBotResult, onTestBot,
   broadcastText, setBroadcastText, broadcasting, broadcastResult, onBroadcast,
+  targetBroadcastText, setTargetBroadcastText, targetBroadcasting, targetBroadcastResult, onTargetBroadcast,
 }: any) {
   return (
     <View>
@@ -1207,7 +1310,7 @@ function TelegramTab({
                 </View>
               )}
 
-              {/* Telegram broadcast */}
+              {/* Telegram broadcast to linked users */}
               <Text style={styles.sectionLabel}>Broadcast to Linked Users</Text>
               <Text style={styles.sectionHint}>Send a DM to all Telegram users linked to this group.</Text>
               <TextInput
@@ -1232,6 +1335,33 @@ function TelegramTab({
               >
                 {broadcasting ? <ActivityIndicator size="small" color="#fff" /> : <Send size={13} color="#fff" strokeWidth={2} />}
                 <Text style={styles.primaryBtnText}>Broadcast</Text>
+              </TouchableOpacity>
+
+              {/* Broadcast to Telegram Targets */}
+              <Text style={styles.sectionLabel}>Broadcast to Telegram Targets</Text>
+              <Text style={styles.sectionHint}>Send a message directly to all configured Telegram channels and groups.</Text>
+              <TextInput
+                style={styles.broadcastInput}
+                placeholder="Type a message..."
+                placeholderTextColor={colors.textMuted}
+                value={targetBroadcastText}
+                onChangeText={setTargetBroadcastText}
+                multiline
+                maxLength={1000}
+              />
+              {targetBroadcastResult ? (
+                <Text style={[styles.broadcastResult, targetBroadcastResult.startsWith('Sent') ? styles.broadcastOk : styles.broadcastErr]}>
+                  {targetBroadcastResult}
+                </Text>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.primaryBtn, (!targetBroadcastText.trim() || targetBroadcasting || targets.length === 0) && styles.btnDisabled]}
+                onPress={onTargetBroadcast}
+                activeOpacity={0.8}
+                disabled={!targetBroadcastText.trim() || targetBroadcasting || targets.length === 0}
+              >
+                {targetBroadcasting ? <ActivityIndicator size="small" color="#fff" /> : <Radio size={13} color="#fff" strokeWidth={2} />}
+                <Text style={styles.primaryBtnText}>Send to Targets</Text>
               </TouchableOpacity>
 
               {/* Disconnect */}
@@ -1365,6 +1495,25 @@ const styles = S({
   },
   sectionCardTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary, marginBottom: 4 },
   sectionCardSub: { fontSize: 12, color: colors.textMuted, lineHeight: 17 },
+
+  // Avatar
+  avatarRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: spacing.md },
+  avatarWrap: { position: 'relative', width: 56, height: 56 },
+  avatarImg: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.05)' },
+  avatarPlaceholder: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarCamOverlay: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#0F0F18',
+  },
+  avatarHint: { fontSize: 12, color: colors.textMuted, flex: 1, lineHeight: 17 },
 
   // Fields
   fieldLabel: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: 6, marginTop: spacing.sm },

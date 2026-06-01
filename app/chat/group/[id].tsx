@@ -22,6 +22,9 @@ import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, 
 import BotSettings from '@/components/BotSettings';
 import BotEngineSettings from '@/components/bots/BotEngineSettings';
 import { processMessage } from '@/services/botEngineService';
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -162,7 +165,8 @@ export default function GroupChatScreen() {
         filter: `group_id=eq.${groupId}`,
       }, async (payload) => {
         const raw = payload.new as any;
-        if (raw.sender_id === profile.id) return;
+        // Never skip bot responses even if sender_id matches current user
+        if (raw.sender_id === profile.id && !raw.is_bot_message) return;
         const sender = await SocialService.getProfile(raw.sender_id);
         const newMsg = { ...raw, sender };
         setMessages(prev => {
@@ -248,7 +252,11 @@ export default function GroupChatScreen() {
     try {
       const ok = await SocialService.sendGroupMessageFull(groupId, profile.id, text, activeTopic?.id);
       if (ok) {
-        // Fire-and-forget: let the bot engine process the message; realtime picks up responses
+        const cmdBody = JSON.stringify({ group_id: groupId, sender_id: profile.id, content: text });
+        const hdr = { 'Content-Type': 'application/json', Authorization: `Bearer ${ANON_KEY}`, Apikey: ANON_KEY };
+        // Trigger internal DAWEN bot (simple command handler)
+        fetch(`${SUPABASE_URL}/functions/v1/internal-bot?action=process_command`, { method: 'POST', headers: hdr, body: cmdBody }).catch(() => {});
+        // Trigger advanced bot engine (multi-bot system)
         processMessage(groupId, '', text, profile.id).catch(() => {});
       }
     } catch {
@@ -575,7 +583,9 @@ export default function GroupChatScreen() {
             <View style={styles.avatarCol}>
               {showSenderInfo ? (
                 <View style={styles.msgAvatar}>
-                  {item.sender?.avatar_url ? (
+                  {isBot && item.bot_avatar_url ? (
+                    <Image source={{ uri: item.bot_avatar_url }} style={styles.msgAvatarImg} />
+                  ) : !isBot && item.sender?.avatar_url ? (
                     <Image source={{ uri: item.sender.avatar_url }} style={styles.msgAvatarImg} />
                   ) : (
                     <User size={14} color={colors.textMuted} />

@@ -235,37 +235,52 @@ Deno.serve(async (req: Request) => {
 
       const { data: botRecord } = await supabase
         .from("group_telegram_bots").select("id, status").eq("group_id", group_id).maybeSingle();
-      if (!botRecord) return json({ success: false, error: "No connected bot found" }, 404);
+      if (!botRecord) return json({ success: false, error: "No connected bot found. Connect a bot first." }, 404);
 
       const token = await getBotToken(supabase, botRecord.id);
       if (!token) return json({ success: false, error: "Bot token not found" }, 500);
 
-      // Validate the chat by calling Telegram's getChat
-      const chatIdNum = typeof chat_id === "string" ? chat_id : String(chat_id);
+      // Accept @username strings or numeric IDs.
+      // Numeric IDs for supergroups/channels start with -100 prefix.
+      const rawId = String(chat_id).trim();
+      const isUsername = rawId.startsWith("@");
+
+      // Validate through Telegram getChat — works for both @username and numeric IDs
       const chatRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatIdNum }),
+        body: JSON.stringify({ chat_id: rawId }),
       });
       const chatData = await chatRes.json();
 
       if (!chatData.ok) {
+        const desc = chatData.description || "Chat not found";
+        let hint = "";
+        if (desc.toLowerCase().includes("not found") || desc.toLowerCase().includes("chat not found")) {
+          hint = isUsername
+            ? ` Make sure the bot is added as an admin to the channel/group first, then try again.`
+            : ` If using a private channel or group, make sure the bot is an admin. Private chat IDs look like -1001234567890.`;
+        }
         return json({
           success: false,
-          error: `Cannot access chat: ${chatData.description || "Chat not found. Make sure the bot is a member/admin of this chat."}`,
+          error: `${desc}.${hint}`,
+          hint: "For public channels/groups use @username. For private chats use the numeric ID (e.g. -1001234567890). The bot must be an admin of the chat.",
         }, 400);
       }
 
       const chat = chatData.result;
-      const resolvedName = chat_name?.trim() || chat.title || chat.username || String(chat_id);
+      const resolvedName = chat_name?.trim() || chat.title || chat.username || rawId;
       const resolvedType = chat.type === "channel" ? "channel"
         : chat.type === "supergroup" ? "supergroup" : "group";
+
+      // Use the resolved numeric chat ID from Telegram (not the @username input)
+      const resolvedChatId = BigInt(chat.id);
 
       const { data: target, error: insertErr } = await supabase
         .from("telegram_bot_targets")
         .upsert({
           bot_record_id: botRecord.id,
-          chat_id: BigInt(chatIdNum),
+          chat_id: resolvedChatId,
           chat_name: resolvedName,
           chat_type: resolvedType,
           is_enabled: true,
@@ -388,6 +403,56 @@ Deno.serve(async (req: Request) => {
 
       const allGood = results.token_valid && results.webhook_set && results.webhook_correct && results.dawen_group_connected;
       return json({ success: true, all_ok: allGood, results });
+    }
+
+    // ── broadcast_to_targets — send a message to all enabled Telegram targets ──
+    if (action === "broadcast_to_targets") {
+      const { group_id, wallet_address, message } = await req.json();
+      if (!group_id || !wallet_address || !message?.trim()) {
+        return json({ success: false, error: "group_id, wallet_address, and message required" }, 400);
+      }
+
+      const { ok } = await verifyAdmin(supabase, group_id, wallet_address);
+      if (!ok) return json({ success: false, error: "Admin access required" }, 403);
+
+      const { data: botRecord } = await supabase
+        .from("group_telegram_bots").select("id, status").eq("group_id", group_id).maybeSingle();
+      if (!botRecord) return json({ success: false, error: "No connected bot found" }, 404);
+      if (botRecord.status !== "connected") return json({ success: false, error: "Bot is disabled. Enable it first." }, 400);
+
+      const token = await getBotToken(supabase, botRecord.id);
+      if (!token) return json({ success: false, error: "Bot token not found" }, 500);
+
+      const { data: targets } = await supabase
+        .from("telegram_bot_targets")
+        .select("chat_id, chat_name")
+        .eq("bot_record_id", botRecord.id)
+        .eq("is_enabled", true);
+
+      if (!targets?.length) {
+        return json({ success: false, error: "No enabled Telegram targets found. Add a channel or group target first." }, 404);
+      }
+
+      let sent = 0;
+      let failed = 0;
+      const errors: string[] = [];
+
+      await Promise.all(targets.map(async (t) => {
+        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: String(t.chat_id), text: message.trim() }),
+        }).catch(() => null);
+        const tgData = await tgRes?.json().catch(() => null);
+        if (tgData?.ok) {
+          sent++;
+        } else {
+          failed++;
+          errors.push(`${t.chat_name}: ${tgData?.description || "failed"}`);
+        }
+      }));
+
+      return json({ success: true, sent, failed, errors });
     }
 
     // ── list_targets ──────────────────────────────────────────────────────────

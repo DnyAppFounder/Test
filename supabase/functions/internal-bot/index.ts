@@ -192,6 +192,88 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, message: msg });
     }
 
+    // ── process_command — called after every group message to detect commands ──
+    if (action === "process_command") {
+      const { group_id, sender_id, content } = body;
+      if (!group_id || !sender_id || !content?.trim()) {
+        return json({ success: true, handled: false });
+      }
+
+      const text = (content as string).trim();
+      if (!text.startsWith("/")) return json({ success: true, handled: false });
+
+      const { data: bot } = await supabase
+        .from("dawen_group_bots")
+        .select("id, bot_name, bot_avatar_url, is_enabled")
+        .eq("group_id", group_id)
+        .maybeSingle();
+
+      if (!bot?.is_enabled) return json({ success: true, handled: false });
+
+      const withoutSlash = text.slice(1);
+      const cmdName = withoutSlash.split(/\s+/)[0].toLowerCase();
+
+      // Look up stored command
+      const { data: cmd } = await supabase
+        .from("dawen_bot_commands")
+        .select("command, response_text, is_enabled")
+        .eq("group_bot_id", bot.id)
+        .eq("command", cmdName)
+        .maybeSingle();
+
+      if (cmd && !cmd.is_enabled) return json({ success: true, handled: false });
+
+      let responseText = "";
+
+      if (cmd?.response_text) {
+        responseText = cmd.response_text;
+      } else {
+        // Built-in fallback commands
+        switch (cmdName) {
+          case "start":
+            responseText = `Welcome to this group! Type /help to see available commands.`;
+            break;
+          case "ping":
+            responseText = "Pong!";
+            break;
+          case "help":
+            responseText = "Available commands:\n/help — Show this help\n/rules — Community rules\n/links — Official links\n/rewards — $DAWORLD info\n/invite — Group invite link";
+            break;
+          case "invite": {
+            const { data: invite } = await supabase
+              .from("group_invites")
+              .select("invite_code")
+              .eq("group_id", group_id)
+              .is("expires_at", null)
+              .maybeSingle();
+            responseText = invite?.invite_code
+              ? `Invite link: https://dawen.app/chat/group/invite/${invite.invite_code}`
+              : "No invite link available. Ask an admin to generate one.";
+            break;
+          }
+          default:
+            return json({ success: true, handled: false });
+        }
+      }
+
+      const { data: msg, error: msgErr } = await supabase
+        .from("group_messages")
+        .insert({
+          group_id,
+          sender_id,
+          content: responseText,
+          is_bot_message: true,
+          bot_name: bot.bot_name,
+          bot_username: "dawen_bot",
+          bot_avatar_url: bot.bot_avatar_url || null,
+        })
+        .select()
+        .single();
+
+      if (msgErr) return json({ success: false, error: msgErr.message }, 500);
+      return json({ success: true, handled: true, message: msg });
+    }
+
     // ── get_invite_link — generate and return a group invite link ─────────────
     if (action === "get_invite_link") {
       const { group_id } = body;
