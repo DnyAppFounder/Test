@@ -10,25 +10,42 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// Official DAWEN links
 const DAWEN_APP     = "https://dawen.app/";
 const DAWEN_X       = "https://x.com/willoffd_";
 const DAWEN_TG      = "https://t.me/WillOfDCrew";
 const DAWEN_DISCORD = "https://discord.gg/AvNV9mDy3";
 
-// Cooldown durations in seconds
-const COOLDOWN_NOT_LINKED_SEC = 10 * 60; // 10 minutes
-const COOLDOWN_SETUP_SEC      = 60 * 60; // 1 hour
+const COOLDOWN_NOT_LINKED_SEC = 10 * 60;
+const COOLDOWN_SETUP_SEC      = 60 * 60;
 
-// In-memory conversation state per "chatId:userId" — survives within one isolate
-const conversationState = new Map<string, {
-  step: "await_post_text" | "await_post_media" | "confirm_post" | "await_announce_text" | "confirm_announce";
+// ── Conversation state ────────────────────────────────────────────────────────
+// Supports multi-step /post and /announce with destination selection.
+// States:
+//   await_announce_text -> select_announce_dest -> confirm_announce
+//   await_post_text -> await_post_media -> select_post_dest -> confirm_post
+
+type ConvStep =
+  | "await_post_text"
+  | "await_post_media"
+  | "select_post_dest"
+  | "confirm_post"
+  | "await_announce_text"
+  | "select_announce_dest"
+  | "confirm_announce";
+
+interface ConvState {
+  step: ConvStep;
   postText?: string;
   postMedia?: string;
   announceText?: string;
-  groupId?: string;
-  dawnUserId?: string;
-}>();
+  groupId: string;
+  dawenUserId: string;
+  // destination list presented to user: array of { label, type, id }
+  destinations?: Array<{ label: string; type: "dawen_group" | "dawen_pulse" | "telegram_target"; id: string }>;
+  selectedDest?: number; // 1-based index
+}
+
+const conversationState = new Map<string, ConvState>();
 
 function db() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
@@ -114,7 +131,6 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── Only process message updates ─────────────────────────────────────────────
     const message = update.message;
     if (!message) {
       return new Response("ok", { status: 200 });
@@ -126,17 +142,14 @@ Deno.serve(async (req: Request) => {
     const isPrivate = message.chat?.type === "private";
     const isGroup = message.chat?.type === "group" || message.chat?.type === "supergroup";
 
-    // In group chats, only respond to commands to avoid chat spam
     if (isGroup && !text.startsWith("/")) {
       return new Response("ok", { status: 200 });
     }
 
     const stateKey = `${chatId}:${fromId}`;
-
-    // Extract the base command (strips @botname suffix and subcommands)
     const cmd = text.split(" ")[0].split("@")[0].toLowerCase();
 
-    // ── /link CODE — always allowed, no auth required ─────────────────────────
+    // ── /link CODE ────────────────────────────────────────────────────────────
     if (cmd === "/link") {
       const code = text.slice(text.indexOf(" ") + 1).trim().toUpperCase();
       if (!code || code === "/LINK") {
@@ -149,7 +162,7 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /start — free command ─────────────────────────────────────────────────
+    // ── /start ────────────────────────────────────────────────────────────────
     if (cmd === "/start") {
       const linkSection = isPrivate
         ? `\n\nTo link your Telegram account:\n1. Open the DAWEN app\n2. Go to Group Settings \u2192 Bots \u2192 Telegram Bot\n3. Tap <b>Generate Link Code</b>\n4. Send <code>/link DAWEN-XXXXXX</code> here`
@@ -161,7 +174,7 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /help — free command ──────────────────────────────────────────────────
+    // ── /help ─────────────────────────────────────────────────────────────────
     if (cmd === "/help") {
       await sendMessage(botToken, chatId,
         `<b>DAWEN Bot Commands</b>\n\n` +
@@ -177,14 +190,14 @@ Deno.serve(async (req: Request) => {
         `<b>Admin only:</b>\n` +
         `/setup \u2014 Bot setup guide\n` +
         `/settings \u2014 Bot configuration\n` +
-        `/announce \u2014 Send announcement to DAWEN group\n` +
-        `/post \u2014 Create DAWEN Pulse post`,
+        `/announce \u2014 Post announcement to a destination\n` +
+        `/post \u2014 Publish to DAWEN Pulse`,
         "HTML"
       );
       return new Response("ok", { status: 200 });
     }
 
-    // ── /links — free command ─────────────────────────────────────────────────
+    // ── /links ────────────────────────────────────────────────────────────────
     if (cmd === "/links") {
       const linksText = typeof botSettings.links_message === "string" && botSettings.links_message.trim()
         ? botSettings.links_message.trim()
@@ -193,13 +206,13 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /app — free command ───────────────────────────────────────────────────
+    // ── /app ──────────────────────────────────────────────────────────────────
     if (cmd === "/app") {
       await sendMessage(botToken, chatId, `DAWEN App: ${DAWEN_APP}`);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /rewards — free command ───────────────────────────────────────────────
+    // ── /rewards ──────────────────────────────────────────────────────────────
     if (cmd === "/rewards") {
       const rewardsText = typeof botSettings.rewards_message === "string" && botSettings.rewards_message.trim()
         ? botSettings.rewards_message.trim()
@@ -212,17 +225,16 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /rules — free command ─────────────────────────────────────────────────
+    // ── /rules ────────────────────────────────────────────────────────────────
     if (cmd === "/rules") {
       const rulesText = typeof botSettings.rules_message === "string" && botSettings.rules_message.trim()
         ? botSettings.rules_message.trim()
-        : await getGroupBotCommandResponse(supabase, dawenGroupId, "rules") ??
-          `DAWEN Community Rules:\n\n- Be respectful to all members\n- No spam or self-promotion\n- No price manipulation or misleading information\n- No NSFW content\n- Follow Telegram's Terms of Service\n\nViolations may result in removal.`;
+        : `DAWEN Community Rules:\n\n- Be respectful to all members\n- No spam or self-promotion\n- No price manipulation or misleading information\n- No NSFW content\n- Follow Telegram's Terms of Service\n\nViolations may result in removal.`;
       await sendMessage(botToken, chatId, rulesText);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /setup — free command ─────────────────────────────────────────────────
+    // ── /setup ────────────────────────────────────────────────────────────────
     if (cmd === "/setup") {
       await sendMessage(botToken, chatId,
         `DAWEN Bot Setup\n\n` +
@@ -333,7 +345,7 @@ Deno.serve(async (req: Request) => {
     const isCreator = groupRow?.creator_id === dawenUserId;
     const isAdmin = memberRow?.role === "admin" || memberRow?.role === "creator" || isCreator;
 
-    // ── /settings (admin only) ────────────────────────────────────────────────
+    // ── /settings ────────────────────────────────────────────────────────────
     if (cmd === "/settings") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can access bot settings.");
@@ -348,29 +360,7 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /announce (admin only) ────────────────────────────────────────────────
-    if (cmd === "/announce") {
-      if (!isAdmin) {
-        await sendMessage(botToken, chatId, "Only group admins can send announcements.");
-        return new Response("ok", { status: 200 });
-      }
-      conversationState.set(stateKey, { step: "await_announce_text", groupId: dawenGroupId, dawnUserId: dawenUserId });
-      await sendMessage(botToken, chatId, "Send your announcement text, or /cancel to abort.");
-      return new Response("ok", { status: 200 });
-    }
-
-    // ── /post (admin only) ────────────────────────────────────────────────────
-    if (cmd === "/post") {
-      if (!isAdmin) {
-        await sendMessage(botToken, chatId, "Only group admins can publish posts via bot.");
-        return new Response("ok", { status: 200 });
-      }
-      conversationState.set(stateKey, { step: "await_post_text", groupId: dawenGroupId, dawnUserId: dawenUserId });
-      await sendMessage(botToken, chatId, "Send the post text, or /cancel to abort.");
-      return new Response("ok", { status: 200 });
-    }
-
-    // ── /mute, /ban, /unban (admin only, coming soon) ─────────────────────────
+    // ── /mute, /ban, /unban ───────────────────────────────────────────────────
     if (cmd === "/mute" || cmd === "/ban" || cmd === "/unban") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can use moderation commands.");
@@ -380,97 +370,158 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
+    // ── /cancel ───────────────────────────────────────────────────────────────
+    if (cmd === "/cancel") {
+      if (conversationState.has(stateKey)) {
+        conversationState.delete(stateKey);
+        await sendMessage(botToken, chatId, "Cancelled.");
+      }
+      return new Response("ok", { status: 200 });
+    }
+
+    // ── /announce (admin only) ────────────────────────────────────────────────
+    if (cmd === "/announce") {
+      if (!isAdmin) {
+        await sendMessage(botToken, chatId, "Only group admins can send announcements.");
+        return new Response("ok", { status: 200 });
+      }
+      conversationState.set(stateKey, {
+        step: "await_announce_text",
+        groupId: dawenGroupId,
+        dawenUserId,
+      });
+      await sendMessage(botToken, chatId,
+        "Send your announcement text.\n\n/cancel to abort."
+      );
+      return new Response("ok", { status: 200 });
+    }
+
+    // ── /post (admin only) ────────────────────────────────────────────────────
+    if (cmd === "/post") {
+      if (!isAdmin) {
+        await sendMessage(botToken, chatId, "Only group admins can publish posts via bot.");
+        return new Response("ok", { status: 200 });
+      }
+      conversationState.set(stateKey, {
+        step: "await_post_text",
+        groupId: dawenGroupId,
+        dawenUserId,
+      });
+      await sendMessage(botToken, chatId,
+        "Send the post text.\n\n/cancel to abort."
+      );
+      return new Response("ok", { status: 200 });
+    }
+
     // ── Conversation flow state machine ───────────────────────────────────────
     const state = conversationState.get(stateKey);
 
     if (state) {
-      if (cmd === "/cancel") {
-        conversationState.delete(stateKey);
-        await sendMessage(botToken, chatId, "Cancelled.");
-        return new Response("ok", { status: 200 });
-      }
-
+      // ── await_post_text ───────────────────────────────────────────────────
       if (state.step === "await_post_text") {
         if (text.startsWith("/")) {
           await sendMessage(botToken, chatId, "Please send the post text, or /cancel to abort.");
           return new Response("ok", { status: 200 });
         }
         conversationState.set(stateKey, { ...state, step: "await_post_media", postText: text });
-        await sendMessage(botToken, chatId, "Add a media URL or token address, or /skip to continue without media.");
+        await sendMessage(botToken, chatId,
+          "Add a media URL or token address, or /skip to continue without media."
+        );
         return new Response("ok", { status: 200 });
       }
 
+      // ── await_post_media ──────────────────────────────────────────────────
       if (state.step === "await_post_media") {
         const media = cmd === "/skip" ? undefined : text;
-        conversationState.set(stateKey, { ...state, step: "confirm_post", postMedia: media });
+        // Build destination list
+        const dests = await buildDestinations(supabase, botRecord.id, dawenGroupId, groupRow?.name);
+        conversationState.set(stateKey, { ...state, step: "select_post_dest", postMedia: media, destinations: dests });
+        await sendMessage(botToken, chatId, buildDestinationPrompt(dests, "post"));
+        return new Response("ok", { status: 200 });
+      }
+
+      // ── select_post_dest ──────────────────────────────────────────────────
+      if (state.step === "select_post_dest") {
+        const num = parseInt(text);
+        const dests = state.destinations ?? [];
+        if (isNaN(num) || num < 1 || num > dests.length) {
+          await sendMessage(botToken, chatId,
+            `Please reply with a number between 1 and ${dests.length}, or /cancel.`
+          );
+          return new Response("ok", { status: 200 });
+        }
+        const dest = dests[num - 1];
+        const preview = state.postText ?? "";
+        const mediaPreview = state.postMedia ? `\n\nMedia: ${state.postMedia}` : "";
+        conversationState.set(stateKey, { ...state, step: "confirm_post", selectedDest: num });
         await sendMessage(botToken, chatId,
-          `Preview:\n\n${state.postText}${media ? `\n\nMedia: ${media}` : ""}\n\nSend /publish to post or /cancel to cancel.`
+          `Preview:\n\n${preview}${mediaPreview}\n\nDestination: ${dest.label}\n\nSend /publish to confirm or /cancel to abort.`
         );
         return new Response("ok", { status: 200 });
       }
 
-      if (state.step === "confirm_post" && cmd === "/publish") {
-        const media = state.postMedia;
-        const isTokenAddr = media && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(media);
-        const { error: postErr } = await supabase.from("posts").insert({
-          author_id: dawenUserId,
-          content: state.postText,
-          token_address: isTokenAddr ? media : null,
-          image_url: (!isTokenAddr && media) ? media : null,
-        });
+      // ── confirm_post ──────────────────────────────────────────────────────
+      if (state.step === "confirm_post") {
+        if (cmd !== "/publish") {
+          await sendMessage(botToken, chatId, "Send /publish to confirm or /cancel to abort.");
+          return new Response("ok", { status: 200 });
+        }
+        const dest = (state.destinations ?? [])[( state.selectedDest ?? 1) - 1];
+        await executePost(supabase, state, dest, botRecord);
         conversationState.delete(stateKey);
         await sendMessage(botToken, chatId,
-          postErr ? "Failed to publish post. Please try again." : `Post published! View it at: ${DAWEN_APP}`
+          `Post published to ${dest?.label ?? "the destination"}!`
         );
         return new Response("ok", { status: 200 });
       }
 
+      // ── await_announce_text ───────────────────────────────────────────────
       if (state.step === "await_announce_text") {
         if (text.startsWith("/")) {
           await sendMessage(botToken, chatId, "Please send the announcement text, or /cancel to abort.");
           return new Response("ok", { status: 200 });
         }
-        conversationState.set(stateKey, { ...state, step: "confirm_announce", announceText: text });
+        // Build destination list
+        const dests = await buildDestinations(supabase, botRecord.id, dawenGroupId, groupRow?.name);
+        conversationState.set(stateKey, { ...state, step: "select_announce_dest", announceText: text, destinations: dests });
+        await sendMessage(botToken, chatId, buildDestinationPrompt(dests, "announcement"));
+        return new Response("ok", { status: 200 });
+      }
+
+      // ── select_announce_dest ──────────────────────────────────────────────
+      if (state.step === "select_announce_dest") {
+        const num = parseInt(text);
+        const dests = state.destinations ?? [];
+        if (isNaN(num) || num < 1 || num > dests.length) {
+          await sendMessage(botToken, chatId,
+            `Please reply with a number between 1 and ${dests.length}, or /cancel.`
+          );
+          return new Response("ok", { status: 200 });
+        }
+        const dest = dests[num - 1];
+        conversationState.set(stateKey, { ...state, step: "confirm_announce", selectedDest: num });
         await sendMessage(botToken, chatId,
-          `Preview:\n\n${text}\n\nSend /send to post to the DAWEN group or /cancel to cancel.`
+          `Preview:\n\n${state.announceText}\n\nDestination: ${dest.label}\n\nSend /send to confirm or /cancel to abort.`
         );
         return new Response("ok", { status: 200 });
       }
 
-      if (state.step === "confirm_announce" && cmd === "/send") {
-        const { data: defaultTopic } = await supabase
-          .from("group_topics")
-          .select("id")
-          .eq("group_id", dawenGroupId)
-          .eq("is_default", true)
-          .maybeSingle();
-
-        await supabase.from("group_messages").insert({
-          group_id: dawenGroupId,
-          sender_id: dawenUserId,
-          content: state.announceText,
-          topic_id: defaultTopic?.id || null,
-          is_bot_message: true,
-          bot_name: botRecord.bot_name,
-          bot_username: botRecord.bot_username,
-        });
+      // ── confirm_announce ──────────────────────────────────────────────────
+      if (state.step === "confirm_announce") {
+        if (cmd !== "/send") {
+          await sendMessage(botToken, chatId, "Send /send to confirm or /cancel to abort.");
+          return new Response("ok", { status: 200 });
+        }
+        const dest = (state.destinations ?? [])[(state.selectedDest ?? 1) - 1];
+        await executeAnnounce(supabase, state, dest, botRecord, botToken);
         conversationState.delete(stateKey);
         await sendMessage(botToken, chatId,
-          `Announcement sent to "${groupRow?.name || "the group"}"!`
+          `Announcement sent to ${dest?.label ?? "the destination"}!`
         );
-        return new Response("ok", { status: 200 });
-      }
-
-      if (state.step === "confirm_post" || state.step === "confirm_announce") {
-        const hint = state.step === "confirm_post"
-          ? "Send /publish to confirm or /cancel to cancel."
-          : "Send /send to confirm or /cancel to cancel.";
-        await sendMessage(botToken, chatId, hint);
         return new Response("ok", { status: 200 });
       }
     }
 
-    // ── Unknown command — only reply in private chats to reduce group noise ────
     if (isPrivate && text.startsWith("/")) {
       await sendMessage(botToken, chatId, "Unknown command. Type /help to see available commands.");
     }
@@ -483,6 +534,180 @@ Deno.serve(async (req: Request) => {
   }
 });
 
+// ── Build destination list ────────────────────────────────────────────────────
+
+async function buildDestinations(
+  supabase: ReturnType<typeof createClient>,
+  botRecordId: string,
+  dawenGroupId: string,
+  dawenGroupName?: string,
+): Promise<ConvState["destinations"]> {
+  const dests: ConvState["destinations"] = [];
+
+  // 1. DAWEN group
+  dests.push({
+    type: "dawen_group",
+    id: dawenGroupId,
+    label: `DAWEN Group: ${dawenGroupName || dawenGroupId}`,
+  });
+
+  // 2. DAWEN Pulse
+  dests.push({
+    type: "dawen_pulse",
+    id: "pulse",
+    label: "DAWEN Pulse (public feed)",
+  });
+
+  // 3. Telegram targets linked to this bot
+  const { data: targets } = await supabase
+    .from("telegram_bot_targets")
+    .select("id, chat_name, chat_type")
+    .eq("bot_record_id", botRecordId)
+    .eq("is_enabled", true)
+    .order("created_at");
+
+  for (const t of targets ?? []) {
+    dests.push({
+      type: "telegram_target",
+      id: t.id,
+      label: `Telegram: ${t.chat_name || t.id} (${t.chat_type})`,
+    });
+  }
+
+  return dests;
+}
+
+function buildDestinationPrompt(
+  dests: ConvState["destinations"],
+  kind: "post" | "announcement",
+): string {
+  const lines = [`Where do you want to send this ${kind}?\n`];
+  for (let i = 0; i < (dests?.length ?? 0); i++) {
+    lines.push(`${i + 1}. ${dests![i].label}`);
+  }
+  lines.push("\nReply with a number, or /cancel.");
+  return lines.join("\n");
+}
+
+// ── Execute post to selected destination ─────────────────────────────────────
+
+async function executePost(
+  supabase: ReturnType<typeof createClient>,
+  state: ConvState,
+  dest: ConvState["destinations"][0] | undefined,
+  botRecord: any,
+): Promise<void> {
+  if (!dest) return;
+
+  if (dest.type === "dawen_pulse") {
+    const media = state.postMedia;
+    const isTokenAddr = media && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(media);
+    await supabase.from("posts").insert({
+      author_id: state.dawenUserId,
+      content: state.postText,
+      token_address: isTokenAddr ? media : null,
+      image_url: (!isTokenAddr && media) ? media : null,
+    });
+    return;
+  }
+
+  if (dest.type === "dawen_group") {
+    const { data: defaultTopic } = await supabase
+      .from("group_topics")
+      .select("id")
+      .eq("group_id", dest.id)
+      .eq("is_default", true)
+      .maybeSingle();
+    await supabase.from("group_messages").insert({
+      group_id: dest.id,
+      sender_id: state.dawenUserId,
+      content: state.postText,
+      topic_id: defaultTopic?.id || null,
+      is_bot_message: true,
+      bot_name: botRecord.bot_name,
+      bot_username: botRecord.bot_username,
+    });
+    return;
+  }
+
+  if (dest.type === "telegram_target") {
+    // Look up the token and chat_id for this target
+    const { data: target } = await supabase
+      .from("telegram_bot_targets")
+      .select("chat_id")
+      .eq("id", dest.id)
+      .maybeSingle();
+    if (!target) return;
+
+    const { data: tokenRow } = await supabase
+      .from("group_telegram_bot_tokens")
+      .select("token")
+      .eq("bot_record_id", botRecord.id)
+      .maybeSingle();
+    if (!tokenRow?.token) return;
+
+    await fetch(`https://api.telegram.org/bot${tokenRow.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: target.chat_id, text: state.postText }),
+    }).catch(() => null);
+  }
+}
+
+// ── Execute announce to selected destination ──────────────────────────────────
+
+async function executeAnnounce(
+  supabase: ReturnType<typeof createClient>,
+  state: ConvState,
+  dest: ConvState["destinations"][0] | undefined,
+  botRecord: any,
+  botToken: string,
+): Promise<void> {
+  if (!dest) return;
+
+  if (dest.type === "dawen_group") {
+    const { data: defaultTopic } = await supabase
+      .from("group_topics")
+      .select("id")
+      .eq("group_id", dest.id)
+      .eq("is_default", true)
+      .maybeSingle();
+    await supabase.from("group_messages").insert({
+      group_id: dest.id,
+      sender_id: state.dawenUserId,
+      content: state.announceText,
+      topic_id: defaultTopic?.id || null,
+      is_bot_message: true,
+      bot_name: botRecord.bot_name,
+      bot_username: botRecord.bot_username,
+    });
+    return;
+  }
+
+  if (dest.type === "dawen_pulse") {
+    await supabase.from("posts").insert({
+      author_id: state.dawenUserId,
+      content: state.announceText,
+    });
+    return;
+  }
+
+  if (dest.type === "telegram_target") {
+    const { data: target } = await supabase
+      .from("telegram_bot_targets")
+      .select("chat_id")
+      .eq("id", dest.id)
+      .maybeSingle();
+    if (!target) return;
+
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: target.chat_id, text: state.announceText }),
+    }).catch(() => null);
+  }
+}
+
 // ── /link command handler ─────────────────────────────────────────────────────
 
 async function handleLinkCommand(
@@ -494,7 +719,7 @@ async function handleLinkCommand(
   code: string,
   dawenGroupId: string,
 ): Promise<void> {
-  if (!code || !code.startsWith("DAWEN-")) {
+  if (!code.startsWith("DAWEN-")) {
     await sendMessage(botToken, chatId,
       "Invalid code format. Codes look like DAWEN-XXXXXX.\n\n" +
       "Generate a new code in the DAWEN app under Group Settings \u2192 Bots \u2192 Telegram Bot."
@@ -502,11 +727,9 @@ async function handleLinkCommand(
     return;
   }
 
-  const now = new Date().toISOString();
-
   const { data: existingLink } = await supabase
     .from("telegram_linked_users")
-    .select("id, status")
+    .select("id")
     .eq("telegram_user_id", fromId)
     .eq("status", "active")
     .maybeSingle();
@@ -515,6 +738,8 @@ async function handleLinkCommand(
     await sendMessage(botToken, chatId, "Your Telegram account is already linked to DAWEN.");
     return;
   }
+
+  const now = new Date().toISOString();
 
   const { data: linkCode } = await supabase
     .from("telegram_link_codes")
@@ -535,7 +760,6 @@ async function handleLinkCommand(
     return;
   }
 
-  // Include group_id from the link code so broadcasts can find this user later
   await supabase.from("telegram_linked_users").upsert({
     telegram_user_id: fromId,
     dawen_user_id: linkCode.user_id,
@@ -579,9 +803,7 @@ async function sendMessageWithCooldown(
 
   if (cooldown?.last_sent_at) {
     const elapsed = (Date.now() - new Date(cooldown.last_sent_at).getTime()) / 1000;
-    if (elapsed < cooldownSeconds) {
-      return;
-    }
+    if (elapsed < cooldownSeconds) return;
   }
 
   await sendMessage(botToken, chatId, text);
@@ -592,23 +814,6 @@ async function sendMessageWithCooldown(
     cooldown_type: cooldownType,
     last_sent_at: new Date().toISOString(),
   }, { onConflict: "telegram_user_id,chat_id,cooldown_type" });
-}
-
-// ── Read custom command response from DB ──────────────────────────────────────
-
-async function getGroupBotCommandResponse(
-  supabase: ReturnType<typeof createClient>,
-  groupId: string,
-  command: string,
-): Promise<string | null> {
-  const { data } = await supabase
-    .from("group_bot_commands")
-    .select("response_text, enabled")
-    .eq("group_id", groupId)
-    .eq("command", command)
-    .eq("enabled", true)
-    .maybeSingle();
-  return data?.response_text ?? null;
 }
 
 // ── Send Telegram message ─────────────────────────────────────────────────────
