@@ -35,48 +35,43 @@ export default function VerificationBadge({ profile, size = 'md' }: Props) {
 
   const s = SIZES[size];
 
-  if (isFounder) {
-    return (
-      <View style={[
-        styles.badge,
-        styles.founderBadge,
-        { width: s.badge, height: s.badge, borderRadius: s.badge / 2 },
-      ]}>
-        <Animated.View style={{ transform: [{ scale: checkScale }] }}>
-          <Crown size={s.check} color="#fff" strokeWidth={3} />
-        </Animated.View>
-      </View>
-    );
-  }
+  const crownBadge = isFounder ? (
+    <View style={[styles.badge, styles.founderBadge, { width: s.badge, height: s.badge, borderRadius: s.badge / 2 }]}>
+      <Animated.View style={{ transform: [{ scale: checkScale }] }}>
+        <Crown size={s.check} color="#fff" strokeWidth={3} />
+      </Animated.View>
+    </View>
+  ) : null;
 
-  if (isPremium) {
-    return (
-      <View style={[
-        styles.badge,
-        styles.premiumBadge,
-        { width: s.badge, height: s.badge, borderRadius: s.badge / 2 },
-      ]}>
-        <Animated.View style={{ transform: [{ scale: checkScale }] }}>
-          <Check size={s.check} color="#fff" strokeWidth={3} />
-        </Animated.View>
-      </View>
-    );
-  }
-
-  return (
+  const checkBadge = (isPremium || isBasic) ? (
     <View style={[
       styles.badge,
-      styles.basicBadge,
+      isPremium ? styles.premiumBadge : styles.basicBadge,
       { width: s.badge, height: s.badge, borderRadius: s.badge / 2 },
     ]}>
       <Animated.View style={{ transform: [{ scale: checkScale }] }}>
         <Check size={s.check} color="#fff" strokeWidth={3} />
       </Animated.View>
     </View>
-  );
+  ) : null;
+
+  if (isFounder && (isPremium || isBasic)) {
+    return (
+      <View style={[styles.row, { gap: 4 }]}>
+        {crownBadge}
+        {checkBadge}
+      </View>
+    );
+  }
+
+  return crownBadge ?? checkBadge;
 }
 
 const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   badge: {
     alignItems: 'center',
     justifyContent: 'center',

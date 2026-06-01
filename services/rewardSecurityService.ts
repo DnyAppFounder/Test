@@ -281,7 +281,7 @@ export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<
   try {
     sig = await ataRpcCall('sendTransaction', [
       base64Tx,
-      { encoding: 'base64', skipPreflight: true },
+      { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
     ]) as string;
   } catch (e: any) {
     throw new Error(`Failed to send token account creation transaction. Please try again. (${e?.message})`);
@@ -398,7 +398,7 @@ export async function createDwcAtaForExternalWallet(
   try {
     sig = await ataRpcCall('sendTransaction', [
       base64Tx,
-      { encoding: 'base64', skipPreflight: true },
+      { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
     ]) as string;
   } catch (e: any) {
     throw new Error(`Failed to send token account creation transaction. (${e?.message})`);

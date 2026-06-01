@@ -350,7 +350,7 @@ async function sendRewardTokens(
 
   const sig = await solanaRpc("sendTransaction", [
     rawBase64,
-    { encoding: "base64", skipPreflight: true, preflightCommitment: "confirmed" },
+    { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed" },
   ]) as string;
 
   if (!sig || typeof sig !== "string") {

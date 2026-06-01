@@ -224,10 +224,13 @@ export default function CreatePostScreen() {
       Alert.alert('Limit reached', `You can attach up to ${MAX_MEDIA} media items.`);
       return;
     }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo/video access to attach media.');
-      return;
+    // On web, no permission check needed — browser handles file access via native dialog
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo/video access to attach media.');
+        return;
+      }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
@@ -378,7 +381,7 @@ export default function CreatePostScreen() {
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handlePost = async () => {
-    if (!profile || !content.trim() || posting) return;
+    if (!profile || !canPost || posting) return;
     setPosting(true);
     try {
       const effectiveReply = mentionedReply ? 'mentioned' : whoCanReply;
@@ -430,7 +433,8 @@ export default function CreatePostScreen() {
   const charLeft = CHAR_LIMIT - content.length;
   const charWarning = charLeft <= 30;
   const pollValid = !showPoll || pollOptions.filter(o => o.trim().length > 0).length >= 2;
-  const canPost = content.trim().length > 0 && content.length <= CHAR_LIMIT && !posting && pollValid;
+  const hasContent = content.trim().length > 0 || mediaUris.length > 0 || gifUrl !== null || attachedTokens.length > 0;
+  const canPost = hasContent && content.length <= CHAR_LIMIT && !posting && pollValid;
 
   const renderTokenCard = (token: LiveToken) => {
     const change = token.priceChange24h ?? 0;

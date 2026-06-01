@@ -292,15 +292,9 @@ export default function RewardsScreen() {
   const handleClaimReward = async (reward: UserReward) => {
     if (!activeAddress || claimingId) return;
 
-    // Guard: verification must be 'verified' before we even attempt a claim
+    // Guard: if not yet verified, open the Get Verified modal
     if (verificationStatus !== 'verified') {
-      const msg = verificationStatus === 'pending'
-        ? 'Your account is pending verification. Rewards will unlock once approved.'
-        : verificationStatus === 'flagged'
-        ? 'Your account is under review. Reward claims are temporarily paused.'
-        : 'This account is not eligible for rewards.';
-      setClaimMessage({ type: 'error', text: msg });
-      setTimeout(() => setClaimMessage(null), 8000);
+      setShowVerifyModal(true);
       return;
     }
 

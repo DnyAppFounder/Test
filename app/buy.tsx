@@ -210,7 +210,8 @@ export default function BuyScreen() {
     {
       id: 'dawen', blockchain_id: 'solana', contract_address: DAWEN_MINT,
       symbol: 'DWORLD', name: 'DAWORLD Coin', decimals: 6,
-      logo_url: null, is_verified: true, coingecko_id: null,
+      logo_url: 'https://dawen.app/Dawen1D.png',
+      is_verified: true, coingecko_id: null,
     },
     {
       id: 'usdc', blockchain_id: 'solana',
