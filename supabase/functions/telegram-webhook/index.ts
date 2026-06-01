@@ -11,20 +11,14 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 // Official DAWEN links
-const DAWEN_APP    = "https://dawen.app/";
-const DAWEN_X      = "https://x.com/willoffd_";
-const DAWEN_TG     = "https://t.me/WillOfDCrew";
+const DAWEN_APP     = "https://dawen.app/";
+const DAWEN_X       = "https://x.com/willoffd_";
+const DAWEN_TG      = "https://t.me/WillOfDCrew";
 const DAWEN_DISCORD = "https://discord.gg/AvNV9mDy3";
 
-// Commands that do NOT require a linked account
-const FREE_COMMANDS = new Set([
-  "/start", "/help", "/link", "/links", "/app",
-  "/rewards", "/rules", "/setup",
-]);
-
 // Cooldown durations in seconds
-const COOLDOWN_NOT_LINKED_SEC = 24 * 60 * 60; // 24 hours
-const COOLDOWN_SETUP_SEC      = 24 * 60 * 60; // 24 hours
+const COOLDOWN_NOT_LINKED_SEC = 10 * 60; // 10 minutes
+const COOLDOWN_SETUP_SEC      = 60 * 60; // 1 hour
 
 // In-memory conversation state per "chatId:userId" — survives within one isolate
 const conversationState = new Map<string, {
@@ -92,7 +86,6 @@ Deno.serve(async (req: Request) => {
       const oldStatus = myChatMember.old_chat_member?.status;
       const chat = myChatMember.chat;
 
-      // Bot was added to a group (wasn't member before, now is)
       if (
         chat &&
         (chat.type === "group" || chat.type === "supergroup") &&
@@ -103,30 +96,25 @@ Deno.serve(async (req: Request) => {
         const welcomeEnabled = botSettings.welcome_enabled !== false;
 
         if (welcomeEnabled) {
-          let welcomeMsg = typeof botSettings.welcome_message === "string" && botSettings.welcome_message.trim()
+          const welcomeMsg = typeof botSettings.welcome_message === "string" && botSettings.welcome_message.trim()
             ? botSettings.welcome_message.trim()
-            : `DAWEN Bot is now active in this group.\n\nUse /help to see available commands.\nAdmins can manage bot settings inside the DAWEN app.`;
-
-          if (!isAdmin) {
-            welcomeMsg += `\n\n⚙️ Please make me admin to enable moderation features.`;
-          }
-
+            : `DAWEN Bot is now active in this group.\n\nUse /help to see available commands.\nAdmins can manage bot settings inside the DAWEN app.` +
+              (!isAdmin ? `\n\nPlease make me admin to enable moderation features.` : "");
           await sendMessage(botToken, chat.id, welcomeMsg);
         } else if (!isAdmin) {
-          // Always tell about missing admin perms, even if welcome is off — respects cooldown
           await sendMessageWithCooldown(
             supabase, botToken, chat.id,
             myChatMember.from?.id ?? 0, chat.id,
             "setup_warning",
             COOLDOWN_SETUP_SEC,
-            "⚙️ Please make me admin to enable moderation features."
+            "Please make me admin to enable moderation features."
           );
         }
       }
       return new Response("ok", { status: 200 });
     }
 
-    // ── Only process message updates ─────────────────────────────────────────
+    // ── Only process message updates ─────────────────────────────────────────────
     const message = update.message;
     if (!message) {
       return new Response("ok", { status: 200 });
@@ -138,58 +126,66 @@ Deno.serve(async (req: Request) => {
     const isPrivate = message.chat?.type === "private";
     const isGroup = message.chat?.type === "group" || message.chat?.type === "supergroup";
 
-    // ── CRITICAL: In group chats, only respond to commands ───────────────────
-    // Never spam the group for normal messages.
+    // In group chats, only respond to commands to avoid chat spam
     if (isGroup && !text.startsWith("/")) {
       return new Response("ok", { status: 200 });
     }
 
     const stateKey = `${chatId}:${fromId}`;
 
-    // ── /link CODE — always allowed, no auth required ────────────────────────
-    if (text.toUpperCase().startsWith("/LINK ") || text.toLowerCase().startsWith("/link ")) {
-      const code = text.slice(6).trim().toUpperCase();
-      await handleLinkCommand(supabase, botToken, chatId, fromId, message.from, code);
+    // Extract the base command (strips @botname suffix and subcommands)
+    const cmd = text.split(" ")[0].split("@")[0].toLowerCase();
+
+    // ── /link CODE — always allowed, no auth required ─────────────────────────
+    if (cmd === "/link") {
+      const code = text.slice(text.indexOf(" ") + 1).trim().toUpperCase();
+      if (!code || code === "/LINK") {
+        await sendMessage(botToken, chatId,
+          "Please provide a link code.\n\nUsage: /link DAWEN-XXXXXX\n\nGenerate a code in the DAWEN app under Group Settings \u2192 Bots \u2192 Telegram Bot."
+        );
+        return new Response("ok", { status: 200 });
+      }
+      await handleLinkCommand(supabase, botToken, chatId, fromId, message.from, code, dawenGroupId);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /start — free command ────────────────────────────────────────────────
-    if (text === "/start" || text.split("@")[0] === "/start") {
+    // ── /start — free command ─────────────────────────────────────────────────
+    if (cmd === "/start") {
       const linkSection = isPrivate
-        ? `\n\nTo link your Telegram account:\n1. Open the DAWEN app\n2. Go to Group Settings → Bots → Telegram Bot\n3. Tap *Generate Link Code*\n4. Send */link DAWEN\\-XXXXXX* here`
+        ? `\n\nTo link your Telegram account:\n1. Open the DAWEN app\n2. Go to Group Settings \u2192 Bots \u2192 Telegram Bot\n3. Tap <b>Generate Link Code</b>\n4. Send <code>/link DAWEN-XXXXXX</code> here`
         : `\n\nType /help to see available commands.`;
       await sendMessage(botToken, chatId,
-        `Welcome to *DAWEN Bot*!\n\nDAWEN is a Solana beta app — trade, post, play, and earn on the Solana network.${linkSection}`,
-        "MarkdownV2"
+        `Welcome to <b>DAWEN Bot</b>!\n\nDAWEN is a Solana beta app \u2014 trade, post, play, and earn on the Solana network.${linkSection}`,
+        "HTML"
       );
       return new Response("ok", { status: 200 });
     }
 
-    // ── /help — free command ─────────────────────────────────────────────────
-    if (text === "/help" || text.split("@")[0] === "/help") {
+    // ── /help — free command ──────────────────────────────────────────────────
+    if (cmd === "/help") {
       await sendMessage(botToken, chatId,
-        `*DAWEN Bot Commands*\n\n` +
-        `/start — Welcome message\n` +
-        `/help — Show this help\n` +
-        `/link CODE — Link your Telegram to DAWEN\n` +
-        `/status — Check your link status\n` +
-        `/unlink — Unlink your account\n` +
-        `/links — Official DAWEN links\n` +
-        `/app — Get the app URL\n` +
-        `/rewards — $DAWORLD rewards info\n` +
-        `/rules — Community rules\n\n` +
-        `*Admin only:*\n` +
-        `/setup — Bot setup guide\n` +
-        `/settings — Bot configuration\n` +
-        `/announce — Send announcement\n` +
-        `/post — Create DAWEN Pulse post`,
-        "MarkdownV2"
+        `<b>DAWEN Bot Commands</b>\n\n` +
+        `/start \u2014 Welcome message\n` +
+        `/help \u2014 Show this help\n` +
+        `/link CODE \u2014 Link your Telegram to DAWEN\n` +
+        `/status \u2014 Check your link status\n` +
+        `/unlink \u2014 Unlink your account\n` +
+        `/links \u2014 Official DAWEN links\n` +
+        `/app \u2014 Get the app URL\n` +
+        `/rewards \u2014 $DAWORLD rewards info\n` +
+        `/rules \u2014 Community rules\n\n` +
+        `<b>Admin only:</b>\n` +
+        `/setup \u2014 Bot setup guide\n` +
+        `/settings \u2014 Bot configuration\n` +
+        `/announce \u2014 Send announcement to DAWEN group\n` +
+        `/post \u2014 Create DAWEN Pulse post`,
+        "HTML"
       );
       return new Response("ok", { status: 200 });
     }
 
-    // ── /links — free command ────────────────────────────────────────────────
-    if (text === "/links" || text.split("@")[0] === "/links") {
+    // ── /links — free command ─────────────────────────────────────────────────
+    if (cmd === "/links") {
       const linksText = typeof botSettings.links_message === "string" && botSettings.links_message.trim()
         ? botSettings.links_message.trim()
         : `Official DAWEN Links:\n\nApp: ${DAWEN_APP}\nX/Twitter: ${DAWEN_X}\nTelegram: ${DAWEN_TG}\nDiscord: ${DAWEN_DISCORD}`;
@@ -197,50 +193,49 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /app — free command ──────────────────────────────────────────────────
-    if (text === "/app" || text.split("@")[0] === "/app") {
+    // ── /app — free command ───────────────────────────────────────────────────
+    if (cmd === "/app") {
       await sendMessage(botToken, chatId, `DAWEN App: ${DAWEN_APP}`);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /rewards — free command ──────────────────────────────────────────────
-    if (text === "/rewards" || text.split("@")[0] === "/rewards") {
+    // ── /rewards — free command ───────────────────────────────────────────────
+    if (cmd === "/rewards") {
       const rewardsText = typeof botSettings.rewards_message === "string" && botSettings.rewards_message.trim()
         ? botSettings.rewards_message.trim()
-        : `DAWEN Rewards — $DAWORLD\n\n` +
-          `$DAWORLD is the in-app utility token for Dawen World rewards, gaming features, and the future shop/boutique.\n\n` +
-          `$DAWORLD is NOT the official DAWEN token.\n\n` +
-          `The official DAWEN token has not been revealed yet and will follow the roadmap.\n\n` +
-          `Earn $DAWORLD by:\n• Completing games and challenges\n• Referral rewards\n• Community participation\n\n` +
+        : `DAWEN Rewards \u2014 $DAWORLD\n\n` +
+          `$DAWORLD is the in-app utility token for Dawen World rewards, gaming, and the future shop.\n\n` +
+          `$DAWORLD is NOT the official DAWEN token. The official DAWEN token has not been revealed yet.\n\n` +
+          `Earn $DAWORLD by:\n- Completing games and challenges\n- Referral rewards\n- Community participation\n\n` +
           `More info: ${DAWEN_APP}`;
       await sendMessage(botToken, chatId, rewardsText);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /rules — free command ────────────────────────────────────────────────
-    if (text === "/rules" || text.split("@")[0] === "/rules") {
+    // ── /rules — free command ─────────────────────────────────────────────────
+    if (cmd === "/rules") {
       const rulesText = typeof botSettings.rules_message === "string" && botSettings.rules_message.trim()
         ? botSettings.rules_message.trim()
         : await getGroupBotCommandResponse(supabase, dawenGroupId, "rules") ??
-          `DAWEN Community Rules:\n\n• Be respectful to all members\n• No spam or self-promotion\n• No price manipulation or misleading information\n• No NSFW content\n• Follow Telegram's Terms of Service\n\nViolations may result in removal.`;
+          `DAWEN Community Rules:\n\n- Be respectful to all members\n- No spam or self-promotion\n- No price manipulation or misleading information\n- No NSFW content\n- Follow Telegram's Terms of Service\n\nViolations may result in removal.`;
       await sendMessage(botToken, chatId, rulesText);
       return new Response("ok", { status: 200 });
     }
 
-    // ── /setup — free command (admin info) ───────────────────────────────────
-    if (text === "/setup" || text.split("@")[0] === "/setup") {
+    // ── /setup — free command ─────────────────────────────────────────────────
+    if (cmd === "/setup") {
       await sendMessage(botToken, chatId,
         `DAWEN Bot Setup\n\n` +
         `1. Add this bot to your Telegram group as admin\n` +
         `2. Open DAWEN app\n` +
-        `3. Go to Group Settings → Bots → Telegram Bot\n` +
+        `3. Go to Group Settings \u2192 Bots \u2192 Telegram Bot\n` +
         `4. Configure welcome message, rules, and moderation settings\n\n` +
         `DAWEN app: ${DAWEN_APP}`
       );
       return new Response("ok", { status: 200 });
     }
 
-    // ── Commands beyond this point require a linked account ──────────────────
+    // ── Commands beyond this point require a linked account ───────────────────
     const { data: linkedUser } = await supabase
       .from("telegram_linked_users")
       .select("dawen_user_id, telegram_first_name, status")
@@ -249,7 +244,6 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (!linkedUser) {
-      // Only send the "not linked" warning with a cooldown, never for every message
       await sendMessageWithCooldown(
         supabase, botToken, chatId,
         fromId, chatId,
@@ -258,7 +252,7 @@ Deno.serve(async (req: Request) => {
         `Your Telegram account is not linked to DAWEN yet.\n\n` +
         `To link it:\n` +
         `1. Open the DAWEN app\n` +
-        `2. Go to Group Settings → Bots → Telegram Bot\n` +
+        `2. Go to Group Settings \u2192 Bots \u2192 Telegram Bot\n` +
         `3. Tap Generate Link Code\n` +
         `4. Send /link DAWEN-XXXXXX here`
       );
@@ -267,8 +261,8 @@ Deno.serve(async (req: Request) => {
 
     const dawenUserId = linkedUser.dawen_user_id;
 
-    // ── /status ──────────────────────────────────────────────────────────────
-    if (text === "/status" || text.split("@")[0] === "/status") {
+    // ── /status ───────────────────────────────────────────────────────────────
+    if (cmd === "/status") {
       const name = linkedUser.telegram_first_name || "your account";
       await sendMessage(botToken, chatId,
         `Your Telegram account is linked to DAWEN.\n\nDAWEN profile: ${name}\nStatus: Active\n\nUse /unlink to disconnect.`
@@ -277,7 +271,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── /unlink ───────────────────────────────────────────────────────────────
-    if (text === "/unlink" || text.split("@")[0] === "/unlink") {
+    if (cmd === "/unlink") {
       await supabase
         .from("telegram_linked_users")
         .update({ status: "unlinked", updated_at: new Date().toISOString() })
@@ -289,8 +283,8 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /connect / /groups ───────────────────────────────────────────────────
-    if (text === "/connect" || text === "/groups" || text.split("@")[0] === "/connect") {
+    // ── /connect / /groups ────────────────────────────────────────────────────
+    if (cmd === "/connect" || cmd === "/groups") {
       const { data: groupRow } = await supabase
         .from("group_conversations")
         .select("name")
@@ -303,7 +297,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── /invite ───────────────────────────────────────────────────────────────
-    if (text === "/invite" || text.split("@")[0] === "/invite") {
+    if (cmd === "/invite") {
       const { data: invite } = await supabase
         .from("group_invites")
         .select("invite_code")
@@ -320,52 +314,53 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── Admin check for privileged commands ──────────────────────────────────
-    const { data: memberRow } = await supabase
-      .from("group_members")
-      .select("role")
-      .eq("group_id", dawenGroupId)
-      .eq("user_id", dawenUserId)
-      .is("removed_at", null)
-      .maybeSingle();
-
-    const { data: groupRow } = await supabase
-      .from("group_conversations")
-      .select("creator_id, name")
-      .eq("id", dawenGroupId)
-      .maybeSingle();
+    // ── Admin check for privileged commands ───────────────────────────────────
+    const [{ data: memberRow }, { data: groupRow }] = await Promise.all([
+      supabase
+        .from("group_members")
+        .select("role")
+        .eq("group_id", dawenGroupId)
+        .eq("user_id", dawenUserId)
+        .is("removed_at", null)
+        .maybeSingle(),
+      supabase
+        .from("group_conversations")
+        .select("creator_id, name")
+        .eq("id", dawenGroupId)
+        .maybeSingle(),
+    ]);
 
     const isCreator = groupRow?.creator_id === dawenUserId;
     const isAdmin = memberRow?.role === "admin" || memberRow?.role === "creator" || isCreator;
 
     // ── /settings (admin only) ────────────────────────────────────────────────
-    if (text === "/settings" || text.split("@")[0] === "/settings") {
+    if (cmd === "/settings") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can access bot settings.");
         return new Response("ok", { status: 200 });
       }
       await sendMessage(botToken, chatId,
-        `Bot Settings — ${groupRow?.name || "group"}\n\n` +
+        `Bot Settings \u2014 ${groupRow?.name || "group"}\n\n` +
         `Manage bot settings in the DAWEN app:\n` +
-        `Group Settings → Bots → Telegram Bot\n\n` +
+        `Group Settings \u2192 Bots \u2192 Telegram Bot\n\n` +
         `Configure: welcome message, rules, rewards info, link requirement, and moderation.`
       );
       return new Response("ok", { status: 200 });
     }
 
     // ── /announce (admin only) ────────────────────────────────────────────────
-    if (text === "/announce" || text.split("@")[0] === "/announce") {
+    if (cmd === "/announce") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can send announcements.");
         return new Response("ok", { status: 200 });
       }
       conversationState.set(stateKey, { step: "await_announce_text", groupId: dawenGroupId, dawnUserId: dawenUserId });
-      await sendMessage(botToken, chatId, "Send the announcement message, or /cancel to abort.");
+      await sendMessage(botToken, chatId, "Send your announcement text, or /cancel to abort.");
       return new Response("ok", { status: 200 });
     }
 
     // ── /post (admin only) ────────────────────────────────────────────────────
-    if (text === "/post" || text.split("@")[0] === "/post") {
+    if (cmd === "/post") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can publish posts via bot.");
         return new Response("ok", { status: 200 });
@@ -375,8 +370,8 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── /mute, /ban, /unban (admin only, stub for future) ────────────────────
-    if (["/mute", "/ban", "/unban"].some(c => text === c || text.split("@")[0] === c)) {
+    // ── /mute, /ban, /unban (admin only, coming soon) ─────────────────────────
+    if (cmd === "/mute" || cmd === "/ban" || cmd === "/unban") {
       if (!isAdmin) {
         await sendMessage(botToken, chatId, "Only group admins can use moderation commands.");
         return new Response("ok", { status: 200 });
@@ -385,24 +380,28 @@ Deno.serve(async (req: Request) => {
       return new Response("ok", { status: 200 });
     }
 
-    // ── Conversation flow state machine ──────────────────────────────────────
+    // ── Conversation flow state machine ───────────────────────────────────────
     const state = conversationState.get(stateKey);
 
     if (state) {
-      if (text === "/cancel") {
+      if (cmd === "/cancel") {
         conversationState.delete(stateKey);
         await sendMessage(botToken, chatId, "Cancelled.");
         return new Response("ok", { status: 200 });
       }
 
       if (state.step === "await_post_text") {
+        if (text.startsWith("/")) {
+          await sendMessage(botToken, chatId, "Please send the post text, or /cancel to abort.");
+          return new Response("ok", { status: 200 });
+        }
         conversationState.set(stateKey, { ...state, step: "await_post_media", postText: text });
         await sendMessage(botToken, chatId, "Add a media URL or token address, or /skip to continue without media.");
         return new Response("ok", { status: 200 });
       }
 
       if (state.step === "await_post_media") {
-        const media = text === "/skip" ? undefined : text;
+        const media = cmd === "/skip" ? undefined : text;
         conversationState.set(stateKey, { ...state, step: "confirm_post", postMedia: media });
         await sendMessage(botToken, chatId,
           `Preview:\n\n${state.postText}${media ? `\n\nMedia: ${media}` : ""}\n\nSend /publish to post or /cancel to cancel.`
@@ -410,7 +409,7 @@ Deno.serve(async (req: Request) => {
         return new Response("ok", { status: 200 });
       }
 
-      if (state.step === "confirm_post" && text === "/publish") {
+      if (state.step === "confirm_post" && cmd === "/publish") {
         const media = state.postMedia;
         const isTokenAddr = media && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(media);
         const { error: postErr } = await supabase.from("posts").insert({
@@ -421,12 +420,16 @@ Deno.serve(async (req: Request) => {
         });
         conversationState.delete(stateKey);
         await sendMessage(botToken, chatId,
-          postErr ? "Failed to publish post. Please try again." : `Post published!\n\nView it at: ${DAWEN_APP}`
+          postErr ? "Failed to publish post. Please try again." : `Post published! View it at: ${DAWEN_APP}`
         );
         return new Response("ok", { status: 200 });
       }
 
       if (state.step === "await_announce_text") {
+        if (text.startsWith("/")) {
+          await sendMessage(botToken, chatId, "Please send the announcement text, or /cancel to abort.");
+          return new Response("ok", { status: 200 });
+        }
         conversationState.set(stateKey, { ...state, step: "confirm_announce", announceText: text });
         await sendMessage(botToken, chatId,
           `Preview:\n\n${text}\n\nSend /send to post to the DAWEN group or /cancel to cancel.`
@@ -434,7 +437,7 @@ Deno.serve(async (req: Request) => {
         return new Response("ok", { status: 200 });
       }
 
-      if (state.step === "confirm_announce" && text === "/send") {
+      if (state.step === "confirm_announce" && cmd === "/send") {
         const { data: defaultTopic } = await supabase
           .from("group_topics")
           .select("id")
@@ -467,7 +470,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── Unknown command — only reply in private chats to reduce group noise ───
+    // ── Unknown command — only reply in private chats to reduce group noise ────
     if (isPrivate && text.startsWith("/")) {
       await sendMessage(botToken, chatId, "Unknown command. Type /help to see available commands.");
     }
@@ -489,18 +492,18 @@ async function handleLinkCommand(
   fromId: number,
   fromUser: any,
   code: string,
+  dawenGroupId: string,
 ): Promise<void> {
   if (!code || !code.startsWith("DAWEN-")) {
     await sendMessage(botToken, chatId,
       "Invalid code format. Codes look like DAWEN-XXXXXX.\n\n" +
-      "Generate a new code in the DAWEN app under Group Settings → Bots → Telegram Bot."
+      "Generate a new code in the DAWEN app under Group Settings \u2192 Bots \u2192 Telegram Bot."
     );
     return;
   }
 
   const now = new Date().toISOString();
 
-  // Check if already linked
   const { data: existingLink } = await supabase
     .from("telegram_linked_users")
     .select("id, status")
@@ -513,43 +516,36 @@ async function handleLinkCommand(
     return;
   }
 
-  // Validate link code
   const { data: linkCode } = await supabase
     .from("telegram_link_codes")
-    .select("id, user_id, expires_at, used_at")
+    .select("id, user_id, group_id, expires_at, used_at")
     .eq("code", code)
     .maybeSingle();
 
   if (!linkCode) {
-    await sendMessage(botToken, chatId,
-      "Invalid or expired code. Generate a new one in the DAWEN app."
-    );
+    await sendMessage(botToken, chatId, "Invalid or expired code. Generate a new one in the DAWEN app.");
     return;
   }
   if (linkCode.used_at) {
-    await sendMessage(botToken, chatId,
-      "This link code has already been used. Generate a new one in the DAWEN app."
-    );
+    await sendMessage(botToken, chatId, "This link code has already been used. Generate a new one in the DAWEN app.");
     return;
   }
   if (new Date(linkCode.expires_at) < new Date(now)) {
-    await sendMessage(botToken, chatId,
-      "This code has expired. Generate a new one in the DAWEN app."
-    );
+    await sendMessage(botToken, chatId, "This code has expired. Generate a new one in the DAWEN app.");
     return;
   }
 
-  // Link the account (upsert so re-linking after unlink works)
+  // Include group_id from the link code so broadcasts can find this user later
   await supabase.from("telegram_linked_users").upsert({
     telegram_user_id: fromId,
     dawen_user_id: linkCode.user_id,
     telegram_username: fromUser?.username ?? null,
     telegram_first_name: fromUser?.first_name ?? null,
+    group_id: linkCode.group_id ?? dawenGroupId ?? null,
     status: "active",
     updated_at: now,
   }, { onConflict: "telegram_user_id,dawen_user_id" });
 
-  // Mark code as used
   await supabase
     .from("telegram_link_codes")
     .update({ used_at: now })
@@ -573,7 +569,6 @@ async function sendMessageWithCooldown(
   cooldownSeconds: number,
   text: string,
 ): Promise<void> {
-  // Check if cooldown has expired
   const { data: cooldown } = await supabase
     .from("telegram_bot_cooldowns")
     .select("last_sent_at")
@@ -585,14 +580,12 @@ async function sendMessageWithCooldown(
   if (cooldown?.last_sent_at) {
     const elapsed = (Date.now() - new Date(cooldown.last_sent_at).getTime()) / 1000;
     if (elapsed < cooldownSeconds) {
-      return; // Cooldown active — stay quiet
+      return;
     }
   }
 
-  // Send the message
   await sendMessage(botToken, chatId, text);
 
-  // Record cooldown
   await supabase.from("telegram_bot_cooldowns").upsert({
     telegram_user_id: telegramUserId,
     chat_id: cooldownChatId,
@@ -618,7 +611,7 @@ async function getGroupBotCommandResponse(
   return data?.response_text ?? null;
 }
 
-// ── Send Telegram message ──────────────────────────────────────────────────────
+// ── Send Telegram message ─────────────────────────────────────────────────────
 
 async function sendMessage(
   token: string,
@@ -629,9 +622,17 @@ async function sendMessage(
   const body: Record<string, unknown> = { chat_id: chatId, text };
   if (parseMode) body.parse_mode = parseMode;
 
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).catch((e) => console.error("[sendMessage] error:", e));
+  }).catch((e) => {
+    console.error("[sendMessage] network error:", e);
+    return null;
+  });
+
+  if (res && !res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    console.error("[sendMessage] Telegram API error:", res.status, errBody);
+  }
 }

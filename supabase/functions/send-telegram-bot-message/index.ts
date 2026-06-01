@@ -81,13 +81,43 @@ Deno.serve(async (req: Request) => {
       return json({ success: false, error: "No connected bot found for this group" }, 404);
     }
 
-    // Get linked Telegram users for this group to broadcast
-    const { data: linkedUsers } = await supabase
+    // Get linked Telegram users — find by group membership since group_id on
+    // telegram_linked_users may be null for older links
+    const { data: groupMemberProfiles } = await supabase
+      .from("group_members")
+      .select("user_id")
+      .eq("group_id", group_id)
+      .is("removed_at", null);
+
+    const memberUserIds = (groupMemberProfiles ?? []).map((m: any) => m.user_id);
+
+    let linkedUsers: { telegram_user_id: bigint }[] = [];
+    if (memberUserIds.length > 0) {
+      const { data: byMembership } = await supabase
+        .from("telegram_linked_users")
+        .select("telegram_user_id")
+        .in("dawen_user_id", memberUserIds)
+        .eq("status", "active");
+      linkedUsers = byMembership ?? [];
+    }
+
+    // Also include users linked directly to this group (legacy / explicit group link)
+    const { data: byGroupId } = await supabase
       .from("telegram_linked_users")
       .select("telegram_user_id")
-      .eq("group_id", group_id);
+      .eq("group_id", group_id)
+      .eq("status", "active");
 
-    if (!linkedUsers || linkedUsers.length === 0) {
+    if (byGroupId) {
+      const existing = new Set(linkedUsers.map((u: any) => String(u.telegram_user_id)));
+      for (const u of byGroupId) {
+        if (!existing.has(String(u.telegram_user_id))) {
+          linkedUsers.push(u);
+        }
+      }
+    }
+
+    if (linkedUsers.length === 0) {
       return json({ success: false, error: "No linked Telegram users in this group" }, 404);
     }
 
