@@ -173,21 +173,49 @@ export const PROMOTE_TIERS = [
 
 export class SocialService {
   static async getOrCreateProfile(walletAddress: string): Promise<UserProfile | null> {
-    const { data: existing } = await supabase
+    console.log('[SocialService] getOrCreateProfile — wallet:', walletAddress?.slice(0, 8));
+    const { data: existing, error: selectErr } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('wallet_address', walletAddress)
       .maybeSingle();
 
-    if (existing) return existing;
+    if (selectErr) {
+      console.error('[SocialService] getOrCreateProfile SELECT error:', selectErr.message, selectErr.code);
+    }
+    if (existing) {
+      console.log('[SocialService] getOrCreateProfile — found existing profile, username:', existing.username ?? '(none)', '| id:', existing.id?.slice(0, 8));
+      return existing;
+    }
 
-    const { data: created, error } = await supabase
+    console.log('[SocialService] getOrCreateProfile — no existing profile, attempting INSERT for:', walletAddress?.slice(0, 8));
+    const { data: created, error: insertErr } = await supabase
       .from('user_profiles')
       .insert({ wallet_address: walletAddress })
       .select()
       .maybeSingle();
 
-    if (error) return null;
+    if (insertErr) {
+      console.error('[SocialService] getOrCreateProfile INSERT error:', insertErr.message, insertErr.code);
+      // Unique constraint violation — profile was created concurrently; re-fetch
+      if (
+        insertErr.code === '23505' ||
+        insertErr.message?.includes('duplicate') ||
+        insertErr.message?.includes('unique')
+      ) {
+        console.log('[SocialService] getOrCreateProfile — unique conflict, retrying SELECT');
+        const { data: retry } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('wallet_address', walletAddress)
+          .maybeSingle();
+        console.log('[SocialService] getOrCreateProfile retry result:', retry?.username ?? '(none)');
+        return retry ?? null;
+      }
+      return null;
+    }
+
+    console.log('[SocialService] getOrCreateProfile — created new profile id:', created?.id?.slice(0, 8));
     return created;
   }
 

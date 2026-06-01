@@ -47,14 +47,20 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    console.log('[ProfileContext] profile fetch started for', activeAddress.slice(0, 8));
+    const normalizedAddr = activeAddress.toLowerCase();
+    console.log('[ProfileContext] refreshProfile — wallet:', activeAddress.slice(0, 8), '| normalized:', normalizedAddr.slice(0, 8));
     setLoading(true);
     try {
       const p = await SocialService.getOrCreateProfile(activeAddress);
+      console.log('[ProfileContext] refreshProfile result — found:', !!p, '| username:', p?.username ?? '(none)', '| id:', p?.id?.slice(0, 8) ?? 'n/a');
+      if (!p) {
+        console.warn('[ProfileContext] getOrCreateProfile returned null for wallet:', activeAddress.slice(0, 8));
+      }
+      // Only clear profile if we got a definitive null (not an error path)
       setProfile(p);
-      console.log('[ProfileContext] profile fetch finished:', p?.username || '(no username)');
     } catch (e) {
       console.error('[ProfileContext] refreshProfile error:', e);
+      // Do NOT overwrite an existing profile with null on transient error
     } finally {
       setLoading(false);
     }
