@@ -20,6 +20,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Send, User, Users, Pin, Settings, Image as ImageIcon, Plus, X, Hash, Trash2, UserPlus, ZoomIn, TriangleAlert as AlertTriangle, ChevronRight, Camera, Shield, ShieldOff, CreditCard as Edit2, LogOut, Link, Bot } from 'lucide-react-native';
 import BotSettings from '@/components/BotSettings';
+import BotEngineSettings from '@/components/bots/BotEngineSettings';
+import { processMessage } from '@/services/botEngineService';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { useProfile } from '@/contexts/ProfileContext';
@@ -94,6 +96,7 @@ export default function GroupChatScreen() {
 
   // Bot settings
   const [showBotSettings, setShowBotSettings] = useState(false);
+  const [showBotEngine, setShowBotEngine] = useState(false);
 
   // Multiple pins & scroll-to
   const [showPinsList, setShowPinsList] = useState(false);
@@ -243,7 +246,11 @@ export default function GroupChatScreen() {
     setInput('');
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     try {
-      await SocialService.sendGroupMessageFull(groupId, profile.id, text, activeTopic?.id);
+      const ok = await SocialService.sendGroupMessageFull(groupId, profile.id, text, activeTopic?.id);
+      if (ok) {
+        // Fire-and-forget: let the bot engine process the message; realtime picks up responses
+        processMessage(groupId, '', text, profile.id).catch(() => {});
+      }
     } catch {
       setMessages(prev => prev.filter((m: any) => m.id !== optimistic.id));
     } finally {
@@ -1120,6 +1127,17 @@ export default function GroupChatScreen() {
                 </TouchableOpacity>
               )}
 
+              {isCreatorOrAdmin && (
+                <TouchableOpacity
+                  style={styles.botSettingsBtn}
+                  onPress={() => { setShowSettings(false); setShowBotEngine(true); }}
+                  activeOpacity={0.8}
+                >
+                  <Bot size={15} color="#06b6d4" strokeWidth={2} />
+                  <Text style={[styles.botSettingsBtnText, { color: '#06b6d4' }]}>Bot Engine</Text>
+                </TouchableOpacity>
+              )}
+
               {myRole === 'creator' && (
                 <TouchableOpacity
                   style={styles.deleteGroupBtn}
@@ -1374,6 +1392,17 @@ export default function GroupChatScreen() {
         <BotSettings
           visible={showBotSettings}
           onClose={() => setShowBotSettings(false)}
+          groupId={groupId!}
+          walletAddress={profile.wallet_address}
+          isAdmin={isCreatorOrAdmin}
+        />
+      )}
+
+      {/* DAWEN Bot Engine */}
+      {profile?.wallet_address && (
+        <BotEngineSettings
+          visible={showBotEngine}
+          onClose={() => setShowBotEngine(false)}
           groupId={groupId!}
           walletAddress={profile.wallet_address}
           isAdmin={isCreatorOrAdmin}
