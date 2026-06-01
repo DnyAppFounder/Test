@@ -38,6 +38,7 @@ import {
   Share2,
   Flag,
   Ban,
+  Crown,
 } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import LinkText from '@/components/LinkText';
@@ -180,6 +181,7 @@ export default function ProfileScreen() {
   const [isBlocked, setIsBlocked] = useState(false);
   const [blockLoading, setBlockLoading] = useState(false);
   const [copiedAddr, setCopiedAddr] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState(false);
 
   // Followers/Following modal
   const [showFollowModal, setShowFollowModal] = useState(false);
@@ -824,7 +826,11 @@ export default function ProfileScreen() {
 
         {/* Avatar + name row */}
         <View style={styles.profileTopRow}>
-          <View style={[styles.avatarWrap, isPremiumActive && styles.avatarWrapPremium]}>
+          <TouchableOpacity
+            activeOpacity={profile?.avatar_url ? 0.8 : 1}
+            onPress={() => profile?.avatar_url && setAvatarPreview(true)}
+            style={[styles.avatarWrap, isPremiumActive && styles.avatarWrapPremium]}
+          >
             {isPremiumActive && <View style={styles.premiumGlowRing} />}
             {profile?.avatar_url ? (
               <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
@@ -836,7 +842,7 @@ export default function ProfileScreen() {
                 <Star size={10} color="#FBBF24" fill="#FBBF24" strokeWidth={0} />
               </View>
             )}
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.profileTitleBlock}>
             <View style={styles.nameVerifiedRow}>
@@ -850,15 +856,23 @@ export default function ProfileScreen() {
 
         </View>
 
-        {/* Wallet address */}
+        {/* Wallet address + Founder badge */}
         {shortAddr ? (
-          <TouchableOpacity style={styles.addrChip} onPress={copyAddress} activeOpacity={0.8}>
-            <Text style={styles.addrChipText}>{shortAddr}</Text>
-            {copiedAddr
-              ? <Check size={14} color={colors.success} strokeWidth={2.5} />
-              : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
-            }
-          </TouchableOpacity>
+          <View style={styles.addrAndFounderRow}>
+            <TouchableOpacity style={styles.addrChip} onPress={copyAddress} activeOpacity={0.8}>
+              <Text style={styles.addrChipText}>{shortAddr}</Text>
+              {copiedAddr
+                ? <Check size={14} color={colors.success} strokeWidth={2.5} />
+                : <Copy size={14} color={colors.textMuted} strokeWidth={2} />
+              }
+            </TouchableOpacity>
+            {profile?.is_founder && (
+              <View style={styles.founderBadge}>
+                <Crown size={12} color="#D97706" strokeWidth={2.5} />
+                <Text style={styles.founderBadgeText}>Founder & CEO</Text>
+              </View>
+            )}
+          </View>
         ) : null}
 
         {/* Bio */}
@@ -1804,6 +1818,18 @@ export default function ProfileScreen() {
           <Text style={styles.shareToastText}>Profile link copied!</Text>
         </View>
       )}
+
+      {/* Avatar full-screen preview */}
+      <Modal visible={avatarPreview} transparent animationType="fade" onRequestClose={() => setAvatarPreview(false)}>
+        <TouchableOpacity style={styles.avatarPreviewOverlay} activeOpacity={1} onPress={() => setAvatarPreview(false)}>
+          {profile?.avatar_url ? (
+            <Image source={{ uri: profile.avatar_url }} style={styles.avatarPreviewImg} resizeMode="contain" />
+          ) : null}
+          <TouchableOpacity style={styles.avatarPreviewClose} onPress={() => setAvatarPreview(false)}>
+            <X size={22} color="#fff" strokeWidth={2.5} />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -1877,12 +1903,34 @@ const styles = StyleSheet.create({
   },
   addrChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    alignSelf: 'flex-start', marginHorizontal: spacing.lg, marginBottom: spacing.md,
+    alignSelf: 'flex-start',
     backgroundColor: 'rgba(139,92,246,0.1)', borderRadius: borderRadius.full,
     paddingHorizontal: 14, paddingVertical: 8,
     borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
   },
   addrChipText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary, fontFamily: 'SpaceMono-Regular' },
+  addrAndFounderRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+    marginHorizontal: spacing.lg, marginBottom: spacing.md,
+  },
+  founderBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(217,119,6,0.12)', borderRadius: borderRadius.full,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(217,119,6,0.35)',
+  },
+  founderBadgeText: { fontSize: 11, fontWeight: '700', color: '#D97706' },
+  avatarPreviewOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarPreviewImg: { width: '90%', height: '70%' },
+  avatarPreviewClose: {
+    position: 'absolute', top: 56, right: 20,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center', alignItems: 'center',
+  },
   bio: { fontSize: 15, color: colors.textSecondary, lineHeight: 23, paddingHorizontal: spacing.lg, marginBottom: spacing.md },
   bioPlaceholder: { fontSize: 15, color: colors.textMuted, lineHeight: 23, paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
   socialLinksRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.sm, gap: spacing.sm, flexWrap: 'wrap' },

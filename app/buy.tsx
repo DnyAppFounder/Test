@@ -902,6 +902,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginBottom: spacing.sm,
   },
   dawenSelector: {
@@ -909,6 +910,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#1E1E2E',
+    flexShrink: 0,
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderRadius: borderRadius.full,
@@ -917,9 +919,10 @@ const styles = StyleSheet.create({
   },
   dawenSelectorLogo: { width: 28, height: 28 },
   dawenSelectorText: { fontSize: 14, fontWeight: '800', color: colors.textPrimary },
-  receiveAmountCol: { alignItems: 'flex-end' },
+  receiveAmountCol: { alignItems: 'flex-end', flex: 1, minWidth: 0 },
   receiveAmount: {
-    fontSize: 32, fontWeight: '900', color: colors.primary, letterSpacing: -0.5,
+    fontSize: 24, fontWeight: '900', color: colors.primary, letterSpacing: -0.5,
+    flexShrink: 1, textAlign: 'right',
   },
   receiveUsd: { fontSize: 13, color: colors.textMuted, fontWeight: '500' },
   divider: {

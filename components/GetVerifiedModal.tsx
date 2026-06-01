@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
   ScrollView, ActivityIndicator, Alert,
 } from 'react-native';
-import { X, Check } from 'lucide-react-native';
+import { X, Check, ShieldCheck } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
 import { VerificationService } from '@/services/verificationService';
@@ -23,19 +23,21 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
     alreadyVerified: boolean; decentId: string | null; badgeId: string | null;
     dawenPulseId: string | null; blueBadgeId: string | null;
   } | null>(null);
-  const [verifyLoading, setVerifyLoading] = useState(false);
+  // Start as true so the spinner shows immediately when modal first opens
+  const [verifyLoading, setVerifyLoading] = useState(true);
   const [verifyChecking, setVerifyChecking] = useState(false);
 
-  const loadVerifyStatus = async () => {
-    if (!profile?.id) return;
+  // Load status whenever modal becomes visible
+  useEffect(() => {
+    if (!visible) return;
+    if (!profile?.id) { setVerifyLoading(false); return; }
     setVerifyLoading(true);
-    try {
-      const status = await VerificationService.getVerificationStatus(profile.id);
-      setVerifyStatus(status);
-    } finally {
-      setVerifyLoading(false);
-    }
-  };
+    setVerifyStatus(null);
+    VerificationService.getVerificationStatus(profile.id)
+      .then(status => setVerifyStatus(status))
+      .catch(() => {})
+      .finally(() => setVerifyLoading(false));
+  }, [visible, profile?.id]);
 
   const handleCheckVerification = async () => {
     if (!profile?.id) return;
@@ -56,20 +58,16 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
     }
   };
 
-  const handleOpen = () => {
-    loadVerifyStatus();
-  };
-
   const handleClose = () => {
     onClose();
-    // Delay clearing state so the slide-out animation doesn't flicker
-    setTimeout(() => setVerifyStatus(null), 350);
+    setTimeout(() => { setVerifyStatus(null); setVerifyLoading(true); }, 350);
   };
 
   const navigateAndClose = (path: string) => {
     onClose();
     setTimeout(() => {
       setVerifyStatus(null);
+      setVerifyLoading(true);
       router.push(path as any);
     }, 50);
   };
@@ -79,7 +77,6 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
       visible={visible}
       animationType="slide"
       transparent
-      onShow={handleOpen}
     >
       <View style={styles.overlay}>
         <View style={styles.content}>
@@ -110,9 +107,12 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.scrollContent}
             >
-              <Text style={styles.intro}>
-                Complete all 4 steps below to receive your free blue verification badge.
-              </Text>
+              <View style={styles.introBanner}>
+                <ShieldCheck size={18} color="#3b82f6" strokeWidth={2} />
+                <Text style={styles.intro}>
+                  Verification helps protect the DAWEN ecosystem, prevents abuse, and confirms trusted accounts. Complete the steps below to activate your verification badge and unlock verified account benefits.
+                </Text>
+              </View>
 
               {[
                 {
@@ -150,10 +150,7 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
               ].map((step, idx) => (
                 <View
                   key={idx}
-                  style={[
-                    styles.step,
-                    step.done && styles.stepDone,
-                  ]}
+                  style={[styles.step, step.done && styles.stepDone]}
                 >
                   <View style={[styles.stepNum, step.done && styles.stepNumDone]}>
                     {step.done
@@ -224,11 +221,22 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 48,
   },
+  introBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.2)',
+    marginBottom: spacing.xl,
+  },
   intro: {
+    flex: 1,
     fontSize: fontSize.sm,
     color: colors.textSecondary,
-    marginBottom: spacing.xl,
-    lineHeight: 18,
+    lineHeight: 19,
   },
   step: {
     flexDirection: 'row',

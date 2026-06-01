@@ -22,7 +22,7 @@ import {
   X, Check, ChevronDown, ChevronRight, Globe,
   ChartBar as BarChart2,
   Coins, MapPin, Lock, MessageCircle, AtSign, User,
-  Search, Film, Megaphone, Zap, Wallet, Clock, CircleAlert,
+  Search, Film, Megaphone, Zap, Wallet, Clock, CircleAlert, Play,
 } from 'lucide-react-native';
 import VerificationBadge from '@/components/VerificationBadge';
 import { colors, spacing, borderRadius, fontSize } from '@/constants/theme';
@@ -48,6 +48,12 @@ const WHO_CAN_REPLY_OPTIONS: { value: WhoCanReply; label: string }[] = [
 
 const MAX_MEDIA = 4;
 const MAX_TOKENS = 2;
+
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'avi', 'mkv']);
+function isVideoUri(uri: string): boolean {
+  const ext = uri.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  return VIDEO_EXTS.has(ext);
+}
 
 const qaGifBox: any = {
   width: 28, height: 28, borderRadius: 6, borderWidth: 2, borderColor: '#10b981',
@@ -652,7 +658,14 @@ export default function CreatePostScreen() {
             <View style={styles.mediaGrid}>
               {mediaUris.map(uri => (
                 <View key={uri} style={styles.mediaThumbWrap}>
-                  <Image source={{ uri }} style={styles.mediaThumb} resizeMode="cover" />
+                  {isVideoUri(uri) ? (
+                    <View style={[styles.mediaThumb, { backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' }]}>
+                      <Play size={24} color="#fff" strokeWidth={2} />
+                      <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', marginTop: 3 }}>Video</Text>
+                    </View>
+                  ) : (
+                    <Image source={{ uri }} style={styles.mediaThumb} resizeMode="cover" />
+                  )}
                   <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeMedia(uri)}>
                     <X size={14} color={colors.white} strokeWidth={2.5} />
                   </TouchableOpacity>
