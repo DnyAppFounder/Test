@@ -208,10 +208,10 @@ Deno.serve(async (req: Request) => {
         .eq("group_id", group_id)
         .maybeSingle();
 
-      if (!bot?.is_enabled) return json({ success: true, handled: false });
+      // No bot configured or bot is disabled — silently ignore
+      if (!bot || !bot.is_enabled) return json({ success: true, handled: false });
 
-      const withoutSlash = text.slice(1);
-      const cmdName = withoutSlash.split(/\s+/)[0].toLowerCase();
+      const cmdName = text.slice(1).split(/\s+/)[0].toLowerCase();
 
       // Look up stored command
       const { data: cmd } = await supabase
@@ -225,13 +225,14 @@ Deno.serve(async (req: Request) => {
 
       let responseText = "";
 
-      if (cmd?.response_text) {
+      // Use stored response if non-empty
+      if (cmd?.response_text?.trim()) {
         responseText = cmd.response_text;
       } else {
         // Built-in fallback commands
         switch (cmdName) {
           case "start":
-            responseText = `Welcome to this group! Type /help to see available commands.`;
+            responseText = "Welcome! Type /help to see available commands.";
             break;
           case "ping":
             responseText = "Pong!";
@@ -252,9 +253,12 @@ Deno.serve(async (req: Request) => {
             break;
           }
           default:
+            // Unknown command — no response
             return json({ success: true, handled: false });
         }
       }
+
+      if (!responseText.trim()) return json({ success: true, handled: false });
 
       const { data: msg, error: msgErr } = await supabase
         .from("group_messages")
@@ -270,7 +274,10 @@ Deno.serve(async (req: Request) => {
         .select()
         .single();
 
-      if (msgErr) return json({ success: false, error: msgErr.message }, 500);
+      if (msgErr) {
+        console.error("[internal-bot] process_command insert error:", msgErr.message);
+        return json({ success: false, error: msgErr.message }, 500);
+      }
       return json({ success: true, handled: true, message: msg });
     }
 

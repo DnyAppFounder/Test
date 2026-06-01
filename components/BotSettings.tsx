@@ -530,7 +530,7 @@ export default function BotSettings({ visible, onClose, groupId, walletAddress, 
       const res = await callTelegramBot('add_target', {
         group_id: groupId,
         wallet_address: walletAddress,
-        chat_id: parseInt(val) || val,
+        chat_id: val,
       });
       if (res.success) {
         setAddTargetInput('');
@@ -1124,7 +1124,12 @@ function TelegramTab({
           {isAdmin && (
             <>
               <Text style={styles.sectionLabel}>Telegram Targets</Text>
-              <Text style={styles.sectionHint}>Add Telegram channels or groups to send messages to from DAWEN.</Text>
+              <View style={styles.targetInstructions}>
+                <Text style={styles.targetInstructionsTitle}>Before adding a target:</Text>
+                <Text style={styles.targetInstructionsText}>1. Add the bot as an admin to your Telegram channel or group</Text>
+                <Text style={styles.targetInstructionsText}>2. For public channels/groups: enter @username</Text>
+                <Text style={styles.targetInstructionsText}>3. For private chats: enter the numeric ID (e.g. -1001234567890)</Text>
+              </View>
 
               {targets.length === 0 ? (
                 <View style={styles.emptyTargets}>
@@ -1147,7 +1152,7 @@ function TelegramTab({
               <View style={styles.addTargetRow}>
                 <TextInput
                   style={[styles.fieldInput, { flex: 1, marginBottom: 0 }]}
-                  placeholder="Chat ID or @username"
+                  placeholder="@username or -1001234567890"
                   placeholderTextColor={colors.textMuted}
                   value={addTargetInput}
                   onChangeText={setAddTargetInput}
@@ -1615,8 +1620,15 @@ const styles = S({
   textOff: { color: '#EF4444' },
 
   // Targets
-  targetCard: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  targetInstructions: {
+    backgroundColor: 'rgba(59,130,246,0.06)',
+    borderRadius: 10, padding: 12,
+    borderWidth: 1, borderColor: 'rgba(59,130,246,0.18)',
+    gap: 4, marginBottom: spacing.sm,
+  },
+  targetInstructionsTitle: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
+  targetInstructionsText: { fontSize: 11, color: colors.textMuted, lineHeight: 17 },
+  targetCard: {    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: 'rgba(255,255,255,0.03)',
     borderRadius: 10, padding: 12,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',

@@ -556,10 +556,17 @@ export default function GroupChatScreen() {
   };
 
   const renderMessage = ({ item, index }: { item: any; index: number }) => {
-    const mine = item.sender_id === profile?.id;
-    const prev = index > 0 ? visibleMessages[index - 1] : null;
-    const showSenderInfo = !mine && (!prev || prev.sender_id !== item.sender_id);
     const isBot = !!item.is_bot_message;
+    // Bot messages always render on the left regardless of sender_id
+    const mine = item.sender_id === profile?.id && !isBot;
+    const prev = index > 0 ? visibleMessages[index - 1] : null;
+    // Show sender info when: not mine, AND (first message, sender changed, or bot identity changed)
+    const showSenderInfo = !mine && (
+      !prev ||
+      prev.sender_id !== item.sender_id ||
+      !!prev.is_bot_message !== isBot ||
+      (isBot && prev.bot_name !== item.bot_name)
+    );
     const senderName = isBot
       ? (item.bot_name || item.bot_username || 'Bot')
       : (item.sender?.username || (item.sender?.wallet_address ? `${item.sender.wallet_address.slice(0, 6)}...` : 'User'));
