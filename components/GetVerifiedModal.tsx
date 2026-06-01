@@ -61,8 +61,17 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
   };
 
   const handleClose = () => {
-    setVerifyStatus(null);
     onClose();
+    // Delay clearing state so the slide-out animation doesn't flicker
+    setTimeout(() => setVerifyStatus(null), 350);
+  };
+
+  const navigateAndClose = (path: string) => {
+    onClose();
+    setTimeout(() => {
+      setVerifyStatus(null);
+      router.push(path as any);
+    }, 50);
   };
 
   return (
@@ -111,7 +120,7 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
                   sub: 'Follow the official Decent account',
                   done: verifyStatus?.followsDecent,
                   id: verifyStatus?.decentId,
-                  onNav: () => { handleClose(); router.push(`/profile/${verifyStatus!.decentId}` as any); },
+                  onNav: () => navigateAndClose(`/profile/${verifyStatus!.decentId}`),
                   btnLabel: verifyStatus?.followsDecent ? 'Done' : 'Follow',
                 },
                 {
@@ -119,7 +128,7 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
                   sub: 'Follow the verification account',
                   done: verifyStatus?.followsBadge,
                   id: verifyStatus?.badgeId,
-                  onNav: () => { handleClose(); router.push(`/profile/${verifyStatus!.badgeId}` as any); },
+                  onNav: () => navigateAndClose(`/profile/${verifyStatus!.badgeId}`),
                   btnLabel: verifyStatus?.followsBadge ? 'Done' : 'Follow',
                 },
                 {
@@ -127,7 +136,7 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
                   sub: 'Follow the official DawenPulse account',
                   done: verifyStatus?.followsDawenPulse,
                   id: verifyStatus?.dawenPulseId,
-                  onNav: () => { handleClose(); router.push(`/profile/${verifyStatus!.dawenPulseId}` as any); },
+                  onNav: () => navigateAndClose(`/profile/${verifyStatus!.dawenPulseId}`),
                   btnLabel: verifyStatus?.followsDawenPulse ? 'Done' : 'Follow',
                 },
                 {
@@ -135,7 +144,7 @@ export function GetVerifiedModal({ visible, onClose }: Props) {
                   sub: 'Send the message "Blue" to @BlueBadge',
                   done: verifyStatus?.sentBlueDM,
                   id: verifyStatus?.blueBadgeId,
-                  onNav: () => { handleClose(); router.push(`/chat/${verifyStatus!.blueBadgeId}` as any); },
+                  onNav: () => navigateAndClose(`/chat/${verifyStatus!.blueBadgeId}`),
                   btnLabel: verifyStatus?.sentBlueDM ? 'Done' : 'DM',
                 },
               ].map((step, idx) => (

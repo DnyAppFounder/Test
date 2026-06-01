@@ -21,6 +21,7 @@ export interface UserProfile {
   id: string;
   wallet_address: string;
   username: string | null;
+  display_name?: string | null;
   bio: string;
   avatar_url: string | null;
   banner_url?: string | null;
@@ -36,6 +37,7 @@ export interface UserProfile {
   telegram_url?: string | null;
   discord_url?: string | null;
   name_color?: string | null;
+  is_founder?: boolean;
 }
 
 export interface Post {
@@ -593,13 +595,22 @@ export class SocialService {
 
   static async uploadPostMedia(userId: string, imageUri: string): Promise<string | null> {
     try {
-      const ext = imageUri.split('.').pop()?.split('?')[0] || 'jpg';
+      const ext = (imageUri.split('.').pop()?.split('?')[0] || 'jpg').toLowerCase();
       const fileName = `${userId}/post_${Date.now()}.${ext}`;
+      const VIDEO_TYPES: Record<string, string> = {
+        mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
+        avi: 'video/x-msvideo', mkv: 'video/x-matroska',
+      };
+      const IMAGE_TYPES: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+      };
+      const contentType = VIDEO_TYPES[ext] ?? IMAGE_TYPES[ext] ?? 'image/jpeg';
       const response = await fetch(imageUri);
       const blob = await response.blob();
       const { data, error } = await supabase.storage
         .from('post-media')
-        .upload(fileName, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+        .upload(fileName, blob, { contentType: (blob.type && blob.type !== 'application/octet-stream') ? blob.type : contentType, upsert: false });
       if (error) { console.error('[PostMedia] Upload error:', error); return null; }
       const { data: urlData } = supabase.storage.from('post-media').getPublicUrl(data.path);
       return urlData.publicUrl;

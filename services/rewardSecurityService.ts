@@ -9,6 +9,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SolanaConnectionService } from './solana/connectionService';
 import { KeyDerivationManager } from '@/lib/crypto/keyDerivation';
+import { ExternalWalletAdapter, ExternalWalletId } from '@/lib/wallet/ExternalWalletAdapter';
 
 // DWC_MINT: server secret name is DWC_MINT. Client reads EXPO_PUBLIC_DWC_MINT.
 // Falls back to the hardcoded public mint address if env is not set.
@@ -312,6 +313,120 @@ export async function createDwcAta(mnemonic: string, accountIndex = 0): Promise<
     } catch (e: any) {
       if (e?.message?.includes('failed on-chain')) throw e;
       // Poll network error — keep trying
+    }
+  }
+
+  throw new Error('Token account creation not confirmed within 60s. Check Solscan and retry.');
+}
+
+// ── ATA creation for EXTERNAL wallets (Phantom/Backpack/Solflare) ─────────────
+// Builds the same CreateIdempotent instruction but asks the external wallet
+// provider to sign it via provider.signTransaction(). The user pays rent/fees.
+
+export async function createDwcAtaForExternalWallet(
+  walletAddress: string,
+  providerId: ExternalWalletId,
+): Promise<string> {
+  const mint = new PublicKey(DWC_MINT);
+
+  console.log(`[rewardSecurity] createDwcAtaForExternalWallet | provider: ${providerId} | wallet: ${walletAddress.slice(0, 8)}`);
+
+  const owner = new PublicKey(walletAddress);
+  const tokenProgram = await getDwcTokenProgram();
+  const tokenProgramId = new PublicKey(tokenProgram);
+  const assocTokenProgram = new PublicKey(ASSOC_TOKEN_PROGRAM_ID_STR);
+  const systemProgram = new PublicKey(SYSTEM_PROGRAM_ID_STR);
+  const ata = deriveATA(owner, mint, tokenProgramId);
+
+  // Check SOL balance — ATA creation needs ~0.003 SOL
+  let solBalance = 0;
+  try {
+    const balResult = await ataRpcCall('getBalance', [
+      walletAddress,
+      { commitment: 'confirmed' },
+    ]) as any;
+    solBalance = Number(balResult ?? 0) / LAMPORTS_PER_SOL;
+  } catch (e: any) {
+    throw new Error(`Network error checking wallet balance. Please try again. (${e?.message})`);
+  }
+
+  if (solBalance < 0.003) {
+    throw new Error(
+      `INSUFFICIENT_SOL_FOR_ATA: Your wallet needs at least 0.003 SOL to create the DWORLD token account (have ${solBalance.toFixed(6)} SOL).`,
+    );
+  }
+
+  // Build CreateIdempotent instruction
+  const tx = new Transaction();
+  tx.add(new TransactionInstruction({
+    programId: assocTokenProgram,
+    keys: [
+      { pubkey: owner,          isSigner: true,  isWritable: true  },
+      { pubkey: ata,            isSigner: false, isWritable: true  },
+      { pubkey: owner,          isSigner: false, isWritable: false },
+      { pubkey: mint,           isSigner: false, isWritable: false },
+      { pubkey: systemProgram,  isSigner: false, isWritable: false },
+      { pubkey: tokenProgramId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([1]),
+  }));
+
+  let blockhash: string;
+  try {
+    const bhResult = await ataRpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]) as any;
+    blockhash = bhResult?.value?.blockhash ?? bhResult?.blockhash;
+    if (!blockhash) throw new Error('empty blockhash');
+  } catch (e: any) {
+    throw new Error(`Network error fetching blockhash. (${e?.message})`);
+  }
+
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = owner;
+
+  // Ask external wallet to sign
+  let signedTx: Transaction;
+  try {
+    signedTx = await ExternalWalletAdapter.signTransaction(providerId, tx);
+  } catch (e: any) {
+    throw new Error(`Wallet signing cancelled or failed. Please approve the transaction in your wallet. (${e?.message})`);
+  }
+
+  const serialized = signedTx.serialize();
+  const base64Tx = btoa(String.fromCharCode(...serialized));
+
+  let sig: string;
+  try {
+    sig = await ataRpcCall('sendTransaction', [
+      base64Tx,
+      { encoding: 'base64', skipPreflight: true },
+    ]) as string;
+  } catch (e: any) {
+    throw new Error(`Failed to send token account creation transaction. (${e?.message})`);
+  }
+
+  if (!sig || typeof sig !== 'string') {
+    throw new Error('No transaction signature returned. Please try again.');
+  }
+
+  console.log(`[rewardSecurity] external ATA tx sent: ${sig.slice(0, 20)} | ata: ${ata.toBase58().slice(0, 8)}`);
+
+  // Poll for confirmation (60s)
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2_500));
+    try {
+      const statResult = await ataRpcCall('getSignatureStatuses', [
+        [sig],
+        { searchTransactionHistory: true },
+      ]) as any;
+      const status = statResult?.value?.[0];
+      if (status?.err) throw new Error(`Token account creation failed: ${JSON.stringify(status.err)}`);
+      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+        console.log(`[rewardSecurity] external ATA confirmed | ata: ${ata.toBase58().slice(0, 8)}`);
+        return sig;
+      }
+    } catch (e: any) {
+      if (e?.message?.includes('failed:')) throw e;
     }
   }
 

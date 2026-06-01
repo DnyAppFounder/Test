@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Share, Modal, Pressable, Dimensions, Platform, ActivityIndicator, Animated } from 'react-native';
-import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Users, Trash2, X, Megaphone, ChartBar as BarChart2, Send } from 'lucide-react-native';
+import { Heart, MessageCircle, Repeat2, Share2, MoveHorizontal as MoreHorizontal, User, Users, Trash2, X, Megaphone, ChartBar as BarChart2, Send, Play } from 'lucide-react-native';
 import VerificationBadge from './VerificationBadge';
 import PostTokenCard from './PostTokenCard';
 import LinkText, { extractUrls } from './LinkText';
@@ -31,6 +31,34 @@ export function timeAgo(date: string) {
   const days = Math.floor(hrs / 24);
   if (days < 7) return `${days}d`;
   return `${Math.floor(days / 7)}w`;
+}
+
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'avi', 'mkv']);
+function isVideoUrl(url: string): boolean {
+  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  return VIDEO_EXTS.has(ext);
+}
+
+function VideoThumb({ uri, style }: { uri: string; style?: any }) {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[style, { overflow: 'hidden', backgroundColor: '#000' }]}>
+        {/* @ts-ignore */}
+        <video
+          src={uri}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          controls
+          playsInline
+          preload="metadata"
+        />
+      </View>
+    );
+  }
+  return (
+    <View style={[style, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
+      <Play size={32} color="#fff" strokeWidth={2} />
+    </View>
+  );
 }
 
 export default function PostCard({ post, currentProfile, onLike, onComment, onRepost, onPromote = undefined, onDelete }: PostCardProps) {
@@ -306,10 +334,13 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
       {/* Media grid */}
       {mediaUrls.length > 0 && (() => {
         if (mediaUrls.length === 1) {
-          return (
-            <TouchableOpacity activeOpacity={0.9} onPress={() => setPreviewUri(mediaUrls[0])}>
+          const uri = mediaUrls[0];
+          return isVideoUrl(uri) ? (
+            <VideoThumb uri={uri} style={styles.image} />
+          ) : (
+            <TouchableOpacity activeOpacity={0.9} onPress={() => setPreviewUri(uri)}>
               <Image
-                source={{ uri: mediaUrls[0] }}
+                source={{ uri }}
                 style={styles.image}
                 resizeMode="cover"
                 onError={() => setImageError(true)}
@@ -320,23 +351,35 @@ export default function PostCard({ post, currentProfile, onLike, onComment, onRe
         return (
           <View style={styles.mediaGrid}>
             {mediaUrls.slice(0, 4).map((uri, idx) => (
-              <TouchableOpacity
-                key={uri + idx}
-                style={[
-                  styles.mediaGridItem,
-                  mediaUrls.length === 2 && styles.mediaGridItem2,
-                  mediaUrls.length >= 3 && styles.mediaGridItem3,
-                ]}
-                activeOpacity={0.9}
-                onPress={() => setPreviewUri(uri)}
-              >
-                <Image source={{ uri }} style={styles.mediaGridImg} resizeMode="cover" />
-                {idx === 3 && mediaUrls.length > 4 && (
-                  <View style={styles.mediaGridMore}>
-                    <Text style={styles.mediaGridMoreText}>+{mediaUrls.length - 4}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+              isVideoUrl(uri) ? (
+                <VideoThumb
+                  key={uri + idx}
+                  uri={uri}
+                  style={[
+                    styles.mediaGridItem,
+                    mediaUrls.length === 2 && styles.mediaGridItem2,
+                    mediaUrls.length >= 3 && styles.mediaGridItem3,
+                  ]}
+                />
+              ) : (
+                <TouchableOpacity
+                  key={uri + idx}
+                  style={[
+                    styles.mediaGridItem,
+                    mediaUrls.length === 2 && styles.mediaGridItem2,
+                    mediaUrls.length >= 3 && styles.mediaGridItem3,
+                  ]}
+                  activeOpacity={0.9}
+                  onPress={() => setPreviewUri(uri)}
+                >
+                  <Image source={{ uri }} style={styles.mediaGridImg} resizeMode="cover" />
+                  {idx === 3 && mediaUrls.length > 4 && (
+                    <View style={styles.mediaGridMore}>
+                      <Text style={styles.mediaGridMoreText}>+{mediaUrls.length - 4}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )
             ))}
           </View>
         );

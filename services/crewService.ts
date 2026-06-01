@@ -75,6 +75,7 @@ export interface CrewApplicationTask {
   proof_required: boolean;
   proof_text?: string;
   proof_links: string[];
+  proof_media_urls?: string[];
   admin_message?: string;
   status: CrewTaskStatus;
   reviewed_by?: string;
@@ -321,7 +322,7 @@ export const CrewService = {
 
   async updateTask(
     taskId: string,
-    updates: { proof_text?: string; proof_links?: string[]; status?: string }
+    updates: { proof_text?: string; proof_links?: string[]; proof_media_urls?: string[]; status?: string }
   ): Promise<{ error: string | null }> {
     const { error } = await supabase
       .from('crew_application_tasks')

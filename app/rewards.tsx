@@ -32,6 +32,7 @@ import { fetchLeaderboard, OverallEntry } from '@/services/leaderboardService';
 import {
   checkDwcAta,
   createDwcAta,
+  createDwcAtaForExternalWallet,
   getDeviceFingerprintHash,
 } from '@/services/rewardSecurityService';
 import { supabase } from '@/lib/supabase';
@@ -41,7 +42,7 @@ import { GetVerifiedModal } from '@/components/GetVerifiedModal';
 
 export default function RewardsScreen() {
   const router = useRouter();
-  const { activeAddress, refreshPortfolio } = useWallet();
+  const { activeAddress, refreshPortfolio, connectedWallet } = useWallet();
   const [loading, setLoading]                     = useState(true);
   const [referralCode, setReferralCode]           = useState('');
   const [referrals, setReferrals]                 = useState<Referral[]>([]);
@@ -322,22 +323,28 @@ export default function RewardsScreen() {
 
     // ATA_NOT_FOUND → create the token account (user pays rent) → retry once
     if (!result.success && (result as any).code === 'ATA_NOT_FOUND') {
-      // First check if the user has an in-app wallet with a mnemonic
-      const hasInAppWallet = await SecureWalletManager.getInstance().hasWallet();
-      if (!hasInAppWallet) {
-        setClaimingId(null);
-        setClaimMessage({
-          type: 'error',
-          text: 'A DWORLD token account needs to be created in your wallet. This requires an in-app DAWEN wallet (not an external wallet like Phantom). Please create or import a wallet in Settings.',
-        });
-        setTimeout(() => setClaimMessage(null), 12000);
-        return;
-      }
-
       setCreatingAta(true);
       try {
-        const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
-        await createDwcAta(mnemonic, 0);
+        const hasInAppWallet = await SecureWalletManager.getInstance().hasWallet();
+
+        if (hasInAppWallet) {
+          // Internal DAWEN wallet — derive keypair from mnemonic and sign locally
+          const mnemonic = await SecureWalletManager.getInstance().getMnemonicUnlocked();
+          await createDwcAta(mnemonic, 0);
+        } else if (connectedWallet) {
+          // External wallet (Phantom / Backpack / Solflare) — wallet signs via provider popup
+          await createDwcAtaForExternalWallet(activeAddress!, connectedWallet.id);
+        } else {
+          setCreatingAta(false);
+          setClaimingId(null);
+          setClaimMessage({
+            type: 'error',
+            text: 'No wallet available to create the DWORLD token account. Please connect a wallet and try again.',
+          });
+          setTimeout(() => setClaimMessage(null), 12000);
+          return;
+        }
+
         setCreatingAta(false);
         // Retry the claim now that ATA exists
         result = await doClaimCall();
@@ -346,7 +353,9 @@ export default function RewardsScreen() {
         setClaimingId(null);
         const msg = String(ataErr?.message || ataErr);
         if (msg.includes('INSUFFICIENT_SOL_FOR_ATA') || msg.includes('INSUFFICIENT_SOL')) {
-          setClaimMessage({ type: 'error', text: 'You need a small amount of SOL to create your DWORLD token account and pay the network fee. Please add SOL and try again.' });
+          setClaimMessage({ type: 'error', text: 'Your wallet needs a small amount of SOL to create the DWORLD token account before receiving rewards.' });
+        } else if (msg.includes('signing cancelled') || msg.includes('cancelled') || msg.includes('rejected')) {
+          setClaimMessage({ type: 'error', text: 'Transaction was cancelled. Please approve the signing request in your wallet and try again.' });
         } else if (msg.includes('Failed to unlock wallet') || msg.includes('unlock')) {
           setClaimMessage({ type: 'error', text: 'Could not unlock your DAWEN wallet. Please ensure your wallet is set up and try again.' });
         } else {

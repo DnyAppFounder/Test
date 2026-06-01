@@ -4,6 +4,7 @@ import {
   TextInput, ActivityIndicator, Modal, Image, Platform,
   RefreshControl, KeyboardAvoidingView, Linking,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Shield, Users, Star, Zap, Circle as HelpCircle, Video, Globe, Bug, Calendar, Hop as Home, Rocket, Crown, ChevronRight, ChevronDown, ChevronUp, Check, X, Send, Clock, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, FileText, Play, Search, UserPlus, UserX, StickyNote, ListChecks, MessageSquare, ExternalLink } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
@@ -856,12 +857,42 @@ function AdminApplicationDetail({
   const [trialDays, setTrialDays] = useState('7');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [taskFeedback, setTaskFeedback] = useState<Record<string, string>>({});  const role = roles.find(r => r.role_key === app.role_key);
+  const [taskFeedback, setTaskFeedback] = useState<Record<string, string>>({});
+  const [threadMessages, setThreadMessages] = useState<any[]>([]);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [showThread, setShowThread] = useState(false);
+  const threadScrollRef = useRef<ScrollView>(null);
+  const role = roles.find(r => r.role_key === app.role_key);
   const p = app.user_profiles;
   const displayName = p?.display_name || p?.username || 'Unknown';
   const walletShort = p?.wallet_address ? `${p.wallet_address.slice(0, 6)}…${p.wallet_address.slice(-4)}` : '';
   const isPremium = p ? VerificationService.isPremiumActive(p as any) : false;
   const isVerified = p?.is_verified || p?.verified_basic;
+
+  const loadThread = useCallback(async () => {
+    setThreadLoading(true);
+    try {
+      const msgs = await CrewService.getApplicationMessages(app.id);
+      setThreadMessages(msgs);
+      setTimeout(() => threadScrollRef.current?.scrollToEnd({ animated: false }), 100);
+    } finally {
+      setThreadLoading(false);
+    }
+  }, [app.id]);
+
+  useEffect(() => {
+    if (!showThread) return;
+    loadThread();
+    const channel = supabase
+      .channel(`admin_thread_${app.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'crew_application_messages', filter: `application_id=eq.${app.id}` },
+        () => { loadThread(); }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [showThread, app.id, loadThread]);
 
   const action = async (status: CrewAppStatus, isTrial = false, assignMember = false) => {
     setLoading(true);
@@ -902,10 +933,8 @@ function AdminApplicationDetail({
     if (!msgText.trim()) return;
     setLoading(true);
     setError('');
-    // Save message to the thread
     const { error: msgErr } = await CrewService.sendApplicationMessage(app.id, reviewerId, msgText.trim(), 'admin');
     if (msgErr) { setError(msgErr); setLoading(false); return; }
-    // Also update user_visible_message for legacy display in MyApplicationView
     await CrewService.updateApplication(app.id, { user_visible_message: msgText.trim() });
     if (app.user_id) {
       await CrewService.notifyApplicantWithThread(app.user_id, reviewerId, app.id, msgText.trim());
@@ -915,6 +944,7 @@ function AdminApplicationDetail({
     setTimeout(() => setSuccess(''), 2500);
     setLoading(false);
     onRefresh();
+    if (showThread) loadThread();
   };
 
   const addNote = async () => {
@@ -997,8 +1027,53 @@ function AdminApplicationDetail({
       {success ? <View style={styles.successRow}><CheckCircle size={14} color="#10B981" strokeWidth={2} /><Text style={styles.successRowText}>{success}</Text></View> : null}
       {error ? <View style={styles.errorRow}><AlertTriangle size={14} color="#EF4444" strokeWidth={2} /><Text style={styles.errorRowText}>{error}</Text></View> : null}
 
-      {/* ── User message ── */}
-      <Text style={styles.detailSectionLabel}>Message to applicant (optional)</Text>
+      {/* ── Application Thread ── */}
+      <TouchableOpacity
+        style={styles.threadToggleBtn}
+        onPress={() => setShowThread(v => !v)}
+        activeOpacity={0.8}
+      >
+        <MessageSquare size={14} color={colors.primary} strokeWidth={2} />
+        <Text style={styles.threadToggleBtnText}>
+          {showThread ? 'Hide Thread' : 'Application Thread'}
+        </Text>
+        {showThread ? <ChevronUp size={14} color={colors.primary} strokeWidth={2} /> : <ChevronDown size={14} color={colors.primary} strokeWidth={2} />}
+      </TouchableOpacity>
+
+      {showThread && (
+        <View style={styles.threadContainer}>
+          {threadLoading ? (
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 12 }} />
+          ) : threadMessages.length === 0 ? (
+            <Text style={styles.threadEmpty}>No messages yet. Start the conversation below.</Text>
+          ) : (
+            <ScrollView
+              ref={threadScrollRef}
+              style={styles.threadScroll}
+              showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => threadScrollRef.current?.scrollToEnd({ animated: false })}
+            >
+              {threadMessages.map(msg => {
+                const isAdmin = msg.sender_role === 'admin';
+                const senderName = msg.sender?.display_name || msg.sender?.username || (isAdmin ? 'Admin' : displayName);
+                return (
+                  <View key={msg.id} style={[styles.threadMsg, isAdmin ? styles.threadMsgAdmin : styles.threadMsgApplicant]}>
+                    <View style={styles.threadMsgHeader}>
+                      <Text style={[styles.threadMsgSender, isAdmin && { color: colors.primary }]}>{senderName}</Text>
+                      {isAdmin && <View style={styles.threadAdminBadge}><Text style={styles.threadAdminBadgeText}>Admin</Text></View>}
+                      <Text style={styles.threadMsgTime}>{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                    </View>
+                    <Text style={styles.threadMsgText}>{msg.message}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      )}
+
+      {/* ── Message input ── */}
+      <Text style={styles.detailSectionLabel}>Message to applicant</Text>
       <TextInput
         style={styles.msgInput}
         value={msgText}
@@ -1107,6 +1182,15 @@ function AdminApplicationDetail({
               {(task.proof_links ?? []).length > 0 && (
                 <View style={{ marginTop: 4 }}>
                   {task.proof_links.map((l, i) => <ProofLink key={i} link={l} />)}
+                </View>
+              )}
+              {(task.proof_media_urls ?? []).length > 0 && (
+                <View style={styles.proofMediaPreviewGrid}>
+                  {task.proof_media_urls!.map((url, i) => (
+                    <TouchableOpacity key={i} onPress={() => openLink(url)} activeOpacity={0.8}>
+                      <Image source={{ uri: url }} style={styles.proofMediaPreviewThumb} resizeMode="cover" />
+                    </TouchableOpacity>
+                  ))}
                 </View>
               )}
               {task.reviewed_at && (
@@ -1219,13 +1303,16 @@ const APP_TEST_FEATURES = ['Wallet', 'Trading', 'Social Feed', 'Groups', 'DAWEN 
 
 function TaskForm({ task, onSubmit, onCancel }: {
   task: CrewApplicationTask;
-  onSubmit: (proofText: string, proofLinks: string[]) => Promise<void>;
+  onSubmit: (proofText: string, proofLinks: string[], mediaUrls: string[]) => Promise<void>;
   onCancel: () => void;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [proofText, setProofText] = useState(task.proof_text ?? '');
   const [proofLink, setProofLink] = useState((task.proof_links ?? [])[0] ?? '');
+  const [mediaUris, setMediaUris] = useState<string[]>([]);
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const [mediaError, setMediaError] = useState('');
   const [testFeatures, setTestFeatures] = useState<string[]>([]);
   const [bugType, setBugType] = useState('bug');
   const [bugTitle, setBugTitle] = useState('');
@@ -1234,6 +1321,51 @@ function TaskForm({ task, onSubmit, onCancel }: {
   const [xUser, setXUser] = useState('');
   const [teleUser, setTeleUser] = useState('');
   const [discordUser, setDiscordUser] = useState('');
+
+  const pickMedia = async () => {
+    setMediaError('');
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') { setMediaError('Allow photo/video access to attach media.'); return; }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        quality: 0.8,
+        allowsMultipleSelection: false,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const sizeBytes = asset.fileSize ?? 0;
+        if (sizeBytes > 50 * 1024 * 1024) { setMediaError('File too large. Max 50 MB.'); return; }
+        setMediaUris(prev => [...prev, asset.uri].slice(0, 4));
+      }
+    } catch (e: any) {
+      setMediaError(e?.message || 'Failed to pick media.');
+    }
+  };
+
+  const uploadMedia = async (): Promise<string[]> => {
+    if (mediaUris.length === 0) return [];
+    setMediaUploading(true);
+    const uploaded: string[] = [];
+    for (const uri of mediaUris) {
+      try {
+        const ext = uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
+        const isVideo = ['mp4', 'mov', 'webm', 'avi'].includes(ext);
+        const mime = isVideo ? `video/${ext === 'mov' ? 'quicktime' : ext}` : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+        const fileName = `crew_proof_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const { data, error } = await supabase.storage.from('post-media').upload(fileName, blob, { contentType: mime, upsert: false });
+        if (error) { console.error('[TaskProof] upload error:', error); continue; }
+        const { data: urlData } = supabase.storage.from('post-media').getPublicUrl(data.path);
+        if (urlData?.publicUrl) uploaded.push(urlData.publicUrl);
+      } catch (e) {
+        console.error('[TaskProof] upload failed:', e);
+      }
+    }
+    setMediaUploading(false);
+    return uploaded;
+  };
 
   const isValid = () => {
     if (task.task_key === 'test_app') return testFeatures.length > 0;
@@ -1257,7 +1389,8 @@ function TaskForm({ task, onSubmit, onCancel }: {
         text = [xUser && `X: @${xUser}`, teleUser && `Telegram: @${teleUser}`, discordUser && `Discord: ${discordUser}`].filter(Boolean).join('\n');
         if (proofLink.trim()) links = [proofLink.trim()];
       }
-      await onSubmit(text, links);
+      const mediaUrls = await uploadMedia();
+      await onSubmit(text, links, mediaUrls);
     } finally {
       setSaving(false);
     }
@@ -1381,18 +1514,51 @@ function TaskForm({ task, onSubmit, onCancel }: {
         <Text style={styles.taskFormHint}>Tap Submit to mark this task as done.</Text>
       )}
 
+      {/* ── Media attachments ── */}
+      <View style={styles.proofMediaRow}>
+        <TouchableOpacity style={styles.proofMediaAddBtn} onPress={pickMedia} activeOpacity={0.8} disabled={mediaUris.length >= 4}>
+          <Text style={styles.proofMediaAddBtnText}>+ Attach Photo/Video</Text>
+        </TouchableOpacity>
+        <Text style={styles.proofMediaHint}>{mediaUris.length}/4 · Images or videos up to 50 MB</Text>
+      </View>
+      {mediaError ? <Text style={styles.proofMediaError}>{mediaError}</Text> : null}
+      {mediaUris.length > 0 && (
+        <View style={styles.proofMediaGrid}>
+          {mediaUris.map((uri, i) => {
+            const ext = uri.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
+            const isVideo = ['mp4', 'mov', 'webm', 'avi'].includes(ext);
+            return (
+              <View key={i} style={styles.proofMediaThumbWrap}>
+                {isVideo ? (
+                  <View style={styles.proofMediaThumb}>
+                    <Play size={18} color="#fff" strokeWidth={2} />
+                    <Text style={styles.proofMediaVideoLabel} numberOfLines={1}>{uri.split('/').pop()?.slice(0, 14)}</Text>
+                  </View>
+                ) : (
+                  <Image source={{ uri }} style={styles.proofMediaThumb} resizeMode="cover" />
+                )}
+                <TouchableOpacity style={styles.proofMediaRemove} onPress={() => setMediaUris(prev => prev.filter((_, j) => j !== i))}>
+                  <X size={10} color="#fff" strokeWidth={3} />
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+      )}
+      {mediaUploading && <Text style={styles.proofMediaHint}>Uploading media...</Text>}
+
       <View style={styles.taskFormActions}>
         <TouchableOpacity style={styles.taskFormCancelBtn} onPress={onCancel} activeOpacity={0.8}>
           <Text style={styles.taskFormCancelBtnText}>Cancel</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.taskConfirmBtn, { flex: 1 }, (!isValid() || saving) && styles.btnDisabled]}
+          style={[styles.taskConfirmBtn, { flex: 1 }, (!isValid() || saving || mediaUploading) && styles.btnDisabled]}
           onPress={handleSubmit}
           activeOpacity={0.8}
-          disabled={!isValid() || saving}
+          disabled={!isValid() || saving || mediaUploading}
         >
-          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Send size={14} color="#fff" strokeWidth={2} />}
-          <Text style={styles.taskConfirmBtnText}>Submit for Review</Text>
+          {(saving || mediaUploading) ? <ActivityIndicator size="small" color="#fff" /> : <Send size={14} color="#fff" strokeWidth={2} />}
+          <Text style={styles.taskConfirmBtnText}>{mediaUploading ? 'Uploading...' : 'Submit for Review'}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -1405,10 +1571,11 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
   const role = roles.find(r => r.role_key === app.role_key);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
 
-  const submitTask = async (taskId: string, proofText: string, proofLinks: string[]) => {
+  const submitTask = async (taskId: string, proofText: string, proofLinks: string[], mediaUrls: string[]) => {
     await CrewService.updateTask(taskId, {
       proof_text: proofText || undefined,
       proof_links: proofLinks,
+      proof_media_urls: mediaUrls.length > 0 ? mediaUrls : undefined,
       status: 'pending_review',
     });
     setOpenTaskId(null);
@@ -1500,7 +1667,7 @@ function MyApplicationView({ app, tasks, roles, onRefresh }: { app: CrewApplicat
                 {isOpen && (
                   <TaskForm
                     task={task}
-                    onSubmit={(text, links) => submitTask(task.id, text, links)}
+                    onSubmit={(text, links, mediaUrls) => submitTask(task.id, text, links, mediaUrls)}
                     onCancel={() => setOpenTaskId(null)}
                   />
                 )}
@@ -2324,6 +2491,18 @@ export default function CrewPage() {
                           {task.proof_links.map((l, i) => <ProofLink key={i} link={l} />)}
                         </View>
                       )}
+                      {(task.proof_media_urls ?? []).length > 0 && (
+                        <View style={styles.proofBlock}>
+                          <Text style={styles.proofBlockLabel}>Proof media</Text>
+                          <View style={styles.proofMediaPreviewGrid}>
+                            {task.proof_media_urls!.map((url, i) => (
+                              <TouchableOpacity key={i} onPress={() => openLink(url)} activeOpacity={0.8}>
+                                <Image source={{ uri: url }} style={styles.proofMediaPreviewThumb} resizeMode="cover" />
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </View>
+                      )}
                       {task.reviewed_at && (
                         <Text style={styles.taskReviewedMeta}>
                           Reviewed {new Date(task.reviewed_at).toLocaleDateString()}
@@ -2818,6 +2997,20 @@ const styles = StyleSheet.create({
   sendMsgBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, marginBottom: 14 },
   sendMsgBtnDisabled: { opacity: 0.4 },
   sendMsgBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  threadToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(139,92,246,0.08)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(139,92,246,0.2)' },
+  threadToggleBtnText: { flex: 1, fontSize: 13, fontWeight: '700', color: colors.primary },
+  threadContainer: { backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 12, overflow: 'hidden' },
+  threadScroll: { maxHeight: 280, padding: 10 },
+  threadEmpty: { fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 20 },
+  threadMsg: { borderRadius: 10, padding: 10, marginBottom: 8, maxWidth: '90%' },
+  threadMsgAdmin: { backgroundColor: 'rgba(139,92,246,0.12)', alignSelf: 'flex-end', borderColor: 'rgba(139,92,246,0.25)', borderWidth: 1 },
+  threadMsgApplicant: { backgroundColor: 'rgba(255,255,255,0.05)', alignSelf: 'flex-start', borderColor: 'rgba(255,255,255,0.08)', borderWidth: 1 },
+  threadMsgHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  threadMsgSender: { fontSize: 11, fontWeight: '700', color: colors.textSecondary },
+  threadAdminBadge: { backgroundColor: 'rgba(139,92,246,0.3)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
+  threadAdminBadgeText: { fontSize: 9, fontWeight: '800', color: '#A855F7' },
+  threadMsgTime: { fontSize: 10, color: colors.textMuted, marginLeft: 'auto' as any },
+  threadMsgText: { fontSize: 13, color: colors.textPrimary, lineHeight: 18 },
   actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   actionGridBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
   actionGridBtnText: { fontSize: 12, fontWeight: '700' },
@@ -3087,4 +3280,20 @@ const styles = StyleSheet.create({
   taskCardNeedsChanges: { borderColor: 'rgba(249,115,22,0.35)', backgroundColor: 'rgba(249,115,22,0.04)' },
   taskReviewedMeta: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
   taskReviewNoProof: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic', marginTop: 2 },
+
+  // Media proof upload (TaskForm)
+  proofMediaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  proofMediaAddBtn: { backgroundColor: 'rgba(139,92,246,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)' },
+  proofMediaAddBtnText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  proofMediaHint: { fontSize: 11, color: colors.textMuted, flex: 1 },
+  proofMediaError: { fontSize: 12, color: '#EF4444', marginTop: 2 },
+  proofMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  proofMediaThumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: 'hidden', position: 'relative' },
+  proofMediaThumb: { width: 72, height: 72, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center' },
+  proofMediaVideoLabel: { fontSize: 9, color: '#fff', marginTop: 2 },
+  proofMediaRemove: { position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center' },
+
+  // Media proof preview (admin task review)
+  proofMediaPreviewGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  proofMediaPreviewThumb: { width: 80, height: 80, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' },
 });

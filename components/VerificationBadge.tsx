@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { View, StyleSheet, Animated } from 'react-native';
-import { Check } from 'lucide-react-native';
+import { Check, Crown } from 'lucide-react-native';
 import { UserProfile } from '@/services/socialService';
 import { VerificationService } from '@/services/verificationService';
 
@@ -18,6 +18,7 @@ const SIZES = {
 export default function VerificationBadge({ profile, size = 'md' }: Props) {
   const isPremium = VerificationService.isPremiumActive(profile);
   const isBasic = profile.verified_basic || profile.is_verified;
+  const isFounder = !!(profile as any).is_founder;
 
   const checkScale = useRef(new Animated.Value(0)).current;
 
@@ -30,9 +31,23 @@ export default function VerificationBadge({ profile, size = 'md' }: Props) {
     }).start();
   }, []);
 
-  if (!isBasic && !isPremium) return null;
+  if (!isBasic && !isPremium && !isFounder) return null;
 
   const s = SIZES[size];
+
+  if (isFounder) {
+    return (
+      <View style={[
+        styles.badge,
+        styles.founderBadge,
+        { width: s.badge, height: s.badge, borderRadius: s.badge / 2 },
+      ]}>
+        <Animated.View style={{ transform: [{ scale: checkScale }] }}>
+          <Crown size={s.check} color="#fff" strokeWidth={3} />
+        </Animated.View>
+      </View>
+    );
+  }
 
   if (isPremium) {
     return (
@@ -66,6 +81,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+  },
+  founderBadge: {
+    backgroundColor: '#D97706',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
   },
   premiumBadge: {
     backgroundColor: '#7C3AED',
