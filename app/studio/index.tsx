@@ -21,19 +21,7 @@ import {
   PageStatus,
 } from '@/services/pageStudioService';
 import { colors, spacing, borderRadius, fontSize, fontWeight } from '@/constants/theme';
-import {
-  Plus,
-  Edit3,
-  BarChart3,
-  Trash2,
-  Copy,
-  Eye,
-  EyeOff,
-  Globe,
-  Archive,
-  FileText,
-  LayoutTemplate,
-} from 'lucide-react-native';
+import { Plus, CreditCard as Edit3, ChartBar as BarChart3, Trash2, Copy, Eye, EyeOff, Globe, Archive, FileText, LayoutTemplate } from 'lucide-react-native';
 
 type FilterType = 'all' | 'published' | 'draft' | 'archived';
 
