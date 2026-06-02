@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight, Gift, ArrowLeft,
+  TrendingUp, TrendingDown, Search, Zap, ArrowUpRight, Globe, ChevronRight, Gift, ArrowLeft, Layout,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { DecodeRewardService } from '@/services/decodeRewardService';
@@ -194,6 +194,19 @@ function TokenCitySection() {
         </View>
       </View>
 
+      {!searchQuery && (
+        <TouchableOpacity style={tkStyles.studioCard} onPress={() => router.push('/studio' as any)} activeOpacity={0.85}>
+          <View style={tkStyles.studioIcon}>
+            <Layout size={20} color="#4B8FFF" strokeWidth={2} />
+          </View>
+          <View style={tkStyles.studioBody}>
+            <Text style={tkStyles.studioTitle}>Page Studio</Text>
+            <Text style={tkStyles.studioSub}>Build a landing page for your token or project</Text>
+          </View>
+          <ChevronRight size={16} color={colors.textMuted} strokeWidth={2} />
+        </TouchableOpacity>
+      )}
+
       {!searchQuery && dawen && (
         <TouchableOpacity style={tkStyles.dawenCard} onPress={() => openToken(dawen)} activeOpacity={0.85}>
           <LinearGradient colors={['rgba(139,92,246,0.25)', 'rgba(109,40,217,0.1)']} style={tkStyles.dawenGradient}>
@@ -356,6 +369,32 @@ const tkStyles = StyleSheet.create({
   smallPillUp: { backgroundColor: colors.primaryMuted },
   smallPillDown: { backgroundColor: SELL_MUTED },
   smallChangeText: { fontSize: 10, fontWeight: '700' },
+  studioCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginHorizontal: spacing.xxl,
+    marginBottom: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(75,143,255,0.35)',
+  },
+  studioIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: 'rgba(75,143,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(75,143,255,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  studioBody: { flex: 1 },
+  studioTitle: { fontSize: fontSize.sm, fontWeight: '800', color: colors.textPrimary, marginBottom: 2 },
+  studioSub: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: '500' },
   emptyContainer: { paddingVertical: 64, alignItems: 'center' },
   emptyText: { fontSize: fontSize.md, color: colors.textMuted, fontWeight: '600' },
 });

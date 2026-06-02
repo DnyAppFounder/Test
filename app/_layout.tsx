@@ -137,6 +137,10 @@ export default function RootLayout() {
                   <Stack.Screen name="terms" />
                   <Stack.Screen name="crew" />
                   <Stack.Screen name="+not-found" />
+                  {/* Page Studio */}
+                  <Stack.Screen name="studio" />
+                  <Stack.Screen name="page/[slug]" options={{ headerShown: false }} />
+                  <Stack.Screen name="preview/[previewToken]" options={{ headerShown: false }} />
                 </Stack>
                 <InAppNotifications />
                 <StatusBar style="light" />
