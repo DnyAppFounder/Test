@@ -1345,29 +1345,40 @@ function TelegramTab({
               {/* Broadcast to Telegram Targets */}
               <Text style={styles.sectionLabel}>Broadcast to Telegram Targets</Text>
               <Text style={styles.sectionHint}>Send a message directly to all configured Telegram channels and groups.</Text>
-              <TextInput
-                style={styles.broadcastInput}
-                placeholder="Type a message..."
-                placeholderTextColor={colors.textMuted}
-                value={targetBroadcastText}
-                onChangeText={setTargetBroadcastText}
-                multiline
-                maxLength={1000}
-              />
-              {targetBroadcastResult ? (
-                <Text style={[styles.broadcastResult, targetBroadcastResult.startsWith('Sent') ? styles.broadcastOk : styles.broadcastErr]}>
-                  {targetBroadcastResult}
-                </Text>
-              ) : null}
-              <TouchableOpacity
-                style={[styles.primaryBtn, (!targetBroadcastText.trim() || targetBroadcasting || targets.length === 0) && styles.btnDisabled]}
-                onPress={onTargetBroadcast}
-                activeOpacity={0.8}
-                disabled={!targetBroadcastText.trim() || targetBroadcasting || targets.length === 0}
-              >
-                {targetBroadcasting ? <ActivityIndicator size="small" color="#fff" /> : <Radio size={13} color="#fff" strokeWidth={2} />}
-                <Text style={styles.primaryBtnText}>Send to Targets</Text>
-              </TouchableOpacity>
+              {targets.length === 0 ? (
+                <View style={styles.targetRequiredBanner}>
+                  <AlertTriangle size={13} color="#F59E0B" strokeWidth={2} />
+                  <Text style={styles.targetRequiredText}>
+                    Add at least one Telegram target above before broadcasting to channels/groups.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <TextInput
+                    style={styles.broadcastInput}
+                    placeholder="Type a message..."
+                    placeholderTextColor={colors.textMuted}
+                    value={targetBroadcastText}
+                    onChangeText={setTargetBroadcastText}
+                    multiline
+                    maxLength={1000}
+                  />
+                  {targetBroadcastResult ? (
+                    <Text style={[styles.broadcastResult, targetBroadcastResult.startsWith('Sent') ? styles.broadcastOk : styles.broadcastErr]}>
+                      {targetBroadcastResult}
+                    </Text>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[styles.primaryBtn, (!targetBroadcastText.trim() || targetBroadcasting) && styles.btnDisabled]}
+                    onPress={onTargetBroadcast}
+                    activeOpacity={0.8}
+                    disabled={!targetBroadcastText.trim() || targetBroadcasting}
+                  >
+                    {targetBroadcasting ? <ActivityIndicator size="small" color="#fff" /> : <Radio size={13} color="#fff" strokeWidth={2} />}
+                    <Text style={styles.primaryBtnText}>Send to Targets</Text>
+                  </TouchableOpacity>
+                </>
+              )}
 
               {/* Disconnect */}
               <TouchableOpacity style={styles.disconnectRow} onPress={onDisconnect} activeOpacity={0.8}>
@@ -1801,6 +1812,15 @@ const styles = S({
 
   emptyState: { paddingVertical: 32, alignItems: 'center' },
   emptyStateText: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
+
+  targetRequiredBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderRadius: 10, padding: spacing.sm,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+    marginBottom: spacing.md,
+  },
+  targetRequiredText: { fontSize: 12, color: '#F59E0B', flex: 1, lineHeight: 17 },
 
   // Confirm modal
   confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
