@@ -1,5 +1,5 @@
 import React from 'react';
-import { Svg, Path, Circle, Rect, G } from 'react-native-svg';
+import { Svg, Path, Circle, Rect, G, Line } from 'react-native-svg';
 
 interface SocialIconProps {
   platform: string;

@@ -1,18 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   ScrollView,
   Text,
   StyleSheet,
-  Alert,
-  ActivityIndicator,
   TouchableOpacity,
-  FlatList,
+  ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWallet } from '@/contexts/WalletContext';
-import { useProfile } from '@/contexts/ProfileContext';
 import {
   getMyPages,
   deletePage,
@@ -30,60 +29,90 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Globe,
+  Archive,
+  FileText,
+  LayoutTemplate,
 } from 'lucide-react-native';
 
 type FilterType = 'all' | 'published' | 'draft' | 'archived';
 
+const FILTERS: { key: FilterType; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'published', label: 'Published' },
+  { key: 'draft', label: 'Drafts' },
+  { key: 'archived', label: 'Archived' },
+];
+
+const STATUS_COLORS: Record<string, string> = {
+  published: '#22c55e',
+  draft: '#3b82f6',
+  unlisted: '#f59e0b',
+  archived: '#6b7280',
+};
+
+const PAGE_TYPE_ICONS: Record<string, string> = {
+  token: '💎',
+  project: '🏢',
+  personal: '👤',
+  'link-in-bio': '🔗',
+  whitelist: '📋',
+  claim: '🎁',
+  countdown: '⏰',
+  general: '📄',
+};
+
 export default function StudioDashboard() {
   const router = useRouter();
   const { activeAddress } = useWallet();
-  const { profile } = useProfile();
+  const insets = useSafeAreaInsets();
   const [pages, setPages] = useState<Page[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadPages();
-  }, [activeAddress]);
-
-  const loadPages = async () => {
+  const loadPages = useCallback(async () => {
     if (!activeAddress) return;
     try {
-      setLoading(true);
       const data = await getMyPages(activeAddress);
       setPages(data || []);
-    } catch (error) {
-      console.error('Error loading pages:', error);
-      Alert.alert('Error', 'Failed to load pages');
+    } catch {
+      // silently fail — user sees empty list
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [activeAddress]);
 
-  const onRefresh = async () => {
+  useEffect(() => {
+    setLoading(true);
+    loadPages();
+  }, [loadPages]);
+
+  const onRefresh = () => {
     setRefreshing(true);
-    await loadPages();
-    setRefreshing(false);
+    loadPages();
   };
 
   const handleDelete = (page: Page) => {
     Alert.alert(
       'Delete Page',
-      `Are you sure you want to delete "${page.title}"? This cannot be undone.`,
+      `Delete "${page.title}"? This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            setActionLoading(page.id + '_delete');
             try {
               await deletePage(activeAddress!, page.id);
-              setPages(pages.filter(p => p.id !== page.id));
-              Alert.alert('Success', 'Page deleted');
-            } catch (error) {
-              console.error('Error deleting page:', error);
+              setPages(prev => prev.filter(p => p.id !== page.id));
+            } catch {
               Alert.alert('Error', 'Failed to delete page');
+            } finally {
+              setActionLoading(null);
             }
           },
         },
@@ -92,146 +121,63 @@ export default function StudioDashboard() {
   };
 
   const handleDuplicate = async (page: Page) => {
+    setActionLoading(page.id + '_dup');
     try {
       const result = await duplicatePage(activeAddress!, page.id);
-      setPages([...pages, result.page]);
-      Alert.alert('Success', 'Page duplicated');
-    } catch (error) {
-      console.error('Error duplicating page:', error);
+      setPages(prev => [result.page, ...prev]);
+    } catch {
       Alert.alert('Error', 'Failed to duplicate page');
+    } finally {
+      setActionLoading(null);
     }
   };
 
   const handleTogglePublish = async (page: Page) => {
+    const newStatus: PageStatus = page.status === 'published' ? 'draft' : 'published';
+    setActionLoading(page.id + '_pub');
     try {
-      const newStatus: PageStatus =
-        page.status === 'published' ? 'unlisted' : 'published';
       const updated = await publishPage(activeAddress!, page.id, newStatus);
-      setPages(pages.map(p => (p.id === page.id ? updated : p)));
-    } catch (error) {
-      console.error('Error updating page status:', error);
+      setPages(prev => prev.map(p => (p.id === page.id ? updated : p)));
+    } catch {
       Alert.alert('Error', 'Failed to update page status');
+    } finally {
+      setActionLoading(null);
     }
   };
 
-  const getStatusColor = (status: PageStatus) => {
-    switch (status) {
-      case 'published':
-        return '#22c55e';
-      case 'draft':
-        return '#3b82f6';
-      case 'unlisted':
-        return '#f59e0b';
-      case 'archived':
-        return '#6b7280';
-      default:
-        return '#6b7280';
+  const handleArchive = async (page: Page) => {
+    const newStatus: PageStatus = page.status === 'archived' ? 'draft' : 'archived';
+    setActionLoading(page.id + '_arch');
+    try {
+      const updated = await publishPage(activeAddress!, page.id, newStatus);
+      setPages(prev => prev.map(p => (p.id === page.id ? updated : p)));
+    } catch {
+      Alert.alert('Error', 'Failed to archive page');
+    } finally {
+      setActionLoading(null);
     }
   };
 
-  const getPageEmoji = (type: string) => {
-    const emojis: Record<string, string> = {
-      token: '💎',
-      project: '🏢',
-      personal: '👤',
-      'link-in-bio': '🔗',
-      whitelist: '📋',
-      claim: '🎁',
-      countdown: '⏱️',
-      general: '📄',
-    };
-    return emojis[type] || '📄';
-  };
-
-  const filteredPages = pages.filter(page => {
-    if (filter === 'all') return true;
-    return page.status === filter;
+  const filteredPages = pages.filter(p => {
+    if (filter === 'all') return p.status !== 'archived';
+    if (filter === 'draft') return p.status === 'draft' || p.status === 'unlisted';
+    return p.status === filter;
   });
 
-  const renderPageCard = (page: Page) => (
-    <View key={page.id} style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.titleRow}>
-          <Text style={styles.pageEmoji}>{getPageEmoji(page.type)}</Text>
-          <Text style={styles.pageTitle}>{page.title}</Text>
-        </View>
-        <View
-          style={[
-            styles.statusBadge,
-            { backgroundColor: getStatusColor(page.status) },
-          ]}
-        >
-          <Text style={styles.statusText}>{page.status}</Text>
-        </View>
-      </View>
-
-      <Text style={styles.slug}>dawen.app/page/{page.slug}</Text>
-
-      <View style={styles.stats}>
-        <View style={styles.statItem}>
-          <Eye size={14} color={colors.textSecondary} />
-          <Text style={styles.statText}>{page.view_count} views</Text>
-        </View>
-      </View>
-
-      <View style={styles.actions}>
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() =>
-            router.push(`/studio/${page.id}/edit`)
-          }
-        >
-          <Edit3 size={16} color={colors.primary} />
-          <Text style={styles.actionBtnText}>Edit</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionBtn}>
-          <BarChart3 size={16} color={colors.primary} />
-          <Text style={styles.actionBtnText}>Analytics</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() => handleTogglePublish(page)}
-        >
-          {page.status === 'published' ? (
-            <>
-              <EyeOff size={16} color={colors.warning} />
-              <Text style={styles.actionBtnText}>Unpublish</Text>
-            </>
-          ) : (
-            <>
-              <Eye size={16} color={colors.success} />
-              <Text style={styles.actionBtnText}>Publish</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() => handleDuplicate(page)}
-        >
-          <Copy size={16} color={colors.primary} />
-          <Text style={styles.actionBtnText}>Duplicate</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() => handleDelete(page)}
-        >
-          <Trash2 size={16} color={colors.error} />
-          <Text style={[styles.actionBtnText, { color: colors.error }]}>
-            Delete
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+  const emptyMessages: Record<FilterType, { title: string; sub: string }> = {
+    all: { title: 'No pages yet', sub: 'Create your first page to get started' },
+    published: { title: 'No published pages yet', sub: 'Publish a draft to make it live' },
+    draft: { title: 'No draft pages', sub: 'All clear — or create a new page' },
+    archived: { title: 'No archived pages', sub: 'Archived pages will appear here' },
+  };
 
   if (loading) {
     return (
       <View style={styles.container}>
-        <View style={styles.loadingContainer}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Page Studio</Text>
+        </View>
+        <View style={styles.center}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </View>
@@ -240,77 +186,231 @@ export default function StudioDashboard() {
 
   return (
     <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Page Studio</Text>
+        <View style={styles.headerLeft}>
+          <LayoutTemplate size={22} color={colors.primary} />
+          <Text style={styles.headerTitle}>Page Studio</Text>
+        </View>
         <TouchableOpacity
           style={styles.newPageBtn}
           onPress={() => router.push('/studio/new')}
+          activeOpacity={0.8}
         >
-          <Plus size={20} color={colors.white} />
+          <Plus size={18} color={colors.white} strokeWidth={2.5} />
           <Text style={styles.newPageBtnText}>New Page</Text>
         </TouchableOpacity>
       </View>
 
+      {/* Filter tabs */}
+      <View style={styles.filterRow}>
+        {FILTERS.map(f => (
+          <TouchableOpacity
+            key={f.key}
+            style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
+            onPress={() => setFilter(f.key)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Page list */}
       <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
+        style={styles.list}
+        contentContainerStyle={[
+          styles.listContent,
+          { paddingBottom: insets.bottom + 80 },
+        ]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
       >
-        {(['all', 'published', 'draft', 'archived'] as FilterType[]).map(
-          filterOption => (
-            <TouchableOpacity
-              key={filterOption}
-              style={[
-                styles.filterTab,
-                filter === filterOption && styles.filterTabActive,
-              ]}
-              onPress={() => setFilter(filterOption)}
-            >
-              <Text
-                style={[
-                  styles.filterTabText,
-                  filter === filterOption && styles.filterTabTextActive,
-                ]}
+        {filteredPages.length === 0 ? (
+          <View style={styles.emptyState}>
+            <FileText size={40} color={colors.textMuted} strokeWidth={1.5} />
+            <Text style={styles.emptyTitle}>{emptyMessages[filter].title}</Text>
+            <Text style={styles.emptySub}>{emptyMessages[filter].sub}</Text>
+            {filter === 'all' && (
+              <TouchableOpacity
+                style={styles.emptyCtaBtn}
+                onPress={() => router.push('/studio/new')}
               >
-                {filterOption.charAt(0).toUpperCase() + filterOption.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          )
+                <Text style={styles.emptyCtaText}>Create Page</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          filteredPages.map(page => (
+            <PageCard
+              key={page.id}
+              page={page}
+              actionLoading={actionLoading}
+              onEdit={() => router.push(`/studio/${page.id}/edit`)}
+              onAnalytics={() => router.push(`/studio/${page.id}/analytics`)}
+              onTogglePublish={() => handleTogglePublish(page)}
+              onDuplicate={() => handleDuplicate(page)}
+              onArchive={() => handleArchive(page)}
+              onDelete={() => handleDelete(page)}
+            />
+          ))
         )}
       </ScrollView>
-
-      <FlatList
-        data={filteredPages}
-        renderItem={({ item }) => renderPageCard(item)}
-        keyExtractor={item => item.id}
-        scrollEnabled={false}
-        contentContainerStyle={styles.listContent}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No pages yet</Text>
-            <Text style={styles.emptyStateSubText}>
-              Create your first page to get started
-            </Text>
-            <TouchableOpacity
-              style={styles.emptyStateCta}
-              onPress={() => router.push('/studio/new')}
-            >
-              <Text style={styles.emptyStateCtaText}>Create Page</Text>
-            </TouchableOpacity>
-          </View>
-        }
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      />
     </View>
+  );
+}
+
+interface PageCardProps {
+  page: Page;
+  actionLoading: string | null;
+  onEdit: () => void;
+  onAnalytics: () => void;
+  onTogglePublish: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+}
+
+function PageCard({
+  page,
+  actionLoading,
+  onEdit,
+  onAnalytics,
+  onTogglePublish,
+  onDuplicate,
+  onArchive,
+  onDelete,
+}: PageCardProps) {
+  const statusColor = STATUS_COLORS[page.status] || '#6b7280';
+  const emoji = PAGE_TYPE_ICONS[page.type] || '📄';
+
+  const isLoading = (suffix: string) => actionLoading === page.id + suffix;
+
+  return (
+    <View style={styles.card}>
+      {/* Card header */}
+      <View style={styles.cardHeader}>
+        <View style={styles.cardTitleRow}>
+          <Text style={styles.cardEmoji}>{emoji}</Text>
+          <Text style={styles.cardTitle} numberOfLines={1}>{page.title}</Text>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: statusColor + '22', borderColor: statusColor + '55' }]}>
+          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+          <Text style={[styles.statusText, { color: statusColor }]}>{page.status}</Text>
+        </View>
+      </View>
+
+      {/* Slug */}
+      <Text style={styles.cardSlug} numberOfLines={1}>dawen.app/page/{page.slug}</Text>
+
+      {/* Stats row */}
+      <View style={styles.cardStats}>
+        <Eye size={13} color={colors.textMuted} />
+        <Text style={styles.statText}>{page.view_count} views</Text>
+        <Text style={styles.statDivider}>·</Text>
+        <Text style={styles.statText}>
+          {new Date(page.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </Text>
+      </View>
+
+      {/* Action buttons */}
+      <View style={styles.cardActions}>
+        <ActionBtn icon={<Edit3 size={14} color={colors.primary} />} label="Edit" onPress={onEdit} />
+        <ActionBtn
+          icon={<BarChart3 size={14} color={colors.primary} />}
+          label="Analytics"
+          onPress={onAnalytics}
+        />
+        <ActionBtn
+          icon={
+            isLoading('_pub') ? (
+              <ActivityIndicator size="small" color={colors.success} />
+            ) : page.status === 'published' ? (
+              <EyeOff size={14} color={colors.warning} />
+            ) : (
+              <Globe size={14} color={colors.success} />
+            )
+          }
+          label={page.status === 'published' ? 'Unpublish' : 'Publish'}
+          onPress={onTogglePublish}
+          disabled={isLoading('_pub')}
+        />
+        <ActionBtn
+          icon={
+            isLoading('_dup') ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Copy size={14} color={colors.primary} />
+            )
+          }
+          label="Copy"
+          onPress={onDuplicate}
+          disabled={isLoading('_dup')}
+        />
+        <ActionBtn
+          icon={
+            isLoading('_arch') ? (
+              <ActivityIndicator size="small" color={colors.textMuted} />
+            ) : (
+              <Archive size={14} color={colors.textMuted} />
+            )
+          }
+          label={page.status === 'archived' ? 'Restore' : 'Archive'}
+          onPress={onArchive}
+          disabled={isLoading('_arch')}
+        />
+        <ActionBtn
+          icon={
+            isLoading('_delete') ? (
+              <ActivityIndicator size="small" color={colors.error} />
+            ) : (
+              <Trash2 size={14} color={colors.error} />
+            )
+          }
+          label="Delete"
+          onPress={onDelete}
+          disabled={isLoading('_delete')}
+          danger
+        />
+      </View>
+    </View>
+  );
+}
+
+function ActionBtn({
+  icon,
+  label,
+  onPress,
+  disabled,
+  danger,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.actionBtn, danger && styles.actionBtnDanger, disabled && styles.actionBtnDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
+    >
+      {icon}
+      <Text style={[styles.actionBtnText, danger && styles.actionBtnTextDanger]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0618',
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -321,8 +421,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   headerTitle: {
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.xl,
     fontWeight: fontWeight.bold,
     color: colors.textPrimary,
   },
@@ -337,17 +442,19 @@ const styles = StyleSheet.create({
   },
   newPageBtnText: {
     color: colors.white,
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
   },
-  filterScroll: {
+  filterRow: {
+    flexDirection: 'row',
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceBorder,
   },
   filterTab: {
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginRight: spacing.md,
+    marginRight: spacing.xs,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
@@ -355,17 +462,54 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.primary,
   },
   filterTabText: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: fontWeight.medium,
-    color: colors.textSecondary,
+    color: colors.textMuted,
   },
   filterTabTextActive: {
     color: colors.primary,
+    fontWeight: fontWeight.semibold,
+  },
+  list: {
+    flex: 1,
   },
   listContent: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
+    paddingTop: spacing.lg,
     gap: spacing.md,
+  },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 64,
+    gap: spacing.md,
+  },
+  emptyTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.semibold,
+    color: colors.textPrimary,
+    marginTop: spacing.sm,
+  },
+  emptySub: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  emptyCtaBtn: {
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+  },
+  emptyCtaText: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.semibold,
+    color: colors.white,
   },
   card: {
     backgroundColor: colors.surface,
@@ -373,106 +517,92 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     padding: spacing.lg,
-    gap: spacing.md,
+    gap: 10,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
-  titleRow: {
+  cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     flex: 1,
   },
-  pageEmoji: {
-    fontSize: 20,
+  cardEmoji: {
+    fontSize: 18,
   },
-  pageTitle: {
-    fontSize: fontSize.lg,
+  cardTitle: {
+    fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
     color: colors.textPrimary,
     flex: 1,
   },
   statusBadge: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
     borderRadius: borderRadius.sm,
+    borderWidth: 1,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusText: {
-    fontSize: fontSize.sm,
+    fontSize: 11,
     fontWeight: fontWeight.semibold,
-    color: colors.white,
     textTransform: 'capitalize',
   },
-  slug: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
+  cardSlug: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
-  stats: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  statItem: {
+  cardStats: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
   },
   statText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
+    fontSize: 12,
+    color: colors.textMuted,
   },
-  actions: {
+  statDivider: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  cardActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.xs,
+    marginTop: 2,
   },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
     backgroundColor: colors.surfaceElevated,
-    borderRadius: borderRadius.md,
-    gap: spacing.xs,
+    borderRadius: borderRadius.sm,
+    gap: 4,
+  },
+  actionBtnDanger: {
+    backgroundColor: colors.errorMuted,
+  },
+  actionBtnDisabled: {
+    opacity: 0.5,
   },
   actionBtnText: {
-    fontSize: fontSize.sm,
+    fontSize: 12,
     fontWeight: fontWeight.medium,
-    color: colors.primary,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.xxxl,
-    gap: spacing.md,
-  },
-  emptyStateText: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
-    color: colors.textPrimary,
-  },
-  emptyStateSubText: {
-    fontSize: fontSize.md,
     color: colors.textSecondary,
-    textAlign: 'center',
   },
-  emptyStateCta: {
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.md,
-  },
-  emptyStateCtaText: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
-    color: colors.white,
+  actionBtnTextDanger: {
+    color: colors.error,
   },
 });

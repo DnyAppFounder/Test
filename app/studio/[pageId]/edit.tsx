@@ -15,6 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWallet } from '@/contexts/WalletContext';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme';
 import { BlockRenderer } from '@/components/studio/BlockRenderer';
@@ -24,64 +25,184 @@ import {
   saveBlocks,
   updatePage,
   publishPage,
-  deletePage,
   checkSlug,
+  generateSlug,
 } from '@/services/pageStudioService';
 import type { Page, PageBlock, BlockType } from '@/services/pageStudioService';
+import {
+  ArrowLeft,
+  Globe,
+  EyeOff,
+  ChevronUp,
+  ChevronDown,
+  Trash2,
+  Pencil,
+  Plus,
+  Check,
+} from 'lucide-react-native';
 
-const ACCENT_COLORS = ['#4B8FFF', '#22c55e', '#f59e0b', '#ef4444', '#00D4FF', '#FF006E'];
+const ACCENT_PRESETS = ['#4B8FFF', '#22c55e', '#f59e0b', '#ef4444', '#00D4FF', '#FF006E', '#A78BFA'];
+
+type EditorTab = 'blocks' | 'preview' | 'settings';
+
+// Per-block-type field definitions for the edit modal
+const BLOCK_FIELD_DEFS: Record<string, Array<{ key: string; label: string; multiline?: boolean; placeholder?: string }>> = {
+  hero: [
+    { key: 'title', label: 'Title', placeholder: 'Main headline' },
+    { key: 'subtitle', label: 'Subtitle', placeholder: 'Supporting text below title' },
+    { key: 'description', label: 'Description', multiline: true, placeholder: 'Body copy' },
+    { key: 'primaryButtonText', label: 'Primary Button Text', placeholder: 'Buy Now' },
+    { key: 'primaryButtonUrl', label: 'Primary Button URL', placeholder: 'https://...' },
+    { key: 'secondaryButtonText', label: 'Secondary Button Text', placeholder: 'Learn More' },
+    { key: 'secondaryButtonUrl', label: 'Secondary Button URL', placeholder: 'https://...' },
+    { key: 'logoUrl', label: 'Logo URL', placeholder: 'https://...' },
+  ],
+  text: [
+    { key: 'heading', label: 'Heading', placeholder: 'Section heading' },
+    { key: 'text', label: 'Body Text', multiline: true, placeholder: 'Paragraph content...' },
+  ],
+  button: [
+    { key: 'text', label: 'Button Label', placeholder: 'Click Here' },
+    { key: 'url', label: 'URL', placeholder: 'https://...' },
+    { key: 'type', label: 'Style (primary / secondary)', placeholder: 'primary' },
+  ],
+  token_info: [
+    { key: 'name', label: 'Token Name', placeholder: 'My Token' },
+    { key: 'symbol', label: 'Symbol', placeholder: 'MTK' },
+    { key: 'mint', label: 'Mint Address', placeholder: 'Solana address...' },
+    { key: 'supply', label: 'Total Supply', placeholder: '1,000,000,000' },
+    { key: 'decimals', label: 'Decimals', placeholder: '9' },
+    { key: 'chain', label: 'Chain', placeholder: 'Solana' },
+    { key: 'logoUrl', label: 'Logo URL', placeholder: 'https://...' },
+    { key: 'presalePrice', label: 'Presale Price (optional)', placeholder: '0.001 SOL' },
+    { key: 'launchPrice', label: 'Launch Price (optional)', placeholder: '0.005 SOL' },
+  ],
+  buy_widget: [
+    { key: 'title', label: 'Title', placeholder: 'Buy Token' },
+    { key: 'description', label: 'Description', placeholder: 'Get your tokens now' },
+  ],
+  roadmap: [
+    { key: 'title', label: 'Section Title', placeholder: 'Roadmap' },
+  ],
+  tokenomics: [
+    { key: 'title', label: 'Section Title', placeholder: 'Tokenomics' },
+    { key: 'vestingSchedule', label: 'Vesting Note', multiline: true, placeholder: 'Tokens vest over 24 months...' },
+  ],
+  team: [
+    { key: 'title', label: 'Section Title', placeholder: 'Meet the Team' },
+  ],
+  faq: [
+    { key: 'title', label: 'Section Title', placeholder: 'Frequently Asked Questions' },
+  ],
+  gallery: [
+    { key: 'title', label: 'Section Title', placeholder: 'Gallery' },
+  ],
+  video: [
+    { key: 'title', label: 'Title', placeholder: 'Video Title' },
+    { key: 'url', label: 'Video URL', placeholder: 'https://youtube.com/...' },
+    { key: 'thumbnail', label: 'Thumbnail URL', placeholder: 'https://...' },
+  ],
+  countdown: [
+    { key: 'title', label: 'Title', placeholder: 'Launch In:' },
+    { key: 'targetDate', label: 'Target Date (ISO)', placeholder: '2025-07-15T00:00:00Z' },
+  ],
+  whitelist_form: [
+    { key: 'title', label: 'Form Title', placeholder: 'Join Whitelist' },
+    { key: 'subtitle', label: 'Subtitle', placeholder: 'Reserve your allocation' },
+    { key: 'submitText', label: 'Submit Button Text', placeholder: 'Register' },
+    { key: 'successMessage', label: 'Success Message', placeholder: 'Thank you! You\'re on the list.' },
+  ],
+  claim: [
+    { key: 'title', label: 'Title', placeholder: 'Claim Your Airdrop' },
+    { key: 'subtitle', label: 'Subtitle', placeholder: 'Connect your wallet and click claim' },
+    { key: 'tokenAmount', label: 'Token Amount', placeholder: '1000' },
+    { key: 'tokenSymbol', label: 'Token Symbol', placeholder: 'TOKEN' },
+    { key: 'instructions', label: 'Instructions', multiline: true, placeholder: 'Step-by-step claiming instructions...' },
+    { key: 'claimButtonText', label: 'Button Text', placeholder: 'Claim Tokens' },
+  ],
+  media_kit: [
+    { key: 'title', label: 'Title', placeholder: 'Media Kit' },
+    { key: 'description', label: 'Description', multiline: true, placeholder: 'Press resources...' },
+  ],
+  announcement: [
+    { key: 'title', label: 'Title', placeholder: 'Announcement' },
+    { key: 'message', label: 'Message', multiline: true, placeholder: 'Your announcement here...' },
+    { key: 'type', label: 'Type (info/warning/success/alert)', placeholder: 'info' },
+    { key: 'icon', label: 'Icon (emoji)', placeholder: '📢' },
+  ],
+  embed: [
+    { key: 'title', label: 'Title', placeholder: 'Embed' },
+    { key: 'url', label: 'URL to Embed', placeholder: 'https://...' },
+  ],
+  qr_code: [
+    { key: 'title', label: 'Title', placeholder: 'QR Code' },
+    { key: 'data', label: 'QR Data / URL', placeholder: 'https://...' },
+    { key: 'caption', label: 'Caption', placeholder: 'Scan to visit...' },
+  ],
+  footer: [
+    { key: 'disclaimer', label: 'Disclaimer', multiline: true, placeholder: 'Not financial advice...' },
+  ],
+  custom_section: [
+    { key: 'heading', label: 'Heading', placeholder: 'Section Heading' },
+    { key: 'body', label: 'Body', multiline: true, placeholder: 'Content...' },
+  ],
+  live_chart: [
+    { key: 'title', label: 'Title', placeholder: 'Live Chart' },
+    { key: 'symbol', label: 'Token Symbol', placeholder: 'SOL' },
+  ],
+  social_links: [
+    { key: 'title', label: 'Section Title', placeholder: 'Follow Us' },
+  ],
+};
 
 export default function EditScreen() {
   const { pageId } = useLocalSearchParams<{ pageId: string }>();
   const router = useRouter();
   const { activeAddress } = useWallet();
+  const insets = useSafeAreaInsets();
 
-  // State
   const [page, setPage] = useState<Page | null>(null);
   const [blocks, setBlocks] = useState<PageBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveIndicator, setSaveIndicator] = useState<'saved' | 'saving' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // UI State
-  const [activeTab, setActiveTab] = useState<'blocks' | 'settings'>('blocks');
+  const [activeTab, setActiveTab] = useState<EditorTab>('blocks');
   const [blockPickerVisible, setBlockPickerVisible] = useState(false);
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
-  const [editingBlockContent, setEditingBlockContent] = useState<Record<string, any> | null>(null);
+  const [editingBlock, setEditingBlock] = useState<PageBlock | null>(null);
+  const [editingContent, setEditingContent] = useState<Record<string, any>>({});
 
-  // Settings tab state
+  // Settings state
   const [settingsTitle, setSettingsTitle] = useState('');
   const [settingsSlug, setSettingsSlug] = useState('');
   const [settingsDescription, setSettingsDescription] = useState('');
   const [settingsTheme, setSettingsTheme] = useState<'dark' | 'light'>('dark');
-  const [settingsAccentColor, setSettingsAccentColor] = useState('#4B8FFF');
-  const [customAccentColor, setCustomAccentColor] = useState('');
+  const [settingsAccent, setSettingsAccent] = useState('#4B8FFF');
+  const [customHex, setCustomHex] = useState('');
   const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
   const [checkingSlug, setCheckingSlug] = useState(false);
 
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slugTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load page data
   useEffect(() => {
     loadPageData();
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (slugTimerRef.current) clearTimeout(slugTimerRef.current);
+    };
   }, []);
 
   const loadPageData = async () => {
     if (!activeAddress || !pageId) return;
-
     try {
       setLoading(true);
       setError(null);
       const data = await getPageEditor(activeAddress, pageId);
       setPage(data.page);
-      setBlocks(data.blocks);
-
-      // Initialize settings
-      setSettingsTitle(data.page.title);
-      setSettingsSlug(data.page.slug);
-      setSettingsDescription(data.page.description || '');
-      setSettingsTheme(data.page.global_settings.theme || 'dark');
-      setSettingsAccentColor(data.page.global_settings.accentColor || '#4B8FFF');
+      setBlocks(data.blocks.sort((a, b) => a.sort_order - b.sort_order));
+      syncSettings(data.page);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load page');
     } finally {
@@ -89,56 +210,124 @@ export default function EditScreen() {
     }
   };
 
-  // Auto-save blocks
-  const handleBlocksChange = useCallback((newBlocks: PageBlock[]) => {
+  const syncSettings = (p: Page) => {
+    setSettingsTitle(p.title);
+    setSettingsSlug(p.slug);
+    setSettingsDescription(p.description || '');
+    setSettingsTheme((p.global_settings?.theme as 'dark' | 'light') || 'dark');
+    setSettingsAccent(p.global_settings?.accentColor || '#4B8FFF');
+  };
+
+  const scheduleAutoSave = useCallback((newBlocks: PageBlock[]) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveIndicator('saving');
+    saveTimerRef.current = setTimeout(async () => {
+      if (!activeAddress || !pageId) return;
+      try {
+        const payload = newBlocks.map(b => ({
+          // Only send id for persisted blocks (no fake 'new-' prefix)
+          ...(b.id && !b.id.startsWith('new-') ? { id: b.id } : {}),
+          block_type: b.block_type,
+          sort_order: b.sort_order,
+          content_json: b.content_json,
+          style_json: b.style_json,
+          animation_json: b.animation_json,
+          is_hidden: b.is_hidden,
+        }));
+        const saved = await saveBlocks(activeAddress, pageId, payload);
+        // Update blocks with server-assigned IDs
+        setBlocks(saved.sort((a, b) => a.sort_order - b.sort_order));
+        setSaveIndicator('saved');
+        setTimeout(() => setSaveIndicator(null), 2000);
+      } catch {
+        setSaveIndicator(null);
+      }
+    }, 1500);
+  }, [activeAddress, pageId]);
+
+  const updateBlocks = (newBlocks: PageBlock[]) => {
     setBlocks(newBlocks);
+    scheduleAutoSave(newBlocks);
+  };
 
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
+  const handleDeleteBlock = (blockId: string) => {
+    Alert.alert('Delete Block', 'Remove this block?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          const updated = blocks
+            .filter(b => b.id !== blockId)
+            .map((b, i) => ({ ...b, sort_order: i + 1 }));
+          updateBlocks(updated);
+        },
+      },
+    ]);
+  };
 
-    saveTimeoutRef.current = setTimeout(() => {
-      autoSaveBlocks(newBlocks);
-    }, 2000);
-  }, []);
+  const handleMoveBlock = (blockId: string, dir: 'up' | 'down') => {
+    const idx = blocks.findIndex(b => b.id === blockId);
+    if (dir === 'up' && idx <= 0) return;
+    if (dir === 'down' && idx >= blocks.length - 1) return;
+    const next = [...blocks];
+    const swapIdx = dir === 'up' ? idx - 1 : idx + 1;
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    updateBlocks(next.map((b, i) => ({ ...b, sort_order: i + 1 })));
+  };
 
-  const autoSaveBlocks = async (blocksToSave: PageBlock[]) => {
-    if (!activeAddress || !pageId) return;
+  const handleOpenEditBlock = (block: PageBlock) => {
+    setEditingBlock(block);
+    setEditingContent(JSON.parse(JSON.stringify(block.content_json)));
+  };
 
-    try {
-      const savePayload = blocksToSave.map((block) => ({
-        id: block.id,
-        block_type: block.block_type,
-        sort_order: block.sort_order,
-        content_json: block.content_json,
-        style_json: block.style_json,
-        animation_json: block.animation_json,
-        is_hidden: block.is_hidden,
-      }));
+  const handleSaveBlockEdit = () => {
+    if (!editingBlock) return;
+    const updated = blocks.map(b =>
+      b.id === editingBlock.id ? { ...b, content_json: editingContent } : b
+    );
+    updateBlocks(updated);
+    setEditingBlock(null);
+    setEditingContent({});
+  };
 
-      await saveBlocks(activeAddress, pageId, savePayload);
-    } catch (err) {
-      setError('Auto-save failed');
-    }
+  const handleAddBlock = (blockType: BlockType) => {
+    const defaults = getBlockDefaults(blockType);
+    const newBlock: PageBlock = {
+      id: `new-${Date.now()}`,
+      page_id: pageId!,
+      block_type: blockType,
+      sort_order: blocks.length + 1,
+      content_json: defaults,
+      style_json: {},
+      animation_json: {},
+      is_hidden: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    updateBlocks([...blocks, newBlock]);
+    setBlockPickerVisible(false);
   };
 
   const handleSaveSettings = async () => {
     if (!activeAddress || !page) return;
-
+    if (slugAvailable === false) {
+      Alert.alert('Slug Taken', 'Please choose a different page slug');
+      return;
+    }
+    setSaving(true);
     try {
-      setSaving(true);
-      await updatePage(activeAddress, pageId!, {
+      const updated = await updatePage(activeAddress, pageId!, {
         title: settingsTitle,
         slug: settingsSlug,
         description: settingsDescription,
         global_settings: {
           ...page.global_settings,
           theme: settingsTheme,
-          accentColor: settingsAccentColor,
+          accentColor: settingsAccent,
         },
       });
-
-      Alert.alert('Success', 'Settings saved successfully');
+      setPage(updated);
     } catch (err) {
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
@@ -146,110 +335,64 @@ export default function EditScreen() {
     }
   };
 
-  const handlePublishPage = async () => {
+  const handlePublishToggle = async () => {
     if (!activeAddress || !page) return;
-
-    Alert.alert('Publish Page', 'Are you sure you want to publish this page?', [
-      { text: 'Cancel' },
-      {
-        text: 'Publish',
-        onPress: async () => {
-          try {
+    const isPublished = page.status === 'published';
+    Alert.alert(
+      isPublished ? 'Unpublish Page' : 'Publish Page',
+      isPublished
+        ? 'This will take the page offline.'
+        : 'This will make the page publicly accessible at its URL.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: isPublished ? 'Unpublish' : 'Publish',
+          onPress: async () => {
             setSaving(true);
-            await publishPage(activeAddress, pageId!, 'published');
-            Alert.alert('Success', 'Page published successfully');
-            setPage({ ...page, status: 'published' });
-          } catch (err) {
-            Alert.alert('Error', err instanceof Error ? err.message : 'Failed to publish');
-          } finally {
-            setSaving(false);
-          }
+            try {
+              const updated = await publishPage(
+                activeAddress,
+                pageId!,
+                isPublished ? 'draft' : 'published'
+              );
+              setPage(updated);
+            } catch (err) {
+              Alert.alert('Error', err instanceof Error ? err.message : 'Failed to update status');
+            } finally {
+              setSaving(false);
+            }
+          },
         },
-      },
-    ]);
-  };
-
-  const handleDeleteBlock = (blockId: string) => {
-    Alert.alert('Delete Block', 'Are you sure you want to delete this block?', [
-      { text: 'Cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          const newBlocks = blocks.filter((b) => b.id !== blockId);
-          handleBlocksChange(newBlocks);
-        },
-      },
-    ]);
-  };
-
-  const handleMoveBlock = (blockId: string, direction: 'up' | 'down') => {
-    const index = blocks.findIndex((b) => b.id === blockId);
-    if (direction === 'up' && index > 0) {
-      const newBlocks = [...blocks];
-      [newBlocks[index], newBlocks[index - 1]] = [newBlocks[index - 1], newBlocks[index]];
-      const reordered = newBlocks.map((b, i) => ({ ...b, sort_order: i + 1 }));
-      handleBlocksChange(reordered);
-    } else if (direction === 'down' && index < blocks.length - 1) {
-      const newBlocks = [...blocks];
-      [newBlocks[index], newBlocks[index + 1]] = [newBlocks[index + 1], newBlocks[index]];
-      const reordered = newBlocks.map((b, i) => ({ ...b, sort_order: i + 1 }));
-      handleBlocksChange(reordered);
-    }
-  };
-
-  const handleEditBlock = (block: PageBlock) => {
-    setEditingBlockId(block.id);
-    setEditingBlockContent(JSON.parse(JSON.stringify(block.content_json)));
-  };
-
-  const handleSaveBlockEdit = () => {
-    if (!editingBlockId || !editingBlockContent) return;
-
-    const updatedBlocks = blocks.map((b) =>
-      b.id === editingBlockId ? { ...b, content_json: editingBlockContent } : b
+      ]
     );
-    handleBlocksChange(updatedBlocks);
-    setEditingBlockId(null);
-    setEditingBlockContent(null);
   };
 
-  const handleAddBlock = (blockType: BlockType) => {
-    const newBlock: PageBlock = {
-      id: `new-${Date.now()}`,
-      page_id: pageId!,
-      block_type: blockType,
-      sort_order: blocks.length + 1,
-      content_json: {},
-      style_json: {},
-      animation_json: {},
-      is_hidden: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    handleBlocksChange([...blocks, newBlock]);
-    setBlockPickerVisible(false);
-  };
-
-  const handleCheckSlug = async (slug: string) => {
-    if (!slug) return;
-
-    try {
+  const handleSlugChange = (text: string) => {
+    const clean = text.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-{2,}/g, '-');
+    setSettingsSlug(clean);
+    setSlugAvailable(null);
+    if (slugTimerRef.current) clearTimeout(slugTimerRef.current);
+    if (!clean) return;
+    slugTimerRef.current = setTimeout(async () => {
       setCheckingSlug(true);
-      const result = await checkSlug(slug, pageId!);
-      setSlugAvailable(result.available);
-    } catch (err) {
-      setSlugAvailable(false);
-    } finally {
-      setCheckingSlug(false);
-    }
+      try {
+        const res = await checkSlug(clean, pageId!);
+        setSlugAvailable(res.available);
+      } catch {
+        setSlugAvailable(null);
+      } finally {
+        setCheckingSlug(false);
+      }
+    }, 600);
   };
+
+  const accentColor = page?.global_settings?.accentColor || settingsAccent;
+  const theme = (page?.global_settings?.theme as 'dark' | 'light') || settingsTheme;
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.centerContent}>
+        <View style={styles.center}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
@@ -259,366 +402,461 @@ export default function EditScreen() {
   if (!page) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.centerContent}>
-          <Text style={styles.errorText}>{error || 'Page not found'}</Text>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.backButtonText}>Go Back</Text>
+        <View style={styles.center}>
+          <Text style={styles.errorMsg}>{error || 'Page not found'}</Text>
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+            <Text style={styles.backBtnText}>Go Back</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
+  const isPublished = page.status === 'published';
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.headerBackIcon}>← Back</Text>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBack}>
+          <ArrowLeft size={20} color={colors.textPrimary} />
         </TouchableOpacity>
 
-        <TextInput
-          style={styles.headerTitle}
-          value={settingsTitle}
-          onChangeText={setSettingsTitle}
-          placeholder="Page Title"
-          placeholderTextColor={colors.textMuted}
-        />
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerPageTitle} numberOfLines={1}>{page.title}</Text>
+          {saveIndicator === 'saving' && (
+            <Text style={styles.saveHint}>Saving…</Text>
+          )}
+          {saveIndicator === 'saved' && (
+            <Text style={[styles.saveHint, { color: colors.success }]}>Saved</Text>
+          )}
+        </View>
 
         <TouchableOpacity
-          style={[styles.headerButton, saving && styles.headerButtonDisabled]}
-          onPress={handleSaveSettings}
+          style={[styles.publishBtn, isPublished && styles.publishBtnActive, saving && styles.btnDisabled]}
+          onPress={handlePublishToggle}
           disabled={saving}
         >
-          <Text style={styles.headerButtonText}>
-            {saving ? 'Saving...' : 'Save'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.headerButton, styles.publishButton]}
-          onPress={handlePublishPage}
-          disabled={saving}
-        >
-          <Text style={styles.headerButtonText}>Publish</Text>
+          {saving ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : isPublished ? (
+            <>
+              <EyeOff size={14} color={colors.white} />
+              <Text style={styles.publishBtnText}>Unpublish</Text>
+            </>
+          ) : (
+            <>
+              <Globe size={14} color={colors.white} />
+              <Text style={styles.publishBtnText}>Publish</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
       {/* Tab bar */}
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'blocks' && styles.tabActive]}
-          onPress={() => setActiveTab('blocks')}
-        >
-          <Text style={[styles.tabText, activeTab === 'blocks' && styles.tabTextActive]}>
-            Blocks
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'settings' && styles.tabActive]}
-          onPress={() => setActiveTab('settings')}
-        >
-          <Text style={[styles.tabText, activeTab === 'settings' && styles.tabTextActive]}>
-            Settings
-          </Text>
-        </TouchableOpacity>
+        {(['blocks', 'preview', 'settings'] as EditorTab[]).map(tab => (
+          <TouchableOpacity
+            key={tab}
+            style={[styles.tab, activeTab === tab && styles.tabActive]}
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
-      {/* Content */}
-      {activeTab === 'blocks' ? (
-        <ScrollView style={styles.content} contentContainerStyle={styles.contentPadding}>
+      {/* Blocks tab */}
+      {activeTab === 'blocks' && (
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={[styles.contentPad, { paddingBottom: insets.bottom + 100 }]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
           {blocks.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>No blocks yet. Add one to get started.</Text>
+            <View style={styles.emptyBlocks}>
+              <Text style={styles.emptyBlocksText}>No blocks yet</Text>
+              <Text style={styles.emptyBlocksSub}>Tap "+ Add Block" to build your page</Text>
             </View>
           ) : (
-            blocks.map((block, index) => (
-              <View key={block.id} style={styles.blockContainer}>
+            blocks.map((block, idx) => (
+              <View key={block.id} style={styles.blockRow}>
                 <View style={styles.blockToolbar}>
                   <Text style={styles.blockLabel}>
-                    {BLOCK_TYPE_INFO[block.block_type]?.emoji || '📦'} {BLOCK_TYPE_INFO[block.block_type]?.label || block.block_type}
+                    {BLOCK_TYPE_INFO[block.block_type]?.emoji} {BLOCK_TYPE_INFO[block.block_type]?.label || block.block_type}
                   </Text>
                   <View style={styles.blockActions}>
                     <TouchableOpacity
-                      style={styles.toolbarIcon}
+                      style={[styles.toolBtn, idx === 0 && styles.toolBtnDisabled]}
                       onPress={() => handleMoveBlock(block.id, 'up')}
-                      disabled={index === 0}
+                      disabled={idx === 0}
                     >
-                      <Text style={[styles.toolbarIconText, index === 0 && styles.toolbarIconDisabled]}>
-                        ↑
-                      </Text>
+                      <ChevronUp size={16} color={idx === 0 ? colors.textMuted : colors.primary} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.toolbarIcon}
+                      style={[styles.toolBtn, idx === blocks.length - 1 && styles.toolBtnDisabled]}
                       onPress={() => handleMoveBlock(block.id, 'down')}
-                      disabled={index === blocks.length - 1}
+                      disabled={idx === blocks.length - 1}
                     >
-                      <Text style={[styles.toolbarIconText, index === blocks.length - 1 && styles.toolbarIconDisabled]}>
-                        ↓
-                      </Text>
+                      <ChevronDown size={16} color={idx === blocks.length - 1 ? colors.textMuted : colors.primary} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.toolbarIcon}
+                      style={styles.toolBtn}
+                      onPress={() => handleOpenEditBlock(block)}
+                    >
+                      <Pencil size={15} color={colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.toolBtn, styles.toolBtnDelete]}
                       onPress={() => handleDeleteBlock(block.id)}
                     >
-                      <Text style={styles.toolbarIconText}>✕</Text>
+                      <Trash2 size={15} color={colors.error} />
                     </TouchableOpacity>
                   </View>
                 </View>
 
-                <TouchableOpacity
-                  style={styles.blockContent}
-                  onPress={() => handleEditBlock(block)}
-                >
+                <View style={styles.blockPreviewWrap} pointerEvents="none">
                   <BlockRenderer
                     block={block}
                     pageId={pageId!}
-                    isEditing={true}
-                    theme={page.global_settings.theme}
-                    accentColor={page.global_settings.accentColor}
-                    onEdit={() => handleEditBlock(block)}
+                    isEditing={false}
+                    theme={theme}
+                    accentColor={accentColor}
                   />
-                </TouchableOpacity>
+                </View>
               </View>
             ))
           )}
 
           <TouchableOpacity
-            style={styles.addBlockButton}
+            style={styles.addBlockBtn}
             onPress={() => setBlockPickerVisible(true)}
           >
-            <Text style={styles.addBlockButtonText}>+ Add Block</Text>
+            <Plus size={18} color={colors.primary} />
+            <Text style={styles.addBlockBtnText}>Add Block</Text>
           </TouchableOpacity>
         </ScrollView>
-      ) : (
-        <ScrollView style={styles.content} contentContainerStyle={styles.contentPadding}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            {/* Title */}
-            <View style={styles.settingSection}>
-              <Text style={styles.settingLabel}>Title</Text>
+      )}
+
+      {/* Preview tab — real public-style render */}
+      {activeTab === 'preview' && (
+        <ScrollView
+          style={[styles.content, { backgroundColor: page.global_settings?.backgroundColor || '#0D0618' }]}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 60 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {blocks.length === 0 ? (
+            <View style={styles.center}>
+              <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 14 }}>No blocks to preview</Text>
+            </View>
+          ) : (
+            blocks.map((block, i) => (
+              <BlockRenderer
+                key={block.id || i}
+                block={block}
+                pageId={pageId!}
+                isEditing={false}
+                theme={theme}
+                accentColor={accentColor}
+              />
+            ))
+          )}
+        </ScrollView>
+      )}
+
+      {/* Settings tab */}
+      {activeTab === 'settings' && (
+        <KeyboardAvoidingView
+          style={styles.content}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView
+            contentContainerStyle={[styles.contentPad, { paddingBottom: insets.bottom + 80 }]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <SettingsField label="Page Title">
               <TextInput
                 style={styles.settingInput}
                 value={settingsTitle}
                 onChangeText={setSettingsTitle}
-                placeholder="Page Title"
+                placeholder="Page title"
                 placeholderTextColor={colors.textMuted}
               />
-            </View>
+            </SettingsField>
 
-            {/* Slug */}
-            <View style={styles.settingSection}>
-              <Text style={styles.settingLabel}>Slug</Text>
-              <View style={styles.slugContainer}>
+            <SettingsField label="URL Slug" hint={`dawen.app/page/${settingsSlug}`}>
+              <View style={styles.slugRow}>
                 <TextInput
                   style={[styles.settingInput, styles.slugInput]}
                   value={settingsSlug}
-                  onChangeText={(text) => {
-                    setSettingsSlug(text);
-                    handleCheckSlug(text);
-                  }}
+                  onChangeText={handleSlugChange}
                   placeholder="page-slug"
                   placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
-                {checkingSlug ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : slugAvailable !== null ? (
-                  <Text style={[styles.slugStatus, slugAvailable ? styles.slugAvailable : styles.slugUnavailable]}>
-                    {slugAvailable ? '✓ Available' : '✕ Taken'}
-                  </Text>
-                ) : null}
+                {checkingSlug && <ActivityIndicator size="small" color={colors.primary} />}
+                {!checkingSlug && slugAvailable === true && (
+                  <View style={styles.slugAvailChip}>
+                    <Check size={12} color={colors.success} strokeWidth={3} />
+                    <Text style={[styles.slugStatus, { color: colors.success }]}>Available</Text>
+                  </View>
+                )}
+                {!checkingSlug && slugAvailable === false && (
+                  <Text style={[styles.slugStatus, { color: colors.error }]}>Taken</Text>
+                )}
               </View>
-            </View>
+            </SettingsField>
 
-            {/* Description */}
-            <View style={styles.settingSection}>
-              <Text style={styles.settingLabel}>Description</Text>
+            <SettingsField label="Description">
               <TextInput
-                style={[styles.settingInput, styles.descriptionInput]}
+                style={[styles.settingInput, styles.descInput]}
                 value={settingsDescription}
                 onChangeText={setSettingsDescription}
-                placeholder="Page description"
+                placeholder="Brief description for SEO and previews"
                 placeholderTextColor={colors.textMuted}
                 multiline
+                textAlignVertical="top"
               />
-            </View>
+            </SettingsField>
 
-            {/* Theme */}
-            <View style={styles.settingSection}>
-              <Text style={styles.settingLabel}>Theme</Text>
-              <View style={styles.themeButtons}>
-                <TouchableOpacity
-                  style={[styles.themeButton, settingsTheme === 'dark' && styles.themeButtonActive]}
-                  onPress={() => setSettingsTheme('dark')}
-                >
-                  <Text style={[styles.themeButtonText, settingsTheme === 'dark' && styles.themeButtonTextActive]}>
-                    Dark
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.themeButton, settingsTheme === 'light' && styles.themeButtonActive]}
-                  onPress={() => setSettingsTheme('light')}
-                >
-                  <Text style={[styles.themeButtonText, settingsTheme === 'light' && styles.themeButtonTextActive]}>
-                    Light
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Accent Color */}
-            <View style={styles.settingSection}>
-              <Text style={styles.settingLabel}>Accent Color</Text>
-              <View style={styles.colorSwatches}>
-                {ACCENT_COLORS.map((color) => (
+            <SettingsField label="Theme">
+              <View style={styles.themeRow}>
+                {(['dark', 'light'] as const).map(t => (
                   <TouchableOpacity
-                    key={color}
-                    style={[
-                      styles.colorSwatch,
-                      { backgroundColor: color },
-                      settingsAccentColor === color && styles.colorSwatchActive,
-                    ]}
-                    onPress={() => setSettingsAccentColor(color)}
+                    key={t}
+                    style={[styles.themeBtn, settingsTheme === t && styles.themeBtnActive]}
+                    onPress={() => setSettingsTheme(t)}
                   >
-                    {settingsAccentColor === color && (
-                      <Text style={styles.colorSwatchCheck}>✓</Text>
-                    )}
+                    <Text style={[styles.themeBtnText, settingsTheme === t && styles.themeBtnTextActive]}>
+                      {t === 'dark' ? '🌑 Dark' : '☀️ Light'}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </View>
+            </SettingsField>
 
-              <View style={styles.customColorContainer}>
-                <Text style={styles.customColorLabel}>Custom Hex</Text>
+            <SettingsField label="Accent Color">
+              <View style={styles.swatchRow}>
+                {ACCENT_PRESETS.map(c => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.swatch, { backgroundColor: c }, settingsAccent === c && styles.swatchActive]}
+                    onPress={() => setSettingsAccent(c)}
+                  >
+                    {settingsAccent === c && <Check size={14} color="#fff" strokeWidth={3} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.hexRow}>
                 <TextInput
-                  style={styles.customColorInput}
-                  value={customAccentColor}
-                  onChangeText={setCustomAccentColor}
+                  style={[styles.settingInput, styles.hexInput]}
+                  value={customHex}
+                  onChangeText={setCustomHex}
                   placeholder="#RRGGBB"
                   placeholderTextColor={colors.textMuted}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={7}
                 />
                 <TouchableOpacity
-                  style={styles.customColorButton}
+                  style={styles.hexApplyBtn}
                   onPress={() => {
-                    if (/^#[0-9A-Fa-f]{6}$/.test(customAccentColor)) {
-                      setSettingsAccentColor(customAccentColor);
-                      setCustomAccentColor('');
-                    } else {
-                      Alert.alert('Invalid Color', 'Please enter a valid hex color code');
+                    if (/^#[0-9A-Fa-f]{6}$/.test(customHex)) {
+                      setSettingsAccent(customHex);
+                      setCustomHex('');
                     }
                   }}
                 >
-                  <Text style={styles.customColorButtonText}>Apply</Text>
+                  <Text style={styles.hexApplyText}>Apply</Text>
                 </TouchableOpacity>
+                {settingsAccent && (
+                  <View style={[styles.accentPreview, { backgroundColor: settingsAccent }]} />
+                )}
               </View>
-            </View>
+            </SettingsField>
 
-            {/* Save Button */}
             <TouchableOpacity
-              style={[styles.saveSettingsButton, saving && styles.saveSettingsButtonDisabled]}
+              style={[styles.saveSettingsBtn, saving && styles.btnDisabled]}
               onPress={handleSaveSettings}
               disabled={saving}
             >
-              <Text style={styles.saveSettingsButtonText}>
-                {saving ? 'Saving Settings...' : 'Save Settings'}
-              </Text>
+              {saving ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Text style={styles.saveSettingsBtnText}>Save Settings</Text>
+              )}
             </TouchableOpacity>
-          </KeyboardAvoidingView>
-        </ScrollView>
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
-      {/* Block Type Picker Modal */}
+      {/* Block Picker Modal */}
       <Modal
         visible={blockPickerVisible}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setBlockPickerVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Block</Text>
+        <View style={styles.sheetOverlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Add Block</Text>
               <TouchableOpacity onPress={() => setBlockPickerVisible(false)}>
-                <Text style={styles.modalCloseButton}>✕</Text>
+                <Text style={styles.sheetClose}>✕</Text>
               </TouchableOpacity>
             </View>
-
             <FlatList
               data={Object.entries(BLOCK_TYPE_INFO)}
-              keyExtractor={([key]) => key}
+              keyExtractor={([k]) => k}
               renderItem={({ item: [key, info] }) => (
                 <TouchableOpacity
-                  style={styles.blockTypeItem}
+                  style={styles.blockTypeRow}
                   onPress={() => handleAddBlock(key as BlockType)}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.blockTypeEmoji}>{info.emoji}</Text>
-                  <View style={styles.blockTypeText}>
-                    <Text style={styles.blockTypeLabel}>{info.label}</Text>
-                    <Text style={styles.blockTypeDescription}>{info.description}</Text>
+                  <View style={styles.blockTypeInfo}>
+                    <Text style={styles.blockTypeName}>{info.label}</Text>
+                    <Text style={styles.blockTypeDesc} numberOfLines={1}>{info.description}</Text>
                   </View>
                 </TouchableOpacity>
               )}
-              scrollEnabled
               style={styles.blockTypeList}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
             />
           </View>
         </View>
       </Modal>
 
-      {/* Block Editor Modal */}
+      {/* Block Edit Modal */}
       <Modal
-        visible={editingBlockId !== null}
+        visible={editingBlock !== null}
         transparent
         animationType="slide"
-        onRequestClose={() => setEditingBlockId(null)}
+        onRequestClose={() => { setEditingBlock(null); setEditingContent({}); }}
       >
-        <View style={styles.editorModalOverlay}>
-          <View style={styles.editorModal}>
-            <View style={styles.editorModalHeader}>
-              <Text style={styles.editorModalTitle}>Edit Block Content</Text>
-              <TouchableOpacity onPress={() => setEditingBlockId(null)}>
-                <Text style={styles.editorModalCloseButton}>✕</Text>
+        <View style={styles.sheetOverlay}>
+          <KeyboardAvoidingView
+            style={styles.editSheet}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>
+                {editingBlock ? `Edit ${BLOCK_TYPE_INFO[editingBlock.block_type]?.label || editingBlock.block_type}` : 'Edit Block'}
+              </Text>
+              <TouchableOpacity onPress={() => { setEditingBlock(null); setEditingContent({}); }}>
+                <Text style={styles.sheetClose}>✕</Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.editorContent}>
-              {editingBlockContent &&
-                Object.entries(editingBlockContent).map(([key, value]) => (
-                  <View key={key} style={styles.editorField}>
-                    <Text style={styles.editorFieldLabel}>{key}</Text>
-                    <TextInput
-                      style={styles.editorFieldInput}
-                      value={typeof value === 'string' ? value : JSON.stringify(value)}
-                      onChangeText={(text) => {
-                        setEditingBlockContent((prev) =>
-                          prev ? { ...prev, [key]: text } : null
-                        );
-                      }}
-                      multiline
-                      placeholder={`Enter ${key}`}
-                      placeholderTextColor={colors.textMuted}
-                    />
-                  </View>
-                ))}
+            <ScrollView
+              style={styles.editScrollArea}
+              contentContainerStyle={styles.editScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {editingBlock && renderBlockEditFields(
+                editingBlock.block_type,
+                editingContent,
+                (key, val) => setEditingContent(prev => ({ ...prev, [key]: val }))
+              )}
             </ScrollView>
 
-            <View style={styles.editorActions}>
+            <View style={styles.editActions}>
               <TouchableOpacity
-                style={styles.editorCancelButton}
-                onPress={() => setEditingBlockId(null)}
+                style={styles.editCancelBtn}
+                onPress={() => { setEditingBlock(null); setEditingContent({}); }}
               >
-                <Text style={styles.editorCancelButtonText}>Cancel</Text>
+                <Text style={styles.editCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.editorSaveButton} onPress={handleSaveBlockEdit}>
-                <Text style={styles.editorSaveButtonText}>Done</Text>
+              <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveBlockEdit}>
+                <Text style={styles.editSaveText}>Save Block</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </SafeAreaView>
   );
+}
+
+function SettingsField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.settingSection}>
+      <Text style={styles.settingLabel}>{label}</Text>
+      {hint ? <Text style={styles.settingHint}>{hint}</Text> : null}
+      {children}
+    </View>
+  );
+}
+
+function renderBlockEditFields(
+  blockType: BlockType,
+  content: Record<string, any>,
+  onChange: (key: string, value: any) => void
+): React.ReactNode {
+  const fields = BLOCK_FIELD_DEFS[blockType];
+
+  if (!fields || fields.length === 0) {
+    return (
+      <Text style={{ color: colors.textMuted, fontSize: fontSize.sm, textAlign: 'center', padding: 24 }}>
+        This block has no editable text fields. Use the Blocks tab to manage it.
+      </Text>
+    );
+  }
+
+  return fields.map(f => (
+    <View key={f.key} style={styles.editField}>
+      <Text style={styles.editFieldLabel}>{f.label}</Text>
+      <TextInput
+        style={[styles.editFieldInput, f.multiline && styles.editFieldInputMulti]}
+        value={typeof content[f.key] === 'string' ? content[f.key] : (content[f.key] != null ? String(content[f.key]) : '')}
+        onChangeText={v => onChange(f.key, v)}
+        placeholder={f.placeholder || `Enter ${f.label.toLowerCase()}`}
+        placeholderTextColor={colors.textMuted}
+        multiline={f.multiline}
+        textAlignVertical={f.multiline ? 'top' : 'center'}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+    </View>
+  ));
+}
+
+function getBlockDefaults(blockType: BlockType): Record<string, any> {
+  const defaults: Partial<Record<BlockType, Record<string, any>>> = {
+    hero: { title: 'New Section', subtitle: '', description: '', primaryButtonText: 'Get Started', primaryButtonUrl: '', secondaryButtonText: '', secondaryButtonUrl: '', alignment: 'center', logoUrl: '' },
+    text: { heading: 'New Heading', text: 'Edit this text block with your content.' },
+    button: { text: 'Click Here', url: '', type: 'primary' },
+    social_links: { title: 'Follow Us', links: [{ platform: 'x_twitter', url: '' }], style: 'icon-row' },
+    token_info: { name: 'Token Name', symbol: 'TKN', mint: '', supply: '', decimals: '9', chain: 'Solana', logoUrl: '' },
+    live_chart: { title: 'Live Chart', symbol: '' },
+    buy_widget: { title: 'Buy Token', description: '', dexes: ['jupiter'] },
+    roadmap: { title: 'Roadmap', items: [{ title: 'Phase 1', description: '', status: 'upcoming', date: '' }] },
+    tokenomics: { title: 'Tokenomics', items: [{ label: 'Community', percentage: 50, color: '#4B8FFF' }, { label: 'Team', percentage: 20, color: '#5865F2' }, { label: 'Development', percentage: 30, color: '#00D4FF' }] },
+    team: { title: 'Meet the Team', members: [{ name: 'Team Member', role: 'Role', image: '' }] },
+    faq: { title: 'FAQ', items: [{ question: 'Question?', answer: 'Answer here.' }] },
+    gallery: { title: 'Gallery', images: [{ url: '', title: 'Image 1' }], columns: 2 },
+    video: { title: '', url: '', thumbnail: '' },
+    countdown: { title: 'Launch In:', targetDate: '', showDays: true, showHours: true, showMinutes: true, showSeconds: true },
+    whitelist_form: { title: 'Join Whitelist', subtitle: '', fields: ['wallet_address', 'email'], submitText: 'Submit', successMessage: "You're on the list!" },
+    claim: { title: 'Claim Tokens', subtitle: '', tokenAmount: '1000', tokenSymbol: 'TOKEN', instructions: '', claimButtonText: 'Claim Now' },
+    media_kit: { title: 'Media Kit', description: '', assets: [] },
+    announcement: { title: 'Announcement', message: '', type: 'info', icon: '📢' },
+    embed: { title: '', url: '' },
+    qr_code: { title: 'QR Code', data: '', caption: '' },
+    footer: { links: [], socials: [], disclaimer: '', showDawenBadge: true },
+    custom_section: { heading: 'Custom Section', body: '' },
+  };
+  return defaults[blockType] || {};
 }
 
 const styles = StyleSheet.create({
@@ -626,55 +864,68 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  centerContent: {
+  center: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.lg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
-    backgroundColor: colors.surfaceElevated,
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
+    backgroundColor: colors.surfaceElevated,
     gap: spacing.sm,
   },
-  headerBackIcon: {
-    color: colors.primary,
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+  headerBack: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceLight,
   },
-  headerTitle: {
+  headerCenter: {
     flex: 1,
-    color: colors.textPrimary,
+  },
+  headerPageTitle: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
-    paddingHorizontal: spacing.sm,
+    color: colors.textPrimary,
   },
-  headerButton: {
+  saveHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  publishBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
+    gap: 5,
   },
-  headerButtonDisabled: {
-    opacity: 0.5,
+  publishBtnActive: {
+    backgroundColor: colors.warning,
   },
-  headerButtonText: {
-    color: colors.textPrimary,
+  publishBtnText: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
+    color: colors.white,
   },
-  publishButton: {
-    backgroundColor: colors.success,
+  btnDisabled: {
+    opacity: 0.5,
   },
   tabBar: {
     flexDirection: 'row',
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
   },
   tab: {
     flex: 1,
@@ -687,34 +938,41 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.primary,
   },
   tabText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
     color: colors.textMuted,
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
   },
   tabTextActive: {
     color: colors.primary,
+    fontWeight: fontWeight.semibold,
   },
   content: {
     flex: 1,
   },
-  contentPadding: {
+  contentPad: {
     padding: spacing.lg,
   },
-  emptyState: {
+  emptyBlocks: {
     alignItems: 'center',
-    paddingVertical: spacing.xxxl,
+    paddingVertical: 56,
+    gap: spacing.sm,
   },
-  emptyStateText: {
+  emptyBlocksText: {
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.semibold,
+    color: colors.textPrimary,
+  },
+  emptyBlocksSub: {
+    fontSize: fontSize.sm,
     color: colors.textMuted,
-    fontSize: fontSize.md,
   },
-  blockContainer: {
-    marginBottom: spacing.lg,
+  blockRow: {
+    marginBottom: spacing.md,
     backgroundColor: colors.surface,
     borderRadius: borderRadius.lg,
-    overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
+    overflow: 'hidden',
   },
   blockToolbar: {
     flexDirection: 'row',
@@ -722,60 +980,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: colors.surfaceElevated,
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
   },
   blockLabel: {
-    color: colors.textPrimary,
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
+    color: colors.textPrimary,
+    flex: 1,
   },
   blockActions: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
-  toolbarIcon: {
-    width: 28,
-    height: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
+  toolBtn: {
+    width: 30,
+    height: 30,
     borderRadius: borderRadius.sm,
     backgroundColor: colors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  toolbarIconText: {
-    color: colors.primary,
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold,
+  toolBtnDelete: {
+    backgroundColor: colors.errorMuted,
   },
-  toolbarIconDisabled: {
+  toolBtnDisabled: {
     opacity: 0.3,
   },
-  blockContent: {
-    paddingVertical: spacing.md,
+  blockPreviewWrap: {
+    overflow: 'hidden',
   },
-  addBlockButton: {
-    paddingVertical: spacing.lg,
+  addBlockBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.lg,
     borderWidth: 2,
     borderStyle: 'dashed',
     borderColor: colors.primary,
     borderRadius: borderRadius.lg,
-    marginTop: spacing.lg,
+    marginTop: spacing.sm,
+    gap: spacing.sm,
   },
-  addBlockButtonText: {
-    color: colors.primary,
+  addBlockBtnText: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
+    color: colors.primary,
   },
   settingSection: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
+    gap: spacing.sm,
   },
   settingLabel: {
-    color: colors.textPrimary,
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
-    marginBottom: spacing.sm,
+    color: colors.textPrimary,
+  },
+  settingHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: -4,
   },
   settingInput: {
     backgroundColor: colors.surface,
@@ -787,7 +1052,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: fontSize.md,
   },
-  slugContainer: {
+  slugRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
@@ -795,143 +1060,143 @@ const styles = StyleSheet.create({
   slugInput: {
     flex: 1,
   },
+  slugAvailChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   slugStatus: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
   },
-  slugAvailable: {
-    color: colors.success,
-  },
-  slugUnavailable: {
-    color: colors.error,
-  },
-  descriptionInput: {
+  descInput: {
     minHeight: 80,
     textAlignVertical: 'top',
   },
-  themeButtons: {
+  themeRow: {
     flexDirection: 'row',
     gap: spacing.md,
   },
-  themeButton: {
+  themeBtn: {
     flex: 1,
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
     alignItems: 'center',
   },
-  themeButtonActive: {
+  themeBtnActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  themeButtonText: {
-    color: colors.textSecondary,
-    fontSize: fontSize.md,
+  themeBtnText: {
+    fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
+    color: colors.textSecondary,
   },
-  themeButtonTextActive: {
-    color: colors.textPrimary,
+  themeBtnTextActive: {
+    color: colors.white,
   },
-  colorSwatches: {
+  swatchRow: {
     flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.lg,
+    gap: spacing.sm,
+    flexWrap: 'wrap',
   },
-  colorSwatch: {
-    width: 48,
-    height: 48,
+  swatch: {
+    width: 44,
+    height: 44,
     borderRadius: borderRadius.md,
     borderWidth: 2,
     borderColor: 'transparent',
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  colorSwatchActive: {
-    borderColor: colors.textPrimary,
+  swatchActive: {
+    borderColor: colors.white,
   },
-  colorSwatchCheck: {
-    color: colors.textPrimary,
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
-  },
-  customColorContainer: {
+  hexRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
     alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  customColorLabel: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-  },
-  customColorInput: {
+  hexInput: {
     flex: 1,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    color: colors.textPrimary,
-    fontSize: fontSize.sm,
   },
-  customColorButton: {
+  hexApplyBtn: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
   },
-  customColorButtonText: {
-    color: colors.textPrimary,
+  hexApplyText: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
+    color: colors.white,
   },
-  saveSettingsButton: {
+  accentPreview: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.sm,
+  },
+  saveSettingsBtn: {
     paddingVertical: spacing.lg,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.lg,
     alignItems: 'center',
-    marginTop: spacing.lg,
-    marginBottom: spacing.xxl,
+    marginTop: spacing.sm,
   },
-  saveSettingsButtonDisabled: {
-    opacity: 0.5,
-  },
-  saveSettingsButtonText: {
-    color: colors.textPrimary,
+  saveSettingsBtnText: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
+    color: colors.white,
   },
-  errorText: {
+  errorMsg: {
     color: colors.error,
     fontSize: fontSize.md,
-    marginBottom: spacing.lg,
+    textAlign: 'center',
   },
-  backButton: {
+  backBtn: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
   },
-  backButtonText: {
-    color: colors.textPrimary,
+  backBtnText: {
+    color: colors.white,
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
   },
-  modalOverlay: {
+  // Modals / sheets
+  sheetOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
-    maxHeight: '70%',
+  sheet: {
+    maxHeight: '72%',
     backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.lg,
-    borderTopRightRadius: borderRadius.lg,
-    paddingTop: spacing.md,
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+    paddingBottom: 24,
   },
-  modalHeader: {
+  editSheet: {
+    height: '82%',
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: colors.surfaceBorderLight,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  sheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -940,19 +1205,21 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
   },
-  modalTitle: {
-    color: colors.textPrimary,
+  sheetTitle: {
     fontSize: fontSize.lg,
     fontWeight: fontWeight.bold,
+    color: colors.textPrimary,
   },
-  modalCloseButton: {
-    color: colors.textMuted,
+  sheetClose: {
     fontSize: fontSize.lg,
+    color: colors.textMuted,
+    padding: 4,
   },
   blockTypeList: {
     paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
   },
-  blockTypeItem: {
+  blockTypeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: spacing.md,
@@ -961,66 +1228,41 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   blockTypeEmoji: {
-    fontSize: fontSize.xxxl,
+    fontSize: 26,
+    width: 32,
+    textAlign: 'center',
   },
-  blockTypeText: {
+  blockTypeInfo: {
     flex: 1,
   },
-  blockTypeLabel: {
-    color: colors.textPrimary,
+  blockTypeName: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
-    marginBottom: spacing.xs,
-  },
-  blockTypeDescription: {
-    color: colors.textMuted,
-    fontSize: fontSize.sm,
-  },
-  editorModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
-  },
-  editorModal: {
-    height: '80%',
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.lg,
-    borderTopRightRadius: borderRadius.lg,
-    paddingTop: spacing.md,
-  },
-  editorModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
-  },
-  editorModalTitle: {
     color: colors.textPrimary,
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
   },
-  editorModalCloseButton: {
+  blockTypeDesc: {
+    fontSize: fontSize.sm,
     color: colors.textMuted,
-    fontSize: fontSize.lg,
+    marginTop: 2,
   },
-  editorContent: {
+  editScrollArea: {
     flex: 1,
+  },
+  editScrollContent: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
+    paddingBottom: 20,
   },
-  editorField: {
+  editField: {
     marginBottom: spacing.lg,
   },
-  editorFieldLabel: {
-    color: colors.textPrimary,
+  editFieldLabel: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
+    color: colors.textPrimary,
     marginBottom: spacing.sm,
   },
-  editorFieldInput: {
+  editFieldInput: {
     backgroundColor: colors.surfaceLight,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
@@ -1029,10 +1271,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    minHeight: 60,
+  },
+  editFieldInputMulti: {
+    minHeight: 80,
     textAlignVertical: 'top',
   },
-  editorActions: {
+  editActions: {
     flexDirection: 'row',
     gap: spacing.md,
     paddingHorizontal: spacing.lg,
@@ -1040,7 +1284,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.surfaceBorder,
   },
-  editorCancelButton: {
+  editCancelBtn: {
     flex: 1,
     paddingVertical: spacing.md,
     borderWidth: 1,
@@ -1048,21 +1292,21 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     alignItems: 'center',
   },
-  editorCancelButtonText: {
-    color: colors.textSecondary,
+  editCancelText: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
+    color: colors.textSecondary,
   },
-  editorSaveButton: {
-    flex: 1,
+  editSaveBtn: {
+    flex: 2,
     paddingVertical: spacing.md,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
     alignItems: 'center',
   },
-  editorSaveButtonText: {
-    color: colors.textPrimary,
+  editSaveText: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,
+    color: colors.white,
   },
 });

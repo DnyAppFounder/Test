@@ -212,7 +212,7 @@ export default function AnalyticsScreen() {
                       style={[
                         styles.progressBar,
                         {
-                          width: `${item.percentage}%`,
+                          width: `${item.percentage}%` as any,
                           backgroundColor: colors.primary,
                         },
                       ]}

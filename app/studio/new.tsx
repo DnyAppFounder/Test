@@ -7,14 +7,13 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useWallet } from '@/contexts/WalletContext';
-import { createPage, generateSlug } from '@/services/pageStudioService';
+import { createPage, saveBlocks, generateSlug } from '@/services/pageStudioService';
 import { PAGE_TEMPLATES } from '@/components/studio/templates';
 import { colors, spacing, borderRadius, fontSize, fontWeight } from '@/constants/theme';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, Check } from 'lucide-react-native';
 
 export default function NewPageScreen() {
   const router = useRouter();
@@ -22,23 +21,23 @@ export default function NewPageScreen() {
   const [pageTitle, setPageTitle] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleCreatePage = async () => {
     if (!pageTitle.trim()) {
-      Alert.alert('Error', 'Please enter a page title');
+      setError('Please enter a page title');
       return;
     }
-
     if (!selectedTemplate) {
-      Alert.alert('Error', 'Please select a template');
+      setError('Please select a template');
       return;
     }
-
     if (!activeAddress) {
-      Alert.alert('Error', 'Wallet not connected');
+      setError('Wallet not connected');
       return;
     }
 
+    setError('');
     try {
       setLoading(true);
       const template = PAGE_TEMPLATES.find(t => t.id === selectedTemplate);
@@ -53,54 +52,26 @@ export default function NewPageScreen() {
         global_settings: template.global_settings,
       });
 
-      router.push(`/studio/${newPage.id}/edit`);
-    } catch (error) {
-      console.error('Error creating page:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to create page'
-      );
+      // Save template blocks if any
+      if (template.blocks.length > 0) {
+        await saveBlocks(
+          activeAddress,
+          newPage.id,
+          template.blocks.map((b, i) => ({
+            block_type: b.block_type,
+            sort_order: b.sort_order ?? i + 1,
+            content_json: b.content_json,
+            style_json: b.style_json,
+            animation_json: b.animation_json,
+          }))
+        );
+      }
+
+      router.replace(`/studio/${newPage.id}/edit`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create page');
       setLoading(false);
     }
-  };
-
-  const renderTemplateCard = (templateId: string) => {
-    const template = PAGE_TEMPLATES.find(t => t.id === templateId);
-    if (!template) return null;
-
-    const isSelected = selectedTemplate === templateId;
-
-    return (
-      <TouchableOpacity
-        key={templateId}
-        style={[
-          styles.templateCard,
-          isSelected && styles.templateCardSelected,
-        ]}
-        onPress={() => setSelectedTemplate(templateId)}
-      >
-        <View style={styles.templateEmoji}>{template.emoji}</View>
-        <Text style={styles.templateName}>{template.name}</Text>
-        <Text style={styles.templateDescription} numberOfLines={2}>
-          {template.description}
-        </Text>
-        <View
-          style={[
-            styles.themeTag,
-            {
-              backgroundColor:
-                template.theme === 'dark'
-                  ? colors.surfaceElevated
-                  : 'rgba(255, 255, 255, 0.1)',
-            },
-          ]}
-        >
-          <Text style={styles.themeTagText}>
-            {template.theme.charAt(0).toUpperCase() + template.theme.slice(1)}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
   };
 
   return (
@@ -109,50 +80,82 @@ export default function NewPageScreen() {
         <TouchableOpacity
           onPress={() => router.back()}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={styles.backBtn}
         >
-          <ArrowLeft size={24} color={colors.textPrimary} />
+          <ArrowLeft size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Create New Page</Text>
-        <View style={{ width: 24 }} />
+        <View style={{ width: 34 }} />
       </View>
 
       <ScrollView
         style={styles.content}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Page Title</Text>
           <TextInput
             style={styles.titleInput}
-            placeholder="Enter page title"
+            placeholder="e.g. My Token Launch"
             placeholderTextColor={colors.textMuted}
             value={pageTitle}
-            onChangeText={setPageTitle}
+            onChangeText={t => { setPageTitle(t); setError(''); }}
             editable={!loading}
+            returnKeyType="done"
           />
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Choose Template</Text>
           <Text style={styles.sectionDescription}>
-            Select a template to get started. You can customize it later.
+            Select a starting point. You can fully customize it in the editor.
           </Text>
-
           <View style={styles.templateGrid}>
-            {PAGE_TEMPLATES.map(template => renderTemplateCard(template.id))}
+            {PAGE_TEMPLATES.map(template => {
+              const isSelected = selectedTemplate === template.id;
+              return (
+                <TouchableOpacity
+                  key={template.id}
+                  style={[styles.templateCard, isSelected && styles.templateCardSelected]}
+                  onPress={() => { setSelectedTemplate(template.id); setError(''); }}
+                  activeOpacity={0.75}
+                >
+                  {isSelected && (
+                    <View style={styles.checkmark}>
+                      <Check size={12} color={colors.white} strokeWidth={3} />
+                    </View>
+                  )}
+                  <Text style={styles.templateEmoji}>{template.emoji}</Text>
+                  <Text style={styles.templateName}>{template.name}</Text>
+                  <Text style={styles.templateDescription} numberOfLines={2}>
+                    {template.description}
+                  </Text>
+                  <View style={[
+                    styles.themeTag,
+                    { backgroundColor: template.theme === 'dark' ? 'rgba(139,92,246,0.15)' : 'rgba(0,0,0,0.06)' }
+                  ]}>
+                    <Text style={[
+                      styles.themeTagText,
+                      { color: template.theme === 'dark' ? colors.primaryLight : '#555' }
+                    ]}>
+                      {template.blocks.length === 0 ? 'Blank' : `${template.blocks.length} blocks • ${template.theme}`}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
       </ScrollView>
 
       <View style={styles.footer}>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <TouchableOpacity
-          style={[
-            styles.createButton,
-            !selectedTemplate && styles.createButtonDisabled,
-          ]}
+          style={[styles.createButton, (!selectedTemplate || !pageTitle.trim() || loading) && styles.createButtonDisabled]}
           onPress={handleCreatePage}
-          disabled={loading || !selectedTemplate}
+          disabled={loading || !selectedTemplate || !pageTitle.trim()}
         >
           {loading ? (
             <ActivityIndicator size="small" color={colors.white} />
@@ -168,7 +171,7 @@ export default function NewPageScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0618',
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -179,9 +182,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceBorder,
   },
+  backBtn: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerTitle: {
     fontSize: fontSize.xl,
-    fontWeight: fontWeight.semibold,
+    fontWeight: fontWeight.bold,
     color: colors.textPrimary,
   },
   content: {
@@ -189,9 +198,9 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    gap: spacing.lg,
-    paddingBottom: 200,
+    paddingTop: spacing.lg,
+    paddingBottom: 140,
+    gap: spacing.xxl,
   },
   section: {
     gap: spacing.md,
@@ -204,6 +213,7 @@ const styles = StyleSheet.create({
   sectionDescription: {
     fontSize: fontSize.sm,
     color: colors.textSecondary,
+    marginTop: -4,
   },
   titleInput: {
     backgroundColor: colors.surface,
@@ -211,7 +221,7 @@ const styles = StyleSheet.create({
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     fontSize: fontSize.md,
     color: colors.textPrimary,
   },
@@ -219,46 +229,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.md,
-    justifyContent: 'space-between',
   },
   templateCard: {
-    width: '48%',
+    width: '47%',
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     borderRadius: borderRadius.lg,
     padding: spacing.md,
-    gap: spacing.md,
+    gap: spacing.sm,
     alignItems: 'center',
-    justifyContent: 'center',
+    position: 'relative',
   },
   templateCardSelected: {
     borderColor: colors.primary,
     borderWidth: 2,
+    backgroundColor: colors.primaryMuted,
+  },
+  checkmark: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   templateEmoji: {
-    fontSize: 32,
+    fontSize: 30,
+    marginTop: 4,
   },
   templateName: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     color: colors.textPrimary,
     textAlign: 'center',
   },
   templateDescription: {
-    fontSize: fontSize.sm,
+    fontSize: 11,
     color: colors.textSecondary,
     textAlign: 'center',
+    lineHeight: 15,
   },
   themeTag: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
     borderRadius: borderRadius.sm,
+    marginTop: 2,
   },
   themeTagText: {
-    fontSize: fontSize.xs,
+    fontSize: 10,
     fontWeight: fontWeight.medium,
-    color: colors.textSecondary,
   },
   footer: {
     position: 'absolute',
@@ -266,20 +289,27 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    backgroundColor: '#0D0618',
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
+    backgroundColor: colors.background,
     borderTopWidth: 1,
     borderTopColor: colors.surfaceBorder,
+    gap: spacing.sm,
+  },
+  errorText: {
+    fontSize: fontSize.sm,
+    color: colors.error,
+    textAlign: 'center',
   },
   createButton: {
-    paddingVertical: spacing.md,
+    paddingVertical: 15,
     backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
   createButtonDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
   createButtonText: {
     fontSize: fontSize.md,
